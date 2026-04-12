@@ -124,6 +124,47 @@ public struct BinaryReader {
         return Int32(bitPattern: unsigned)
     }
 
+    public mutating func readUInt64BigEndian() throws -> UInt64 {
+        guard offset + 8 <= data.count else {
+            throw MetadataError.unexpectedEndOfData
+        }
+        let start = data.startIndex + offset
+        let value = UInt64(data[start]) << 56
+            | UInt64(data[start + 1]) << 48
+            | UInt64(data[start + 2]) << 40
+            | UInt64(data[start + 3]) << 32
+            | UInt64(data[start + 4]) << 24
+            | UInt64(data[start + 5]) << 16
+            | UInt64(data[start + 6]) << 8
+            | UInt64(data[start + 7])
+        offset += 8
+        return value
+    }
+
+    public mutating func readUInt64LittleEndian() throws -> UInt64 {
+        guard offset + 8 <= data.count else {
+            throw MetadataError.unexpectedEndOfData
+        }
+        let start = data.startIndex + offset
+        let value = UInt64(data[start])
+            | UInt64(data[start + 1]) << 8
+            | UInt64(data[start + 2]) << 16
+            | UInt64(data[start + 3]) << 24
+            | UInt64(data[start + 4]) << 32
+            | UInt64(data[start + 5]) << 40
+            | UInt64(data[start + 6]) << 48
+            | UInt64(data[start + 7]) << 56
+        offset += 8
+        return value
+    }
+
+    public mutating func readUInt64(endian: ByteOrder) throws -> UInt64 {
+        switch endian {
+        case .bigEndian: return try readUInt64BigEndian()
+        case .littleEndian: return try readUInt64LittleEndian()
+        }
+    }
+
     public mutating func readBytes(_ count: Int) throws -> Data {
         guard count >= 0 else {
             throw MetadataError.invalidSegmentLength

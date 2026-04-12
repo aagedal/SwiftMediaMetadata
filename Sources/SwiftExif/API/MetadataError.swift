@@ -17,6 +17,13 @@ public enum MetadataError: Error, CustomStringConvertible {
     case fileNotFound(String)
     case fileWriteError(String)
     case dataExceedsMaxLength(tag: String, max: Int, actual: Int)
+    case unsupportedFormat
+    case invalidPNG(String)
+    case invalidJPEGXL(String)
+    case invalidAVIF(String)
+    case invalidTIFFFile(String)
+    case invalidRAW(String)
+    case crcMismatch(expected: UInt32, actual: UInt32)
 
     public var description: String {
         switch self {
@@ -52,6 +59,20 @@ public enum MetadataError: Error, CustomStringConvertible {
             return "File write error: \(detail)"
         case .dataExceedsMaxLength(let tag, let max, let actual):
             return "Data for \(tag) exceeds max length (\(actual) > \(max))"
+        case .unsupportedFormat:
+            return "Unsupported image format"
+        case .invalidPNG(let detail):
+            return "Invalid PNG: \(detail)"
+        case .invalidJPEGXL(let detail):
+            return "Invalid JPEG XL: \(detail)"
+        case .invalidAVIF(let detail):
+            return "Invalid AVIF: \(detail)"
+        case .invalidTIFFFile(let detail):
+            return "Invalid TIFF file: \(detail)"
+        case .invalidRAW(let detail):
+            return "Invalid RAW file: \(detail)"
+        case .crcMismatch(let expected, let actual):
+            return "CRC32 mismatch: expected 0x\(String(expected, radix: 16)), got 0x\(String(actual, radix: 16))"
         }
     }
 }

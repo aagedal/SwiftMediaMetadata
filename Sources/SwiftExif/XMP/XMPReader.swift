@@ -1,6 +1,6 @@
 import Foundation
 
-/// Parse XMP XML from an APP1 segment.
+/// Parse XMP XML from an APP1 segment or raw XML data.
 public struct XMPReader {
 
     /// Parse XMP data from APP1 segment payload (after XMP namespace identifier).
@@ -13,8 +13,13 @@ public struct XMPReader {
         }
 
         let xmlData = data.suffix(from: data.startIndex + identifierData.count)
+        return try readFromXML(Data(xmlData))
+    }
 
-        guard let xmlString = String(data: xmlData, encoding: .utf8) else {
+    /// Parse XMP from raw XML data (no JPEG identifier prefix).
+    /// Used for TIFF XMP tag (0x02BC), PNG iTXt, JPEG XL xml box, AVIF XMP.
+    public static func readFromXML(_ data: Data) throws -> XMPData {
+        guard let xmlString = String(data: data, encoding: .utf8) else {
             throw MetadataError.invalidXMP("Failed to decode XMP as UTF-8")
         }
 

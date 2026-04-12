@@ -69,6 +69,11 @@ public enum ExifTag {
     public static let gpsTimeStamp: UInt16          = 0x0007
     public static let gpsDateStamp: UInt16          = 0x001D
 
+    // MARK: - TIFF Embedded Metadata Tags
+    public static let iptcNAA: UInt16      = 0x83BB  // Raw IPTC-NAA data in IFD
+    public static let photoshopIRB: UInt16 = 0x8649  // Photoshop IRB (contains IPTC)
+    public static let xmpTag: UInt16       = 0x02BC  // Raw XMP XML string
+
     // MARK: - IFD Type
 
     public enum IFDType: Sendable {

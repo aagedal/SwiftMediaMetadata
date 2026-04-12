@@ -62,6 +62,17 @@ public struct BinaryWriter {
         writeUInt32(UInt32(bitPattern: value), endian: endian)
     }
 
+    public mutating func writeUInt64BigEndian(_ value: UInt64) {
+        data.append(UInt8((value >> 56) & 0xFF))
+        data.append(UInt8((value >> 48) & 0xFF))
+        data.append(UInt8((value >> 40) & 0xFF))
+        data.append(UInt8((value >> 32) & 0xFF))
+        data.append(UInt8((value >> 24) & 0xFF))
+        data.append(UInt8((value >> 16) & 0xFF))
+        data.append(UInt8((value >> 8) & 0xFF))
+        data.append(UInt8(value & 0xFF))
+    }
+
     public mutating func writeBytes(_ bytes: Data) {
         data.append(bytes)
     }

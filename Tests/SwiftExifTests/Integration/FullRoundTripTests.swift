@@ -5,8 +5,8 @@ final class FullRoundTripTests: XCTestCase {
 
     func testFullIPTCRoundTripWithNordicChars() throws {
         // Create metadata with Nordic content
-        var metadata = ImageMetadata()
-        metadata.jpegFile = try JPEGParser.parse(TestFixtures.minimalJPEG())
+        let jpegFile = try JPEGParser.parse(TestFixtures.minimalJPEG())
+        var metadata = ImageMetadata(container: .jpeg(jpegFile), format: .jpeg)
 
         metadata.iptc.headline = "Sterk nordavind i Tromsø"
         metadata.iptc.byline = "Bjørn Ødegård"
@@ -68,8 +68,8 @@ final class FullRoundTripTests: XCTestCase {
     }
 
     func testIPTCXMPSyncRoundTrip() throws {
-        var metadata = ImageMetadata()
-        metadata.jpegFile = try JPEGParser.parse(TestFixtures.minimalJPEG())
+        let jpegFile = try JPEGParser.parse(TestFixtures.minimalJPEG())
+        var metadata = ImageMetadata(container: .jpeg(jpegFile), format: .jpeg)
 
         // Set IPTC data with Nordic chars
         metadata.iptc.headline = "Tromsø havn"
@@ -103,8 +103,8 @@ final class FullRoundTripTests: XCTestCase {
     }
 
     func testWriteToTemporaryFile() throws {
-        var metadata = ImageMetadata()
-        metadata.jpegFile = try JPEGParser.parse(TestFixtures.minimalJPEG())
+        let jpegFile = try JPEGParser.parse(TestFixtures.minimalJPEG())
+        var metadata = ImageMetadata(container: .jpeg(jpegFile), format: .jpeg)
         metadata.iptc.headline = "File Test"
         metadata.iptc.city = "Tromsø"
 

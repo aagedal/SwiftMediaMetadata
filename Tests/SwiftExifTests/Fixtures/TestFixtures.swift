@@ -133,6 +133,260 @@ enum TestFixtures {
         return JPEGWriter.write(file)
     }
 
+    // MARK: - Minimal TIFF
+
+    /// Generate a minimal valid TIFF file with the given IFD0 entries.
+    static func minimalTIFF(byteOrder: ByteOrder = .littleEndian, entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, valueData: Data)] = []) -> Data {
+        var writer = BinaryWriter(capacity: 256)
+
+        // TIFF header
+        switch byteOrder {
+        case .bigEndian: writer.writeBytes([0x4D, 0x4D])
+        case .littleEndian: writer.writeBytes([0x49, 0x49])
+        }
+        writer.writeUInt16(42, endian: byteOrder)
+        writer.writeUInt32(8, endian: byteOrder) // IFD0 at offset 8
+
+        // IFD0
+        writer.writeUInt16(UInt16(entries.count), endian: byteOrder)
+
+        // Calculate where external data will go
+        let ifdEntriesEnd = 8 + 2 + (entries.count * 12) + 4 // header + count + entries + next IFD
+        var externalOffset = ifdEntriesEnd
+        var externalData = Data()
+
+        for entry in entries {
+            writer.writeUInt16(entry.tag, endian: byteOrder)
+            writer.writeUInt16(entry.type.rawValue, endian: byteOrder)
+            writer.writeUInt32(entry.count, endian: byteOrder)
+
+            let totalSize = Int(entry.count) * entry.type.unitSize
+            if totalSize <= 4 {
+                var padded = entry.valueData
+                while padded.count < 4 { padded.append(0x00) }
+                writer.writeBytes(padded.prefix(4))
+            } else {
+                writer.writeUInt32(UInt32(externalOffset), endian: byteOrder)
+                externalData.append(entry.valueData)
+                externalOffset += entry.valueData.count
+            }
+        }
+
+        // Next IFD offset = 0
+        writer.writeUInt32(0, endian: byteOrder)
+
+        // External data
+        writer.writeBytes(externalData)
+
+        return writer.data
+    }
+
+    /// Generate a TIFF with embedded EXIF (Make/Model in IFD0).
+    static func tiffWithExif(make: String = "TestCamera", model: String = "Model X", byteOrder: ByteOrder = .littleEndian) -> Data {
+        let makeBytes = Data(make.utf8) + Data([0x00])
+        let modelBytes = Data(model.utf8) + Data([0x00])
+        return minimalTIFF(byteOrder: byteOrder, entries: [
+            (tag: ExifTag.make, type: .ascii, count: UInt32(makeBytes.count), valueData: makeBytes),
+            (tag: ExifTag.model, type: .ascii, count: UInt32(modelBytes.count), valueData: modelBytes),
+        ])
+    }
+
+    /// Generate a TIFF with embedded XMP (tag 0x02BC).
+    static func tiffWithXMP(xml: String, byteOrder: ByteOrder = .littleEndian) -> Data {
+        let xmpData = Data(xml.utf8)
+        return minimalTIFF(byteOrder: byteOrder, entries: [
+            (tag: ExifTag.xmpTag, type: .undefined, count: UInt32(xmpData.count), valueData: xmpData),
+        ])
+    }
+
+    // MARK: - Minimal PNG
+
+    /// Generate a minimal valid PNG with given extra chunks.
+    static func minimalPNG(extraChunks: [(type: String, data: Data)] = []) -> Data {
+        var writer = BinaryWriter(capacity: 256)
+
+        // Signature
+        writer.writeBytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+
+        // IHDR chunk (1x1 pixel, 8-bit grayscale)
+        let ihdrData = Data([
+            0x00, 0x00, 0x00, 0x01, // Width: 1
+            0x00, 0x00, 0x00, 0x01, // Height: 1
+            0x08,                    // Bit depth: 8
+            0x00,                    // Color type: Grayscale
+            0x00,                    // Compression: deflate
+            0x00,                    // Filter: adaptive
+            0x00,                    // Interlace: none
+        ])
+        writePNGChunk(&writer, type: "IHDR", data: ihdrData)
+
+        // Extra chunks (eXIf, iTXt, etc.)
+        for chunk in extraChunks {
+            writePNGChunk(&writer, type: chunk.type, data: chunk.data)
+        }
+
+        // IDAT (minimal image data — zlib compressed single row)
+        let idatData = Data([0x78, 0x01, 0x62, 0x60, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01])
+        writePNGChunk(&writer, type: "IDAT", data: idatData)
+
+        // IEND
+        writePNGChunk(&writer, type: "IEND", data: Data())
+
+        return writer.data
+    }
+
+    /// Generate a PNG with an eXIf chunk containing TIFF/Exif data.
+    static func pngWithExif(make: String = "TestCamera", model: String = "Model X") -> Data {
+        // Build raw TIFF data for the eXIf chunk (no "Exif\0\0" prefix)
+        let tiffData = tiffWithExif(make: make, model: model)
+        return minimalPNG(extraChunks: [(type: "eXIf", data: tiffData)])
+    }
+
+    private static func writePNGChunk(_ writer: inout BinaryWriter, type: String, data: Data) {
+        writer.writeUInt32BigEndian(UInt32(data.count))
+        writer.writeString(type, encoding: .ascii)
+        writer.writeBytes(data)
+        let crc = CRC32.compute(type: type, data: data)
+        writer.writeUInt32BigEndian(crc)
+    }
+
+    // MARK: - Minimal JPEG XL (Container)
+
+    /// Generate a minimal JPEG XL container with optional Exif/XMP boxes.
+    static func minimalJXL(boxes: [(type: String, data: Data)] = []) -> Data {
+        var writer = BinaryWriter(capacity: 256)
+
+        // JXL file type box (12 bytes)
+        writer.writeBytes([0x00, 0x00, 0x00, 0x0C]) // size
+        writer.writeString("JXL ", encoding: .ascii)  // type
+        writer.writeBytes([0x0D, 0x0A, 0x87, 0x0A]) // magic
+
+        // Additional boxes
+        for box in boxes {
+            let payload = box.data
+            let boxSize = UInt32(8 + payload.count)
+            writer.writeUInt32BigEndian(boxSize)
+            writer.writeString(box.type, encoding: .ascii)
+            writer.writeBytes(payload)
+        }
+
+        return writer.data
+    }
+
+    /// Generate a JPEG XL with an Exif box.
+    static func jxlWithExif(make: String = "TestCamera", model: String = "Model X") -> Data {
+        // Exif box: 4-byte offset prefix (0) + TIFF data
+        var exifPayload = Data([0x00, 0x00, 0x00, 0x00]) // offset prefix = 0
+        exifPayload.append(tiffWithExif(make: make, model: model))
+        return minimalJXL(boxes: [(type: "Exif", data: exifPayload)])
+    }
+
+    /// Generate a bare JXL codestream (no metadata boxes).
+    static func bareJXLCodestream() -> Data {
+        // Just the codestream signature + minimal padding
+        return Data([0xFF, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    }
+
+    // MARK: - Minimal AVIF
+
+    /// Generate a minimal AVIF file with ftyp + optional meta box.
+    static func minimalAVIF(exifTIFFData: Data? = nil) -> Data {
+        var writer = BinaryWriter(capacity: 512)
+
+        // ftyp box
+        let ftypPayload = Data("avif".utf8) + Data([0x00, 0x00, 0x00, 0x00]) // brand + minor version
+        writeISOBMFFBox(&writer, type: "ftyp", data: ftypPayload)
+
+        // If exif data provided, build meta → iprp → ipco → Exif hierarchy
+        if let exifData = exifTIFFData {
+            var exifBoxPayload = Data([0x00, 0x00, 0x00, 0x00]) // 4-byte offset prefix
+            exifBoxPayload.append(exifData)
+
+            // Build ipco containing Exif box
+            var ipcoWriter = BinaryWriter(capacity: 256)
+            writeISOBMFFBox(&ipcoWriter, type: "Exif", data: exifBoxPayload)
+
+            // Build iprp containing ipco
+            var iprpWriter = BinaryWriter(capacity: 256)
+            writeISOBMFFBox(&iprpWriter, type: "ipco", data: ipcoWriter.data)
+
+            // Build meta (FullBox: 4 bytes version+flags, then iprp child)
+            var metaPayload = Data([0x00, 0x00, 0x00, 0x00]) // version + flags
+            var metaChildrenWriter = BinaryWriter(capacity: 256)
+            writeISOBMFFBox(&metaChildrenWriter, type: "iprp", data: iprpWriter.data)
+            metaPayload.append(metaChildrenWriter.data)
+
+            writeISOBMFFBox(&writer, type: "meta", data: metaPayload)
+        }
+
+        return writer.data
+    }
+
+    /// Generate an AVIF with Exif containing Make/Model.
+    static func avifWithExif(make: String = "TestCamera", model: String = "Model X") -> Data {
+        let tiffData = tiffWithExif(make: make, model: model)
+        return minimalAVIF(exifTIFFData: tiffData)
+    }
+
+    private static func writeISOBMFFBox(_ writer: inout BinaryWriter, type: String, data: Data) {
+        let boxSize = UInt32(8 + data.count)
+        writer.writeUInt32BigEndian(boxSize)
+        writer.writeString(type, encoding: .ascii)
+        writer.writeBytes(data)
+    }
+
+    // MARK: - Minimal CR2 (RAW)
+
+    /// Generate a minimal CR2-like file (TIFF with CR signature at offset 8).
+    static func minimalCR2(make: String = "Canon") -> Data {
+        // CR2 is TIFF with "CR" at offset 8-9 and version at 10-11.
+        // We manually construct a CR2-like header.
+        var writer = BinaryWriter(capacity: 256)
+        writer.writeBytes([0x49, 0x49]) // Little-endian
+        writer.writeUInt16(42, endian: .littleEndian) // Magic
+        writer.writeUInt32(16, endian: .littleEndian) // IFD0 offset (after CR2 header)
+        writer.writeBytes([0x43, 0x52]) // "CR" at offset 8
+        writer.writeBytes([0x02, 0x00]) // CR2 version 2.0
+        writer.writeUInt32(0, endian: .littleEndian) // RAW IFD offset (unused)
+
+        // IFD0 at offset 16
+        let makeBytes = Data(make.utf8) + Data([0x00])
+        let modelBytes = Data("EOS R5".utf8) + Data([0x00])
+
+        writer.writeUInt16(2, endian: .littleEndian) // 2 entries
+        // Make entry
+        writer.writeUInt16(ExifTag.make, endian: .littleEndian)
+        writer.writeUInt16(TIFFDataType.ascii.rawValue, endian: .littleEndian)
+        writer.writeUInt32(UInt32(makeBytes.count), endian: .littleEndian)
+        if makeBytes.count <= 4 {
+            var padded = makeBytes; while padded.count < 4 { padded.append(0) }
+            writer.writeBytes(padded.prefix(4))
+        } else {
+            let makeOffset = 16 + 2 + 24 + 4 // after IFD
+            writer.writeUInt32(UInt32(makeOffset), endian: .littleEndian)
+        }
+        // Model entry
+        writer.writeUInt16(ExifTag.model, endian: .littleEndian)
+        writer.writeUInt16(TIFFDataType.ascii.rawValue, endian: .littleEndian)
+        writer.writeUInt32(UInt32(modelBytes.count), endian: .littleEndian)
+        if modelBytes.count <= 4 {
+            var padded = modelBytes; while padded.count < 4 { padded.append(0) }
+            writer.writeBytes(padded.prefix(4))
+        } else {
+            let modelOffset = 16 + 2 + 24 + 4 + makeBytes.count
+            writer.writeUInt32(UInt32(modelOffset), endian: .littleEndian)
+        }
+
+        // Next IFD offset = 0
+        writer.writeUInt32(0, endian: .littleEndian)
+
+        // External string data
+        if makeBytes.count > 4 { writer.writeBytes(makeBytes) }
+        if modelBytes.count > 4 { writer.writeBytes(modelBytes) }
+
+        return writer.data
+    }
+
     // MARK: - Raw IPTC Binary Data
 
     /// Generate raw IPTC binary data for testing the reader directly.

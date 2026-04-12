@@ -48,7 +48,7 @@ final class ImageMetadataTests: XCTestCase {
     }
 
     func testIPTCToXMPSync() throws {
-        var metadata = ImageMetadata()
+        var metadata = ImageMetadata(container: .jpeg(JPEGFile()), format: .jpeg)
         metadata.iptc.headline = "Sync Test"
         metadata.iptc.city = "Oslo"
         metadata.iptc.keywords = ["test", "sync"]
@@ -70,7 +70,7 @@ final class ImageMetadataTests: XCTestCase {
     }
 
     func testXMPToIPTCSync() throws {
-        var metadata = ImageMetadata()
+        var metadata = ImageMetadata(container: .jpeg(JPEGFile()), format: .jpeg)
         metadata.xmp = XMPData()
         metadata.xmp?.headline = "From XMP"
         metadata.xmp?.city = "Bergen"

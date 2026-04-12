@@ -40,14 +40,14 @@ public struct BatchProcessor {
         if recursive {
             if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
                 for case let fileURL as URL in enumerator {
-                    if isJPEG(fileURL) {
+                    if isSupportedFormat(fileURL) {
                         urls.append(fileURL)
                     }
                 }
             }
         } else {
             let contents = try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
-            urls = contents.filter { isJPEG($0) }
+            urls = contents.filter { isSupportedFormat($0) }
         }
 
         return try processFiles(urls, concurrency: concurrency, transform: transform)
@@ -101,8 +101,17 @@ public struct BatchProcessor {
 
     // MARK: - Private
 
-    private static func isJPEG(_ url: URL) -> Bool {
-        let ext = url.pathExtension.lowercased()
-        return ext == "jpg" || ext == "jpeg"
+    private static let supportedExtensions: Set<String> = [
+        "jpg", "jpeg",
+        "tif", "tiff",
+        "dng", "cr2", "nef", "arw",
+        "jxl",
+        "png",
+        "avif",
+    ]
+
+    private static func isSupportedFormat(_ url: URL) -> Bool {
+        supportedExtensions.contains(url.pathExtension.lowercased())
     }
+
 }
