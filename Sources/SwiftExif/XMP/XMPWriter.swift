@@ -88,21 +88,30 @@ public struct XMPWriter {
 
     // MARK: - Private
 
+    /// Sorted namespace list (longest first) to avoid prefix ambiguity.
+    /// e.g. "http://ns.adobe.com/xap/1.0/rights/" must match before "http://ns.adobe.com/xap/1.0/"
+    private static let sortedPrefixes: [(ns: String, prefix: String)] = {
+        XMPNamespace.prefixes.sorted { $0.key.count > $1.key.count }.map { (ns: $0.key, prefix: $0.value) }
+    }()
+
     private static func resolveKey(_ key: String) -> (prefix: String, localName: String)? {
-        for (ns, prefix) in XMPNamespace.prefixes {
-            if key.hasPrefix(ns) {
-                let localName = String(key.dropFirst(ns.count))
-                return (prefix, localName)
+        for entry in sortedPrefixes {
+            if key.hasPrefix(entry.ns) {
+                let localName = String(key.dropFirst(entry.ns.count))
+                // Only match if the local name is a valid XML name (no slashes)
+                guard !localName.isEmpty && !localName.contains("/") else { continue }
+                return (entry.prefix, localName)
             }
         }
         return nil
     }
 
     private static func findValue(in xmpData: XMPData, key: String) -> XMPValue? {
-        for (ns, _) in XMPNamespace.prefixes {
-            if key.hasPrefix(ns) {
-                let property = String(key.dropFirst(ns.count))
-                return xmpData.value(namespace: ns, property: property)
+        for entry in sortedPrefixes {
+            if key.hasPrefix(entry.ns) {
+                let property = String(key.dropFirst(entry.ns.count))
+                guard !property.isEmpty && !property.contains("/") else { continue }
+                return xmpData.value(namespace: entry.ns, property: property)
             }
         }
         return nil

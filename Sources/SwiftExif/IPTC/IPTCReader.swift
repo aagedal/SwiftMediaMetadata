@@ -15,6 +15,8 @@ public struct IPTCReader {
             // Each dataset starts with 0x1C tag marker
             let marker = try reader.readUInt8()
             guard marker == 0x1C else {
+                // Tolerate trailing padding (null bytes) often found in real-world files
+                if marker == 0x00 { break }
                 throw MetadataError.invalidIPTCData("Expected 0x1C tag marker, got 0x\(String(marker, radix: 16))")
             }
 

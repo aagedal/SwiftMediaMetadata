@@ -135,8 +135,16 @@ final class IPTCReaderTests: XCTestCase {
     }
 
     func testInvalidTagMarker() {
-        let data = Data([0x00, 0x02, 0x19, 0x00, 0x04, 0x54, 0x65, 0x73, 0x74])
+        // Non-zero, non-0x1C byte should throw
+        let data = Data([0xFF, 0x02, 0x19, 0x00, 0x04, 0x54, 0x65, 0x73, 0x74])
         XCTAssertThrowsError(try IPTCReader.read(from: data))
+    }
+
+    func testNullPaddingTolerated() throws {
+        // 0x00 at the start is treated as padding (common in real-world files)
+        let data = Data([0x00, 0x02, 0x19, 0x00, 0x04, 0x54, 0x65, 0x73, 0x74])
+        let iptc = try IPTCReader.read(from: data)
+        XCTAssertTrue(iptc.datasets.isEmpty)
     }
 
     func testTruncatedData() {
