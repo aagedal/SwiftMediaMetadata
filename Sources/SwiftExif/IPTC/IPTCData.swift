@@ -205,6 +205,14 @@ public struct IPTCData: Equatable, Sendable {
         }
     }
 
+    public var jobId: String? {
+        get { value(for: .originalTransmissionReference) }
+        set {
+            if let v = newValue { setValue(v, for: .originalTransmissionReference) }
+            else { removeAll(for: .originalTransmissionReference) }
+        }
+    }
+
     public var originatingProgram: String? {
         get { value(for: .originatingProgram) }
         set {

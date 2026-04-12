@@ -262,6 +262,7 @@ final class RealFileTests: XCTestCase {
         XCTAssertEqual(xmp.rights, "Truls Aagedal / TV 2")
         XCTAssertEqual(xmp.title, "Hello world'")
         XCTAssertEqual(xmp.description, "2026-03-18 , :")
+        XCTAssertEqual(xmp.personInImage, ["Jonas", "Silje"])
     }
 
     func testSidecarURLDerivation() throws {

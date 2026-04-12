@@ -133,4 +133,38 @@ public struct XMPData: Equatable, Sendable {
             else { removeValue(namespace: XMPNamespace.photoshop, property: "Source") }
         }
     }
+
+    public var jobId: String? {
+        get { simpleValue(namespace: XMPNamespace.photoshop, property: "TransmissionReference") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.photoshop, property: "TransmissionReference") }
+            else { removeValue(namespace: XMPNamespace.photoshop, property: "TransmissionReference") }
+        }
+    }
+
+    // MARK: - IPTC Extension Properties
+
+    /// Persons shown in the image (Iptc4xmpExt:PersonInImage).
+    public var personInImage: [String] {
+        get { arrayValue(namespace: XMPNamespace.iptcExt, property: "PersonInImage") }
+        set { setValue(.array(newValue), namespace: XMPNamespace.iptcExt, property: "PersonInImage") }
+    }
+
+    /// Extended description for accessibility (Iptc4xmpCore:ExtDescrAccessibility).
+    public var extendedDescription: String? {
+        get { simpleValue(namespace: XMPNamespace.iptcCore, property: "ExtDescrAccessibility") }
+        set {
+            if let v = newValue { setValue(.langAlternative(v), namespace: XMPNamespace.iptcCore, property: "ExtDescrAccessibility") }
+            else { removeValue(namespace: XMPNamespace.iptcCore, property: "ExtDescrAccessibility") }
+        }
+    }
+
+    /// Alt text for accessibility (Iptc4xmpCore:AltTextAccessibility).
+    public var altText: String? {
+        get { simpleValue(namespace: XMPNamespace.iptcCore, property: "AltTextAccessibility") }
+        set {
+            if let v = newValue { setValue(.langAlternative(v), namespace: XMPNamespace.iptcCore, property: "AltTextAccessibility") }
+            else { removeValue(namespace: XMPNamespace.iptcCore, property: "AltTextAccessibility") }
+        }
+    }
 }
