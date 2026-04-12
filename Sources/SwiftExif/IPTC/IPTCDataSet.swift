@@ -1,0 +1,37 @@
+import Foundation
+
+/// A single IPTC tag-value pair as stored in the binary format.
+public struct IPTCDataSet: Equatable, Sendable {
+    public let tag: IPTCTag
+    public let rawValue: Data
+
+    public init(tag: IPTCTag, rawValue: Data) {
+        self.tag = tag
+        self.rawValue = rawValue
+    }
+
+    /// Create a dataset from a string value, encoding as UTF-8.
+    public init(tag: IPTCTag, stringValue: String, encoding: String.Encoding = .utf8) {
+        self.tag = tag
+        self.rawValue = Data(stringValue.data(using: encoding) ?? Data())
+    }
+
+    /// Create a dataset from a UInt16 value (big-endian, for record version fields).
+    public init(tag: IPTCTag, uint16Value: UInt16) {
+        self.tag = tag
+        var writer = BinaryWriter(capacity: 2)
+        writer.writeUInt16BigEndian(uint16Value)
+        self.rawValue = writer.data
+    }
+
+    /// Decode the raw bytes as a string using the specified encoding.
+    public func stringValue(encoding: String.Encoding = .utf8) -> String? {
+        String(data: rawValue, encoding: encoding)
+    }
+
+    /// Decode as UInt16 big-endian (for record version fields).
+    public func uint16Value() -> UInt16? {
+        guard rawValue.count >= 2 else { return nil }
+        return UInt16(rawValue[rawValue.startIndex]) << 8 | UInt16(rawValue[rawValue.startIndex + 1])
+    }
+}
