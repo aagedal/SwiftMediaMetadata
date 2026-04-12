@@ -19,6 +19,11 @@ let package = Package(
             name: "SwiftExif",
             path: "Sources/SwiftExif"
         ),
+        .executableTarget(
+            name: "Benchmark",
+            dependencies: ["SwiftExif"],
+            path: "Sources/Benchmark"
+        ),
         .testTarget(
             name: "SwiftExifTests",
             dependencies: ["SwiftExif"],
