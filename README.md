@@ -4,14 +4,15 @@ A native Swift library for reading and writing image metadata — Exif, IPTC (II
 
 ## Supported Formats
 
-| Format | Read | Write |
-|--------|------|-------|
-| JPEG | Yes | Yes |
-| TIFF | Yes | — |
-| RAW (DNG, CR2, NEF, ARW) | Yes | — |
-| JPEG XL | Yes | — |
-| PNG | Yes | — |
-| AVIF | Yes | — |
+| Format | Read | Write | Metadata Types |
+|--------|------|-------|----------------|
+| JPEG | Yes | Yes | Exif, IPTC, XMP |
+| TIFF | Yes | Yes | Exif, IPTC, XMP |
+| RAW (DNG, CR2, NEF, ARW) | Yes | Yes | Exif, IPTC, XMP |
+| JPEG XL (container) | Yes | Yes | Exif, XMP |
+| PNG | Yes | Yes | Exif, XMP |
+| AVIF | Yes | Yes | Exif, XMP |
+| XMP sidecar (.xmp) | Yes | Yes | XMP |
 
 ## Requirements
 
@@ -67,6 +68,8 @@ if let exif = metadata.exif {
 
 ### Writing Metadata
 
+Works for all supported formats (JPEG, TIFF, RAW, JPEG XL, PNG, AVIF):
+
 ```swift
 var metadata = try readMetadata(from: imageURL)
 
@@ -75,6 +78,21 @@ metadata.iptc.setValue("Jane Doe", for: .byline)
 metadata.iptc.setValues(["news", "politics"], for: .keywords)
 
 try metadata.write(to: outputURL)
+```
+
+### XMP Sidecar Files
+
+Read and write `.xmp` sidecar files alongside image files:
+
+```swift
+// Write XMP sidecar for a RAW file
+var metadata = try readMetadata(from: rawFileURL)
+metadata.syncIPTCToXMP()
+try metadata.writeSidecar(for: rawFileURL) // creates IMG_001.xmp
+
+// Read XMP sidecar
+let xmp = try readXMPSidecar(for: rawFileURL)
+print(xmp.headline)
 ```
 
 ### IPTC / XMP Sync
@@ -107,11 +125,11 @@ Sources/SwiftExif/
 ├── IPTC/           # IPTC IIM reader/writer, Photoshop IRB
 ├── XMP/            # XMP reader/writer with namespace mapping
 ├── JPEG/           # JPEG segment parser and writer
-├── TIFF/           # TIFF/RAW file parser
+├── TIFF/           # TIFF/RAW file parser and writer
 ├── RAW/            # Camera RAW format support
-├── PNG/            # PNG chunk parser
-├── JPEGXL/         # JPEG XL box parser
-└── AVIF/           # AVIF (ISOBMFF) parser
+├── PNG/            # PNG chunk parser and writer
+├── JPEGXL/         # JPEG XL box parser and writer
+└── AVIF/           # AVIF (ISOBMFF) parser and writer
 ```
 
 ## License

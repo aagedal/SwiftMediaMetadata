@@ -66,30 +66,19 @@ public struct ImageMetadata: Sendable {
     // MARK: - Writing
 
     /// Write all metadata back to a new Data blob (preserving image data).
-    /// Currently only supported for JPEG.
     public func writeToData() throws -> Data {
-        guard case .jpeg(var file) = container else {
-            throw MetadataError.unsupportedFormat
+        switch container {
+        case .jpeg(var file):
+            return try writeJPEG(&file)
+        case .png(var file):
+            return writePNG(&file)
+        case .tiff(let file):
+            return writeTIFFFile(file)
+        case .jpegXL(var file):
+            return try writeJXL(&file)
+        case .avif(let file):
+            return try writeAVIF(file)
         }
-
-        // Write IPTC
-        let existingAPP13 = file.iptcSegment()?.data
-        let app13Data = try IPTCWriter.writeToAPP13(iptc, existingAPP13: existingAPP13)
-        file.replaceOrAddIPTCSegment(JPEGSegment(marker: .app13, data: app13Data))
-
-        // Write Exif
-        if let exif = exif {
-            let exifData = ExifWriter.write(exif)
-            file.replaceOrAddExifSegment(JPEGSegment(marker: .app1, data: exifData))
-        }
-
-        // Write XMP
-        if let xmp = xmp {
-            let xmpData = XMPWriter.write(xmp)
-            file.replaceOrAddXMPSegment(JPEGSegment(marker: .app1, data: xmpData))
-        }
-
-        return JPEGWriter.write(file)
     }
 
     /// Write metadata to a file URL.
@@ -140,6 +129,92 @@ public struct ImageMetadata: Sendable {
                 }
             }
         }
+    }
+
+    // MARK: - XMP Sidecar
+
+    /// Read XMP metadata from a sidecar file alongside the given image URL.
+    public static func readSidecar(for imageURL: URL) throws -> XMPData {
+        let sidecarURL = XMPSidecar.sidecarURL(for: imageURL)
+        return try XMPSidecar.read(from: sidecarURL)
+    }
+
+    /// Write current XMP metadata as a sidecar file.
+    public func writeSidecar(to url: URL) throws {
+        guard let xmp = xmp else {
+            throw MetadataError.writeNotSupported("No XMP data to write as sidecar")
+        }
+        try XMPSidecar.write(xmp, to: url)
+    }
+
+    /// Write current XMP metadata as a sidecar file alongside the given image URL.
+    public func writeSidecar(for imageURL: URL) throws {
+        let sidecarURL = XMPSidecar.sidecarURL(for: imageURL)
+        try writeSidecar(to: sidecarURL)
+    }
+
+    // MARK: - Format-Specific Writing
+
+    private func writeJPEG(_ file: inout JPEGFile) throws -> Data {
+        // Write IPTC
+        let existingAPP13 = file.iptcSegment()?.data
+        let app13Data = try IPTCWriter.writeToAPP13(iptc, existingAPP13: existingAPP13)
+        file.replaceOrAddIPTCSegment(JPEGSegment(marker: .app13, data: app13Data))
+
+        // Write Exif
+        if let exif = exif {
+            let exifData = ExifWriter.write(exif)
+            file.replaceOrAddExifSegment(JPEGSegment(marker: .app1, data: exifData))
+        }
+
+        // Write XMP
+        if let xmp = xmp {
+            let xmpData = XMPWriter.write(xmp)
+            file.replaceOrAddXMPSegment(JPEGSegment(marker: .app1, data: xmpData))
+        }
+
+        return JPEGWriter.write(file)
+    }
+
+    private func writePNG(_ file: inout PNGFile) -> Data {
+        // Write Exif as eXIf chunk (raw TIFF, no prefix)
+        if let exif = exif {
+            let tiffData = ExifWriter.writeTIFF(exif)
+            file.replaceOrAddExifChunk(tiffData)
+        }
+
+        // Write XMP as iTXt chunk
+        if let xmp = xmp {
+            let xml = XMPWriter.generateXML(xmp)
+            file.replaceOrAddXMPChunk(xml)
+        }
+
+        return PNGWriter.write(file)
+    }
+
+    private func writeJXL(_ file: inout JXLFile) throws -> Data {
+        // Write Exif box (4-byte offset prefix + TIFF data)
+        if let exif = exif {
+            var exifPayload = Data([0x00, 0x00, 0x00, 0x00]) // offset prefix
+            exifPayload.append(ExifWriter.writeTIFF(exif))
+            file.replaceOrAddBox("Exif", data: exifPayload)
+        }
+
+        // Write XMP box (type "xml ")
+        if let xmp = xmp {
+            let xml = XMPWriter.generateXML(xmp)
+            file.replaceOrAddBox("xml ", data: Data(xml.utf8))
+        }
+
+        return try JXLWriter.write(file)
+    }
+
+    private func writeAVIF(_ file: AVIFFile) throws -> Data {
+        return try AVIFWriter.write(file, exif: exif, xmp: xmp)
+    }
+
+    private func writeTIFFFile(_ file: TIFFFile) -> Data {
+        return TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp)
     }
 
     // MARK: - Format-Specific Reading

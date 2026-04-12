@@ -11,4 +11,9 @@ public struct AVIFFile: Sendable {
         self.boxes = boxes
         self.brand = brand
     }
+
+    /// Find the first top-level box of the given type.
+    public func findBox(_ type: String) -> ISOBMFFBox? {
+        boxes.first { $0.type == type }
+    }
 }

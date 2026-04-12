@@ -13,6 +13,32 @@ public struct ISOBMFFBox: Sendable, Equatable {
     }
 }
 
+/// Serialize ISOBMFF boxes.
+public struct ISOBMFFBoxWriter {
+
+    /// Write a single box (size + type + payload).
+    public static func writeBox(_ writer: inout BinaryWriter, box: ISOBMFFBox) {
+        let boxSize = UInt32(8 + box.data.count)
+        writer.writeUInt32BigEndian(boxSize)
+        writer.writeString(box.type, encoding: .ascii)
+        writer.writeBytes(box.data)
+    }
+
+    /// Write a sequence of boxes.
+    public static func writeBoxes(_ writer: inout BinaryWriter, boxes: [ISOBMFFBox]) {
+        for box in boxes {
+            writeBox(&writer, box: box)
+        }
+    }
+
+    /// Serialize a sequence of boxes to Data.
+    public static func serialize(boxes: [ISOBMFFBox]) -> Data {
+        var writer = BinaryWriter(capacity: boxes.reduce(0) { $0 + 8 + $1.data.count })
+        writeBoxes(&writer, boxes: boxes)
+        return writer.data
+    }
+}
+
 /// Parse ISOBMFF box sequences.
 public struct ISOBMFFBoxReader {
 

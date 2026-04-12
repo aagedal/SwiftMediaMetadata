@@ -16,4 +16,16 @@ public struct JXLFile: Sendable {
     public func findBox(_ type: String) -> ISOBMFFBox? {
         boxes.first { $0.type == type }
     }
+
+    // MARK: - Box Mutation
+
+    /// Replace the first box of the given type, or append if not present.
+    public mutating func replaceOrAddBox(_ type: String, data: Data) {
+        let newBox = ISOBMFFBox(type: type, data: data)
+        if let index = boxes.firstIndex(where: { $0.type == type }) {
+            boxes[index] = newBox
+        } else {
+            boxes.append(newBox)
+        }
+    }
 }

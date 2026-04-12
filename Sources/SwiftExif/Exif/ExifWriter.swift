@@ -5,11 +5,22 @@ public struct ExifWriter {
 
     /// Serialize ExifData to APP1 segment payload (including "Exif\0\0" prefix).
     public static func write(_ exifData: ExifData) -> Data {
-        let endian = exifData.byteOrder
         var writer = BinaryWriter(capacity: 4096)
 
         // Exif identifier
         writer.writeBytes([0x45, 0x78, 0x69, 0x66, 0x00, 0x00])
+
+        // Append raw TIFF data
+        writer.writeBytes(writeTIFF(exifData))
+
+        return writer.data
+    }
+
+    /// Serialize ExifData to raw TIFF bytes (no "Exif\0\0" prefix).
+    /// Used by PNG (eXIf chunk), JPEG XL (Exif box), AVIF (Exif property box), and TIFF files.
+    public static func writeTIFF(_ exifData: ExifData) -> Data {
+        let endian = exifData.byteOrder
+        var writer = BinaryWriter(capacity: 4096)
 
         let tiffStart = writer.count
 

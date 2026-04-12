@@ -27,6 +27,7 @@ public enum MetadataError: Error, CustomStringConvertible {
     case invalidCBOR(String)
     case invalidJUMBF(String)
     case invalidC2PA(String)
+    case writeNotSupported(String)
 
     public var description: String {
         switch self {
@@ -82,6 +83,8 @@ public enum MetadataError: Error, CustomStringConvertible {
             return "Invalid JUMBF data: \(detail)"
         case .invalidC2PA(let detail):
             return "Invalid C2PA data: \(detail)"
+        case .writeNotSupported(let detail):
+            return "Write not supported: \(detail)"
         }
     }
 }
