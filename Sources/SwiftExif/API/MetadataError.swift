@@ -24,6 +24,9 @@ public enum MetadataError: Error, CustomStringConvertible {
     case invalidTIFFFile(String)
     case invalidRAW(String)
     case crcMismatch(expected: UInt32, actual: UInt32)
+    case invalidCBOR(String)
+    case invalidJUMBF(String)
+    case invalidC2PA(String)
 
     public var description: String {
         switch self {
@@ -73,6 +76,12 @@ public enum MetadataError: Error, CustomStringConvertible {
             return "Invalid RAW file: \(detail)"
         case .crcMismatch(let expected, let actual):
             return "CRC32 mismatch: expected 0x\(String(expected, radix: 16)), got 0x\(String(actual, radix: 16))"
+        case .invalidCBOR(let detail):
+            return "Invalid CBOR data: \(detail)"
+        case .invalidJUMBF(let detail):
+            return "Invalid JUMBF data: \(detail)"
+        case .invalidC2PA(let detail):
+            return "Invalid C2PA data: \(detail)"
         }
     }
 }

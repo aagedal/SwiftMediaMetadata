@@ -7,13 +7,15 @@ public struct ImageMetadata: Sendable {
     public var iptc: IPTCData
     public var exif: ExifData?
     public var xmp: XMPData?
+    public var c2pa: C2PAData?
 
-    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil) {
+    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil) {
         self.container = container
         self.format = format
         self.iptc = iptc
         self.exif = exif
         self.xmp = xmp
+        self.c2pa = c2pa
     }
 
     // MARK: - Reading
@@ -160,7 +162,13 @@ public struct ImageMetadata: Sendable {
             xmp = try XMPReader.read(from: xmpSegment.data)
         }
 
-        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp)
+        // C2PA from APP11 JUMBF segments
+        var c2pa: C2PAData?
+        if let jumbfData = try? C2PAReader.extractJUMBFFromJPEG(jpegFile) {
+            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+        }
+
+        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa)
     }
 
     private static func readTIFF(from data: Data, format: ImageFormat) throws -> ImageMetadata {
@@ -198,7 +206,13 @@ public struct ImageMetadata: Sendable {
             xmp = try XMPReader.readFromXML(xmpBox.data)
         }
 
-        return ImageMetadata(container: .jpegXL(jxlFile), format: .jpegXL, iptc: IPTCData(), exif: exif, xmp: xmp)
+        // C2PA from jumb box
+        var c2pa: C2PAData?
+        if let jumbfData = C2PAReader.extractJUMBFFromJPEGXL(jxlFile) {
+            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+        }
+
+        return ImageMetadata(container: .jpegXL(jxlFile), format: .jpegXL, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa)
     }
 
     private static func readPNG(from data: Data) throws -> ImageMetadata {
@@ -215,7 +229,13 @@ public struct ImageMetadata: Sendable {
         // XMP in iTXt chunk with keyword "XML:com.adobe.xmp"
         xmp = try PNGParser.extractXMP(from: pngFile)
 
-        return ImageMetadata(container: .png(pngFile), format: .png, iptc: IPTCData(), exif: exif, xmp: xmp)
+        // C2PA from caBX chunk
+        var c2pa: C2PAData?
+        if let jumbfData = C2PAReader.extractJUMBFFromPNG(pngFile) {
+            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+        }
+
+        return ImageMetadata(container: .png(pngFile), format: .png, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa)
     }
 
     private static func readAVIF(from data: Data) throws -> ImageMetadata {
@@ -224,6 +244,12 @@ public struct ImageMetadata: Sendable {
         let exif = try AVIFParser.extractExif(from: avifFile)
         let xmp = try AVIFParser.extractXMP(from: avifFile)
 
-        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp)
+        // C2PA from jumb or uuid box
+        var c2pa: C2PAData?
+        if let jumbfData = C2PAReader.extractJUMBFFromAVIF(avifFile) {
+            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+        }
+
+        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa)
     }
 }
