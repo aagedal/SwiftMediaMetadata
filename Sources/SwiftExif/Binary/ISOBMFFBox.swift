@@ -67,11 +67,13 @@ public struct ISOBMFFBoxReader {
             if size32 == 1 {
                 // Extended size (UInt64)
                 let size64 = try reader.readUInt64BigEndian()
+                guard size64 >= 16 else { break } // Header is 16 bytes minimum
                 payloadSize = Int(size64) - 16 // 16 = 4 (size32) + 4 (type) + 8 (size64)
             } else if size32 == 0 {
                 // Box extends to end of data
                 payloadSize = endOffset - reader.offset
             } else {
+                guard size32 >= 8 else { break } // Header is 8 bytes minimum
                 payloadSize = Int(size32) - 8 // 8 = 4 (size32) + 4 (type)
             }
 

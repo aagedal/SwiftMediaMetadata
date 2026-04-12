@@ -67,6 +67,9 @@ public struct CBORDecoder {
                 return .array(items)
             }
             let count = try decodeLength(additionalInfo, from: &reader)
+            guard count <= UInt64(reader.remainingCount) else {
+                throw MetadataError.invalidCBOR("Array count \(count) exceeds remaining data")
+            }
             var items: [CBORValue] = []
             items.reserveCapacity(min(Int(count), 1024))
             for _ in 0..<count {
@@ -90,6 +93,9 @@ public struct CBORDecoder {
                 return .map(entries)
             }
             let count = try decodeLength(additionalInfo, from: &reader)
+            guard count <= UInt64(reader.remainingCount) else {
+                throw MetadataError.invalidCBOR("Map count \(count) exceeds remaining data")
+            }
             var entries: [CBORMapEntry] = []
             entries.reserveCapacity(min(Int(count), 1024))
             for _ in 0..<count {

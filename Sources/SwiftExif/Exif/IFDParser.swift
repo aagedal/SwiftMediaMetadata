@@ -28,7 +28,10 @@ struct IFDParser {
                 continue
             }
 
-            let totalSize = Int(valueCount) * type.unitSize
+            let (totalSize, overflow) = Int(valueCount).multipliedReportingOverflow(by: type.unitSize)
+            guard !overflow, totalSize >= 0 else {
+                throw MetadataError.invalidIFDEntry
+            }
             let valueData: Data
 
             if totalSize <= 4 {

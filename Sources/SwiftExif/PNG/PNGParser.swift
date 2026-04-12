@@ -33,7 +33,7 @@ public struct PNGParser {
 
             let chunkData: Data
             if length > 0 {
-                guard Int(length) <= reader.remainingCount - 4 else {
+                guard reader.remainingCount >= 4, Int(length) <= reader.remainingCount - 4 else {
                     throw MetadataError.invalidPNG("Chunk length exceeds available data")
                 }
                 chunkData = try reader.readBytes(Int(length))

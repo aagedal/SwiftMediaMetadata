@@ -12,8 +12,9 @@ public struct TIFFFileParser {
         var ifds: [IFD] = []
         var nextOffset = header.ifdOffset
 
-        // Walk the IFD chain
-        while nextOffset > 0 {
+        // Walk the IFD chain (limit to 64 IFDs to prevent pathological files)
+        let maxIFDs = 64
+        while nextOffset > 0 && ifds.count < maxIFDs {
             let absoluteOffset = Int(nextOffset)
             guard absoluteOffset + 2 <= data.count else { break }
 
