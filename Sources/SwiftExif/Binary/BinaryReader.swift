@@ -197,6 +197,9 @@ public struct BinaryReader {
     // MARK: - Navigation
 
     public mutating func skip(_ count: Int) throws {
+        guard count >= 0 else {
+            throw MetadataError.invalidSegmentLength
+        }
         guard offset + count <= data.count else {
             throw MetadataError.unexpectedEndOfData
         }

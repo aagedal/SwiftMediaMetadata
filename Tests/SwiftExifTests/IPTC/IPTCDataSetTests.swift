@@ -3,14 +3,14 @@ import XCTest
 
 final class IPTCDataSetTests: XCTestCase {
 
-    func testStringDataSet() {
-        let ds = IPTCDataSet(tag: .headline, stringValue: "Test Headline")
+    func testStringDataSet() throws {
+        let ds = try IPTCDataSet(tag: .headline, stringValue: "Test Headline")
         XCTAssertEqual(ds.tag, IPTCTag.headline)
         XCTAssertEqual(ds.stringValue(), "Test Headline")
     }
 
-    func testUTF8NordicDataSet() {
-        let ds = IPTCDataSet(tag: .city, stringValue: "Tromsø")
+    func testUTF8NordicDataSet() throws {
+        let ds = try IPTCDataSet(tag: .city, stringValue: "Tromsø")
         XCTAssertEqual(ds.stringValue(encoding: .utf8), "Tromsø")
 
         // Verify the raw bytes: "Tromsø" = T r o m s ø
@@ -34,37 +34,67 @@ final class IPTCDataSetTests: XCTestCase {
         XCTAssertEqual(ds.rawValue, data)
     }
 
-    func testEquality() {
-        let ds1 = IPTCDataSet(tag: .headline, stringValue: "Test")
-        let ds2 = IPTCDataSet(tag: .headline, stringValue: "Test")
-        let ds3 = IPTCDataSet(tag: .headline, stringValue: "Other")
+    func testEquality() throws {
+        let ds1 = try IPTCDataSet(tag: .headline, stringValue: "Test")
+        let ds2 = try IPTCDataSet(tag: .headline, stringValue: "Test")
+        let ds3 = try IPTCDataSet(tag: .headline, stringValue: "Other")
         XCTAssertEqual(ds1, ds2)
         XCTAssertNotEqual(ds1, ds3)
     }
 
-    func testNordicCharacterBytes() {
+    func testNordicCharacterBytes() throws {
         // ø = 0xC3 0xB8
-        let dsOSlash = IPTCDataSet(tag: .city, stringValue: "ø")
+        let dsOSlash = try IPTCDataSet(tag: .city, stringValue: "ø")
         XCTAssertEqual(Array(dsOSlash.rawValue), [0xC3, 0xB8])
 
         // æ = 0xC3 0xA6
-        let dsAE = IPTCDataSet(tag: .city, stringValue: "æ")
+        let dsAE = try IPTCDataSet(tag: .city, stringValue: "æ")
         XCTAssertEqual(Array(dsAE.rawValue), [0xC3, 0xA6])
 
         // å = 0xC3 0xA5
-        let dsAA = IPTCDataSet(tag: .city, stringValue: "å")
+        let dsAA = try IPTCDataSet(tag: .city, stringValue: "å")
         XCTAssertEqual(Array(dsAA.rawValue), [0xC3, 0xA5])
 
         // Ø = 0xC3 0x98
-        let dsOSlashUpper = IPTCDataSet(tag: .city, stringValue: "Ø")
+        let dsOSlashUpper = try IPTCDataSet(tag: .city, stringValue: "Ø")
         XCTAssertEqual(Array(dsOSlashUpper.rawValue), [0xC3, 0x98])
 
         // Æ = 0xC3 0x86
-        let dsAEUpper = IPTCDataSet(tag: .city, stringValue: "Æ")
+        let dsAEUpper = try IPTCDataSet(tag: .city, stringValue: "Æ")
         XCTAssertEqual(Array(dsAEUpper.rawValue), [0xC3, 0x86])
 
         // Å = 0xC3 0x85
-        let dsAAUpper = IPTCDataSet(tag: .city, stringValue: "Å")
+        let dsAAUpper = try IPTCDataSet(tag: .city, stringValue: "Å")
         XCTAssertEqual(Array(dsAAUpper.rawValue), [0xC3, 0x85])
+    }
+
+    func testEncodingFailureThrows() {
+        // Emoji cannot be encoded as ASCII
+        XCTAssertThrowsError(try IPTCDataSet(tag: .headline, stringValue: "Hello 🌍", encoding: .ascii)) { error in
+            guard case MetadataError.encodingError = error else {
+                XCTFail("Expected MetadataError.encodingError, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testSetValueEncodingFailureThrows() {
+        var iptc = IPTCData(encoding: .ascii)
+        XCTAssertThrowsError(try iptc.setValue("Tromsø", for: .city)) { error in
+            guard case MetadataError.encodingError = error else {
+                XCTFail("Expected MetadataError.encodingError, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testSetValueEncodingFailurePreservesExistingData() throws {
+        var iptc = IPTCData(encoding: .ascii)
+        try iptc.setValue("Oslo", for: .city)
+        XCTAssertEqual(iptc.city, "Oslo")
+
+        // Trying to set an unencodable value should fail and preserve the old value
+        XCTAssertThrowsError(try iptc.setValue("Tromsø", for: .city))
+        XCTAssertEqual(iptc.city, "Oslo")
     }
 }

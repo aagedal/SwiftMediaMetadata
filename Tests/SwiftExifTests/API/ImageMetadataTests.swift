@@ -76,7 +76,7 @@ final class ImageMetadataTests: XCTestCase {
         metadata.xmp?.city = "Bergen"
         metadata.xmp?.subject = ["xmp", "keywords"]
 
-        metadata.syncXMPToIPTC()
+        try metadata.syncXMPToIPTC()
 
         XCTAssertEqual(metadata.iptc.headline, "From XMP")
         XCTAssertEqual(metadata.iptc.city, "Bergen")

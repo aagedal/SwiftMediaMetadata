@@ -7,48 +7,48 @@ final class IPTCNordicCharacterTests: XCTestCase {
 
     func testLowercaseOSlash() throws {
         // ø = U+00F8 = UTF-8: 0xC3 0xB8
-        let ds = IPTCDataSet(tag: .city, stringValue: "ø")
+        let ds = try IPTCDataSet(tag: .city, stringValue: "ø")
         XCTAssertEqual(Array(ds.rawValue), [0xC3, 0xB8])
         XCTAssertEqual(ds.stringValue(encoding: .utf8), "ø")
     }
 
     func testLowercaseAE() throws {
         // æ = U+00E6 = UTF-8: 0xC3 0xA6
-        let ds = IPTCDataSet(tag: .city, stringValue: "æ")
+        let ds = try IPTCDataSet(tag: .city, stringValue: "æ")
         XCTAssertEqual(Array(ds.rawValue), [0xC3, 0xA6])
         XCTAssertEqual(ds.stringValue(encoding: .utf8), "æ")
     }
 
     func testLowercaseAA() throws {
         // å = U+00E5 = UTF-8: 0xC3 0xA5
-        let ds = IPTCDataSet(tag: .city, stringValue: "å")
+        let ds = try IPTCDataSet(tag: .city, stringValue: "å")
         XCTAssertEqual(Array(ds.rawValue), [0xC3, 0xA5])
         XCTAssertEqual(ds.stringValue(encoding: .utf8), "å")
     }
 
     func testUppercaseOSlash() throws {
         // Ø = U+00D8 = UTF-8: 0xC3 0x98
-        let ds = IPTCDataSet(tag: .city, stringValue: "Ø")
+        let ds = try IPTCDataSet(tag: .city, stringValue: "Ø")
         XCTAssertEqual(Array(ds.rawValue), [0xC3, 0x98])
     }
 
     func testUppercaseAE() throws {
         // Æ = U+00C6 = UTF-8: 0xC3 0x86
-        let ds = IPTCDataSet(tag: .city, stringValue: "Æ")
+        let ds = try IPTCDataSet(tag: .city, stringValue: "Æ")
         XCTAssertEqual(Array(ds.rawValue), [0xC3, 0x86])
     }
 
     func testUppercaseAA() throws {
         // Å = U+00C5 = UTF-8: 0xC3 0x85
-        let ds = IPTCDataSet(tag: .city, stringValue: "Å")
+        let ds = try IPTCDataSet(tag: .city, stringValue: "Å")
         XCTAssertEqual(Array(ds.rawValue), [0xC3, 0x85])
     }
 
     func testGermanUmlauts() throws {
         // ä = 0xC3 0xA4, ö = 0xC3 0xB6, ü = 0xC3 0xBC
-        XCTAssertEqual(Array(IPTCDataSet(tag: .city, stringValue: "ä").rawValue), [0xC3, 0xA4])
-        XCTAssertEqual(Array(IPTCDataSet(tag: .city, stringValue: "ö").rawValue), [0xC3, 0xB6])
-        XCTAssertEqual(Array(IPTCDataSet(tag: .city, stringValue: "ü").rawValue), [0xC3, 0xBC])
+        XCTAssertEqual(Array(try IPTCDataSet(tag: .city, stringValue: "ä").rawValue), [0xC3, 0xA4])
+        XCTAssertEqual(Array(try IPTCDataSet(tag: .city, stringValue: "ö").rawValue), [0xC3, 0xB6])
+        XCTAssertEqual(Array(try IPTCDataSet(tag: .city, stringValue: "ü").rawValue), [0xC3, 0xBC])
     }
 
     // MARK: - Round-trip Nordic Strings Through IPTC Reader/Writer

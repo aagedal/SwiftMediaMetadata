@@ -109,6 +109,12 @@ final class BinaryReaderTests: XCTestCase {
         XCTAssertThrowsError(try reader.skip(3))
     }
 
+    func testSkipNegativeCount() {
+        var reader = BinaryReader(data: Data([0x01, 0x02, 0x03, 0x04]))
+        XCTAssertThrowsError(try reader.skip(-1))
+        XCTAssertEqual(reader.offset, 0)
+    }
+
     func testSeek() throws {
         var reader = BinaryReader(data: Data([0x01, 0x02, 0x03, 0x04]))
         try reader.seek(to: 3)

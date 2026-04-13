@@ -11,9 +11,14 @@ public struct IPTCDataSet: Equatable, Sendable {
     }
 
     /// Create a dataset from a string value, encoding as UTF-8.
-    public init(tag: IPTCTag, stringValue: String, encoding: String.Encoding = .utf8) {
+    /// Throws `MetadataError.encodingError` if the string cannot be represented in the given encoding.
+    public init(tag: IPTCTag, stringValue: String, encoding: String.Encoding = .utf8) throws {
+        guard let encoded = stringValue.data(using: encoding) else {
+            throw MetadataError.encodingError(
+                "Cannot encode \"\(stringValue)\" for tag \(tag.name) using \(encoding)")
+        }
         self.tag = tag
-        self.rawValue = Data(stringValue.data(using: encoding) ?? Data())
+        self.rawValue = encoded
     }
 
     /// Create a dataset from a UInt16 value (big-endian, for record version fields).

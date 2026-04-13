@@ -14,8 +14,8 @@ final class JPEGWriterTests: XCTestCase {
 
     func testRoundTripWithIPTC() throws {
         let datasets = [
-            IPTCDataSet(tag: .headline, stringValue: "Test Headline"),
-            IPTCDataSet(tag: .captionAbstract, stringValue: "A caption"),
+            try IPTCDataSet(tag: .headline, stringValue: "Test Headline"),
+            try IPTCDataSet(tag: .captionAbstract, stringValue: "A caption"),
         ]
         let original = TestFixtures.jpegWithIPTC(datasets: datasets)
         let file = try JPEGParser.parse(original)
@@ -29,8 +29,8 @@ final class JPEGWriterTests: XCTestCase {
         var file = try JPEGParser.parse(original)
 
         // Add an APP13 segment
-        let iptcData = try! IPTCWriter.write(IPTCData(datasets: [
-            IPTCDataSet(tag: .headline, stringValue: "New Headline"),
+        let iptcData = try IPTCWriter.write(IPTCData(datasets: [
+            try IPTCDataSet(tag: .headline, stringValue: "New Headline"),
         ]))
         let app13Payload = TestFixtures.buildAPP13(iptcData: iptcData)
         let segment = JPEGSegment(marker: .app13, data: app13Payload)
@@ -48,9 +48,9 @@ final class JPEGWriterTests: XCTestCase {
 
         // Add IPTC metadata
         var modifiedFile = originalFile
-        let iptcData = try! IPTCWriter.write(IPTCData(datasets: [
-            IPTCDataSet(tag: .headline, stringValue: "Breaking News"),
-            IPTCDataSet(tag: .byline, stringValue: "Photographer"),
+        let iptcData = try IPTCWriter.write(IPTCData(datasets: [
+            try IPTCDataSet(tag: .headline, stringValue: "Breaking News"),
+            try IPTCDataSet(tag: .byline, stringValue: "Photographer"),
         ]))
         let app13Payload = TestFixtures.buildAPP13(iptcData: iptcData)
         modifiedFile.segments.append(JPEGSegment(marker: .app13, data: app13Payload))
@@ -63,7 +63,7 @@ final class JPEGWriterTests: XCTestCase {
     }
 
     func testSegmentRemoval() throws {
-        let datasets = [IPTCDataSet(tag: .headline, stringValue: "Test")]
+        let datasets = [try IPTCDataSet(tag: .headline, stringValue: "Test")]
         let original = TestFixtures.jpegWithIPTC(datasets: datasets)
         var file = try JPEGParser.parse(original)
 

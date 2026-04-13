@@ -42,22 +42,28 @@ public struct IPTCData: Equatable, Sendable {
     // MARK: - Mutation
 
     /// Set a single value for a tag (replaces all existing instances).
-    public mutating func setValue(_ value: String, for tag: IPTCTag) {
+    /// Throws `MetadataError.encodingError` if the value cannot be encoded.
+    public mutating func setValue(_ value: String, for tag: IPTCTag) throws {
+        let ds = try IPTCDataSet(tag: tag, stringValue: value, encoding: encoding)
         removeAll(for: tag)
-        datasets.append(IPTCDataSet(tag: tag, stringValue: value, encoding: encoding))
+        datasets.append(ds)
     }
 
     /// Set multiple values for a repeatable tag (replaces all existing instances).
-    public mutating func setValues(_ values: [String], for tag: IPTCTag) {
-        removeAll(for: tag)
+    /// Throws `MetadataError.encodingError` if any value cannot be encoded.
+    public mutating func setValues(_ values: [String], for tag: IPTCTag) throws {
+        var encoded: [IPTCDataSet] = []
         for value in values {
-            datasets.append(IPTCDataSet(tag: tag, stringValue: value, encoding: encoding))
+            encoded.append(try IPTCDataSet(tag: tag, stringValue: value, encoding: encoding))
         }
+        removeAll(for: tag)
+        datasets.append(contentsOf: encoded)
     }
 
     /// Add a value for a repeatable tag (appends, does not replace).
-    public mutating func addValue(_ value: String, for tag: IPTCTag) {
-        datasets.append(IPTCDataSet(tag: tag, stringValue: value, encoding: encoding))
+    /// Throws `MetadataError.encodingError` if the value cannot be encoded.
+    public mutating func addValue(_ value: String, for tag: IPTCTag) throws {
+        datasets.append(try IPTCDataSet(tag: tag, stringValue: value, encoding: encoding))
     }
 
     /// Remove all datasets for a specific tag.
@@ -83,7 +89,7 @@ public struct IPTCData: Equatable, Sendable {
     public var headline: String? {
         get { value(for: .headline) }
         set {
-            if let v = newValue { setValue(v, for: .headline) }
+            if let v = newValue { try? setValue(v, for: .headline) }
             else { removeAll(for: .headline) }
         }
     }
@@ -91,7 +97,7 @@ public struct IPTCData: Equatable, Sendable {
     public var caption: String? {
         get { value(for: .captionAbstract) }
         set {
-            if let v = newValue { setValue(v, for: .captionAbstract) }
+            if let v = newValue { try? setValue(v, for: .captionAbstract) }
             else { removeAll(for: .captionAbstract) }
         }
     }
@@ -99,25 +105,25 @@ public struct IPTCData: Equatable, Sendable {
     public var byline: String? {
         get { value(for: .byline) }
         set {
-            if let v = newValue { setValue(v, for: .byline) }
+            if let v = newValue { try? setValue(v, for: .byline) }
             else { removeAll(for: .byline) }
         }
     }
 
     public var bylines: [String] {
         get { values(for: .byline) }
-        set { setValues(newValue, for: .byline) }
+        set { try? setValues(newValue, for: .byline) }
     }
 
     public var keywords: [String] {
         get { values(for: .keywords) }
-        set { setValues(newValue, for: .keywords) }
+        set { try? setValues(newValue, for: .keywords) }
     }
 
     public var city: String? {
         get { value(for: .city) }
         set {
-            if let v = newValue { setValue(v, for: .city) }
+            if let v = newValue { try? setValue(v, for: .city) }
             else { removeAll(for: .city) }
         }
     }
@@ -125,7 +131,7 @@ public struct IPTCData: Equatable, Sendable {
     public var sublocation: String? {
         get { value(for: .sublocation) }
         set {
-            if let v = newValue { setValue(v, for: .sublocation) }
+            if let v = newValue { try? setValue(v, for: .sublocation) }
             else { removeAll(for: .sublocation) }
         }
     }
@@ -133,7 +139,7 @@ public struct IPTCData: Equatable, Sendable {
     public var provinceState: String? {
         get { value(for: .provinceState) }
         set {
-            if let v = newValue { setValue(v, for: .provinceState) }
+            if let v = newValue { try? setValue(v, for: .provinceState) }
             else { removeAll(for: .provinceState) }
         }
     }
@@ -141,7 +147,7 @@ public struct IPTCData: Equatable, Sendable {
     public var countryCode: String? {
         get { value(for: .countryPrimaryLocationCode) }
         set {
-            if let v = newValue { setValue(v, for: .countryPrimaryLocationCode) }
+            if let v = newValue { try? setValue(v, for: .countryPrimaryLocationCode) }
             else { removeAll(for: .countryPrimaryLocationCode) }
         }
     }
@@ -149,7 +155,7 @@ public struct IPTCData: Equatable, Sendable {
     public var countryName: String? {
         get { value(for: .countryPrimaryLocationName) }
         set {
-            if let v = newValue { setValue(v, for: .countryPrimaryLocationName) }
+            if let v = newValue { try? setValue(v, for: .countryPrimaryLocationName) }
             else { removeAll(for: .countryPrimaryLocationName) }
         }
     }
@@ -157,7 +163,7 @@ public struct IPTCData: Equatable, Sendable {
     public var credit: String? {
         get { value(for: .credit) }
         set {
-            if let v = newValue { setValue(v, for: .credit) }
+            if let v = newValue { try? setValue(v, for: .credit) }
             else { removeAll(for: .credit) }
         }
     }
@@ -165,7 +171,7 @@ public struct IPTCData: Equatable, Sendable {
     public var source: String? {
         get { value(for: .source) }
         set {
-            if let v = newValue { setValue(v, for: .source) }
+            if let v = newValue { try? setValue(v, for: .source) }
             else { removeAll(for: .source) }
         }
     }
@@ -173,7 +179,7 @@ public struct IPTCData: Equatable, Sendable {
     public var copyright: String? {
         get { value(for: .copyrightNotice) }
         set {
-            if let v = newValue { setValue(v, for: .copyrightNotice) }
+            if let v = newValue { try? setValue(v, for: .copyrightNotice) }
             else { removeAll(for: .copyrightNotice) }
         }
     }
@@ -181,7 +187,7 @@ public struct IPTCData: Equatable, Sendable {
     public var dateCreated: String? {
         get { value(for: .dateCreated) }
         set {
-            if let v = newValue { setValue(v, for: .dateCreated) }
+            if let v = newValue { try? setValue(v, for: .dateCreated) }
             else { removeAll(for: .dateCreated) }
         }
     }
@@ -189,7 +195,7 @@ public struct IPTCData: Equatable, Sendable {
     public var timeCreated: String? {
         get { value(for: .timeCreated) }
         set {
-            if let v = newValue { setValue(v, for: .timeCreated) }
+            if let v = newValue { try? setValue(v, for: .timeCreated) }
             else { removeAll(for: .timeCreated) }
         }
     }
@@ -197,7 +203,7 @@ public struct IPTCData: Equatable, Sendable {
     public var specialInstructions: String? {
         get { value(for: .specialInstructions) }
         set {
-            if let v = newValue { setValue(v, for: .specialInstructions) }
+            if let v = newValue { try? setValue(v, for: .specialInstructions) }
             else { removeAll(for: .specialInstructions) }
         }
     }
@@ -205,7 +211,7 @@ public struct IPTCData: Equatable, Sendable {
     public var objectName: String? {
         get { value(for: .objectName) }
         set {
-            if let v = newValue { setValue(v, for: .objectName) }
+            if let v = newValue { try? setValue(v, for: .objectName) }
             else { removeAll(for: .objectName) }
         }
     }
@@ -213,7 +219,7 @@ public struct IPTCData: Equatable, Sendable {
     public var writerEditor: String? {
         get { value(for: .writerEditor) }
         set {
-            if let v = newValue { setValue(v, for: .writerEditor) }
+            if let v = newValue { try? setValue(v, for: .writerEditor) }
             else { removeAll(for: .writerEditor) }
         }
     }
@@ -221,7 +227,7 @@ public struct IPTCData: Equatable, Sendable {
     public var jobId: String? {
         get { value(for: .originalTransmissionReference) }
         set {
-            if let v = newValue { setValue(v, for: .originalTransmissionReference) }
+            if let v = newValue { try? setValue(v, for: .originalTransmissionReference) }
             else { removeAll(for: .originalTransmissionReference) }
         }
     }
@@ -229,7 +235,7 @@ public struct IPTCData: Equatable, Sendable {
     public var originatingProgram: String? {
         get { value(for: .originatingProgram) }
         set {
-            if let v = newValue { setValue(v, for: .originatingProgram) }
+            if let v = newValue { try? setValue(v, for: .originatingProgram) }
             else { removeAll(for: .originatingProgram) }
         }
     }
@@ -237,7 +243,7 @@ public struct IPTCData: Equatable, Sendable {
     public var programVersion: String? {
         get { value(for: .programVersion) }
         set {
-            if let v = newValue { setValue(v, for: .programVersion) }
+            if let v = newValue { try? setValue(v, for: .programVersion) }
             else { removeAll(for: .programVersion) }
         }
     }

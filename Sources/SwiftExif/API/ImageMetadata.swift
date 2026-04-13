@@ -114,18 +114,19 @@ public struct ImageMetadata: Sendable {
     }
 
     /// Synchronize XMP values to IPTC (one-way: XMP → IPTC).
-    public mutating func syncXMPToIPTC() {
+    /// Throws `MetadataError.encodingError` if any XMP value cannot be encoded for IPTC.
+    public mutating func syncXMPToIPTC() throws {
         guard let xmp = xmp else { return }
 
         for (iptcTag, xmpMapping) in XMPNamespace.iimToXMP {
             if iptcTag.isRepeatable {
                 let values = xmp.arrayValue(namespace: xmpMapping.namespace, property: xmpMapping.property)
                 if !values.isEmpty {
-                    iptc.setValues(values, for: iptcTag)
+                    try iptc.setValues(values, for: iptcTag)
                 }
             } else {
                 if let value = xmp.simpleValue(namespace: xmpMapping.namespace, property: xmpMapping.property) {
-                    iptc.setValue(value, for: iptcTag)
+                    try iptc.setValue(value, for: iptcTag)
                 }
             }
         }

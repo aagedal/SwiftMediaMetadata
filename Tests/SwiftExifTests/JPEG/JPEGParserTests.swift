@@ -55,7 +55,7 @@ final class JPEGParserTests: XCTestCase {
     }
 
     func testFindIPTCSegment() throws {
-        let datasets = [IPTCDataSet(tag: .headline, stringValue: "Test")]
+        let datasets = [try IPTCDataSet(tag: .headline, stringValue: "Test")]
         let jpeg = TestFixtures.jpegWithIPTC(datasets: datasets)
         let file = try JPEGParser.parse(jpeg)
 

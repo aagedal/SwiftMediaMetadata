@@ -35,9 +35,9 @@ final class IPTCWriterTests: XCTestCase {
         XCTAssertEqual(parsed.headline, "Test Headline")
     }
 
-    func testBinaryFormat() {
+    func testBinaryFormat() throws {
         var iptc = IPTCData()
-        iptc.setValue("Hi", for: .headline)
+        try iptc.setValue("Hi", for: .headline)
 
         let data = try! IPTCWriter.write(iptc)
         let bytes = Array(data)
