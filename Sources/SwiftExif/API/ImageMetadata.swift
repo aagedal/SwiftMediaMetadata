@@ -73,7 +73,7 @@ public struct ImageMetadata: Sendable {
         case .png(var file):
             return writePNG(&file)
         case .tiff(let file):
-            return writeTIFFFile(file)
+            return try writeTIFFFile(file)
         case .jpegXL(var file):
             return try writeJXL(&file)
         case .avif(let file):
@@ -213,8 +213,8 @@ public struct ImageMetadata: Sendable {
         return try AVIFWriter.write(file, exif: exif, xmp: xmp)
     }
 
-    private func writeTIFFFile(_ file: TIFFFile) -> Data {
-        return TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp)
+    private func writeTIFFFile(_ file: TIFFFile) throws -> Data {
+        return try TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp)
     }
 
     // MARK: - Format-Specific Reading

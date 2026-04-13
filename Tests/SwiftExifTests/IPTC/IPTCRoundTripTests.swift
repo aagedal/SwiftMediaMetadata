@@ -7,7 +7,7 @@ final class IPTCRoundTripTests: XCTestCase {
         var original = IPTCData()
         original.headline = "Breaking News"
 
-        let binary = IPTCWriter.write(original)
+        let binary = try! IPTCWriter.write(original)
         let parsed = try IPTCReader.read(from: binary)
 
         XCTAssertEqual(parsed.headline, "Breaking News")
@@ -35,7 +35,7 @@ final class IPTCRoundTripTests: XCTestCase {
         original.originatingProgram = "SwiftExif"
         original.programVersion = "1.0"
 
-        let binary = IPTCWriter.write(original)
+        let binary = try! IPTCWriter.write(original)
         let parsed = try IPTCReader.read(from: binary)
 
         XCTAssertEqual(parsed.objectName, original.objectName)
@@ -64,7 +64,7 @@ final class IPTCRoundTripTests: XCTestCase {
         original.keywords = ["photo", "news", "breaking", "exclusive", "world"]
         original.bylines = ["Photographer One", "Photographer Two", "Photographer Three"]
 
-        let binary = IPTCWriter.write(original)
+        let binary = try! IPTCWriter.write(original)
         let parsed = try IPTCReader.read(from: binary)
 
         XCTAssertEqual(parsed.keywords, original.keywords)
@@ -73,7 +73,7 @@ final class IPTCRoundTripTests: XCTestCase {
 
     func testRoundTripEmptyValues() throws {
         let original = IPTCData()
-        let binary = IPTCWriter.write(original)
+        let binary = try! IPTCWriter.write(original)
         let parsed = try IPTCReader.read(from: binary)
 
         XCTAssertNil(parsed.headline)
@@ -85,7 +85,7 @@ final class IPTCRoundTripTests: XCTestCase {
         var original = IPTCData()
         original.caption = String(repeating: "A", count: 2000)
 
-        let binary = IPTCWriter.write(original)
+        let binary = try! IPTCWriter.write(original)
         let parsed = try IPTCReader.read(from: binary)
 
         XCTAssertEqual(parsed.caption?.count, 2000)

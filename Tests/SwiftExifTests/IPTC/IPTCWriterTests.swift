@@ -7,7 +7,7 @@ final class IPTCWriterTests: XCTestCase {
         var iptc = IPTCData()
         iptc.keywords = ["TestKeyword"]
 
-        let data = IPTCWriter.write(iptc)
+        let data = try! IPTCWriter.write(iptc)
 
         // Should contain at least one 0x1C marker
         XCTAssertTrue(data.contains(0x1C))
@@ -21,7 +21,7 @@ final class IPTCWriterTests: XCTestCase {
         var iptc = IPTCData()
         iptc.keywords = ["Photo", "News", "Breaking"]
 
-        let data = IPTCWriter.write(iptc)
+        let data = try! IPTCWriter.write(iptc)
         let parsed = try! IPTCReader.read(from: data)
         XCTAssertEqual(parsed.keywords, ["Photo", "News", "Breaking"])
     }
@@ -30,7 +30,7 @@ final class IPTCWriterTests: XCTestCase {
         var iptc = IPTCData()
         iptc.headline = "Test Headline"
 
-        let data = IPTCWriter.write(iptc)
+        let data = try! IPTCWriter.write(iptc)
         let parsed = try! IPTCReader.read(from: data)
         XCTAssertEqual(parsed.headline, "Test Headline")
     }
@@ -39,7 +39,7 @@ final class IPTCWriterTests: XCTestCase {
         var iptc = IPTCData()
         iptc.setValue("Hi", for: .headline)
 
-        let data = IPTCWriter.write(iptc)
+        let data = try! IPTCWriter.write(iptc)
         let bytes = Array(data)
 
         // Find the headline dataset
@@ -62,7 +62,7 @@ final class IPTCWriterTests: XCTestCase {
         var iptc = IPTCData()
         iptc.city = "Tromsø" // Contains non-ASCII
 
-        let data = IPTCWriter.write(iptc)
+        let data = try! IPTCWriter.write(iptc)
         let bytes = Array(data)
 
         // Should contain 1:90 with UTF-8 escape sequence
@@ -86,7 +86,7 @@ final class IPTCWriterTests: XCTestCase {
         var iptc = IPTCData()
         iptc.headline = "Plain ASCII"
 
-        let data = IPTCWriter.write(iptc)
+        let data = try! IPTCWriter.write(iptc)
         let bytes = Array(data)
 
         // Should NOT contain 1:90 (no non-ASCII)
@@ -111,5 +111,78 @@ final class IPTCWriterTests: XCTestCase {
         // Should be parseable by PhotoshopIRB
         let blocks = try PhotoshopIRB.parse(app13Data)
         XCTAssertTrue(blocks.contains { $0.resourceID == 0x0404 })
+    }
+
+    // MARK: - Max Length Validation
+
+    func testWriteThrowsWhenBylineExceedsMaxLength() {
+        var iptc = IPTCData()
+        // byline maxLength = 32
+        iptc.byline = String(repeating: "A", count: 33)
+
+        XCTAssertThrowsError(try IPTCWriter.write(iptc)) { error in
+            guard case MetadataError.dataExceedsMaxLength(let tag, let max, let actual) = error else {
+                XCTFail("Expected dataExceedsMaxLength, got \(error)")
+                return
+            }
+            XCTAssertEqual(tag, "By-line")
+            XCTAssertEqual(max, 32)
+            XCTAssertEqual(actual, 33)
+        }
+    }
+
+    func testWriteThrowsWhenKeywordExceedsMaxLength() {
+        var iptc = IPTCData()
+        // keywords maxLength = 64
+        iptc.keywords = ["OK", String(repeating: "B", count: 65)]
+
+        XCTAssertThrowsError(try IPTCWriter.write(iptc)) { error in
+            guard case MetadataError.dataExceedsMaxLength(_, let max, let actual) = error else {
+                XCTFail("Expected dataExceedsMaxLength, got \(error)")
+                return
+            }
+            XCTAssertEqual(max, 64)
+            XCTAssertEqual(actual, 65)
+        }
+    }
+
+    func testWriteAllowsValueAtExactMaxLength() throws {
+        var iptc = IPTCData()
+        // byline maxLength = 32, exactly 32 should be fine
+        iptc.byline = String(repeating: "X", count: 32)
+
+        let data = try IPTCWriter.write(iptc)
+        let parsed = try IPTCReader.read(from: data)
+        XCTAssertEqual(parsed.byline, String(repeating: "X", count: 32))
+    }
+
+    func testValidateReturnsAllFields() {
+        var iptc = IPTCData()
+        // city maxLength = 32
+        iptc.city = String(repeating: "C", count: 40)
+
+        XCTAssertThrowsError(try iptc.validate()) { error in
+            guard case MetadataError.dataExceedsMaxLength(let tag, _, _) = error else {
+                XCTFail("Expected dataExceedsMaxLength, got \(error)")
+                return
+            }
+            XCTAssertEqual(tag, "City")
+        }
+    }
+
+    func testWriteThrowsForMultibyteUTF8ExceedingMaxLength() {
+        var iptc = IPTCData()
+        // city maxLength = 32 bytes. Nordic chars are multi-byte in UTF-8.
+        // "Ø" is 2 bytes in UTF-8, so 17 of them = 34 bytes > 32
+        iptc.city = String(repeating: "Ø", count: 17)
+
+        XCTAssertThrowsError(try IPTCWriter.write(iptc)) { error in
+            guard case MetadataError.dataExceedsMaxLength(_, let max, let actual) = error else {
+                XCTFail("Expected dataExceedsMaxLength, got \(error)")
+                return
+            }
+            XCTAssertEqual(max, 32)
+            XCTAssertEqual(actual, 34) // 17 × 2 bytes
+        }
     }
 }

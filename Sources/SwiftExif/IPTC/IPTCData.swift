@@ -65,6 +65,19 @@ public struct IPTCData: Equatable, Sendable {
         datasets.removeAll { $0.tag == tag }
     }
 
+    // MARK: - Validation
+
+    /// Validate all datasets against IPTC spec constraints (max length).
+    /// Throws `MetadataError.dataExceedsMaxLength` for any field that exceeds its limit.
+    public func validate() throws {
+        for ds in datasets {
+            if let max = ds.tag.maxLength, ds.rawValue.count > max {
+                throw MetadataError.dataExceedsMaxLength(
+                    tag: ds.tag.name, max: max, actual: ds.rawValue.count)
+            }
+        }
+    }
+
     // MARK: - Convenience Properties (Journalism Fields)
 
     public var headline: String? {

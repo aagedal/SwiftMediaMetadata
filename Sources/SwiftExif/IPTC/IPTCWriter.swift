@@ -4,7 +4,10 @@ import Foundation
 public struct IPTCWriter {
 
     /// Serialize IPTCData to raw IPTC binary data.
-    public static func write(_ iptcData: IPTCData) -> Data {
+    /// Throws `MetadataError.dataExceedsMaxLength` if any field exceeds its IPTC spec limit.
+    public static func write(_ iptcData: IPTCData) throws -> Data {
+        try iptcData.validate()
+
         var writer = BinaryWriter(capacity: 1024)
         let encoding = iptcData.encoding
 
@@ -31,7 +34,7 @@ public struct IPTCWriter {
     /// Write IPTCData into an APP13 segment payload.
     /// If existingAPP13 is provided, replaces the IPTC resource while preserving others.
     public static func writeToAPP13(_ iptcData: IPTCData, existingAPP13: Data? = nil) throws -> Data {
-        let iptcBinary = write(iptcData)
+        let iptcBinary = try write(iptcData)
 
         if let existing = existingAPP13 {
             return try PhotoshopIRB.replaceIPTCData(in: existing, with: iptcBinary)

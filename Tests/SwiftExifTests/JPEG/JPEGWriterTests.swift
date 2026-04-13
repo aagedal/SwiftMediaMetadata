@@ -29,7 +29,7 @@ final class JPEGWriterTests: XCTestCase {
         var file = try JPEGParser.parse(original)
 
         // Add an APP13 segment
-        let iptcData = IPTCWriter.write(IPTCData(datasets: [
+        let iptcData = try! IPTCWriter.write(IPTCData(datasets: [
             IPTCDataSet(tag: .headline, stringValue: "New Headline"),
         ]))
         let app13Payload = TestFixtures.buildAPP13(iptcData: iptcData)
@@ -48,7 +48,7 @@ final class JPEGWriterTests: XCTestCase {
 
         // Add IPTC metadata
         var modifiedFile = originalFile
-        let iptcData = IPTCWriter.write(IPTCData(datasets: [
+        let iptcData = try! IPTCWriter.write(IPTCData(datasets: [
             IPTCDataSet(tag: .headline, stringValue: "Breaking News"),
             IPTCDataSet(tag: .byline, stringValue: "Photographer"),
         ]))

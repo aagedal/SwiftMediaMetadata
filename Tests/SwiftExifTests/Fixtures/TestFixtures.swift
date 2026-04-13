@@ -92,7 +92,7 @@ enum TestFixtures {
 
     /// Generate a JPEG with a pre-built APP13 containing IPTC data.
     static func jpegWithIPTC(datasets: [IPTCDataSet]) -> Data {
-        let iptcBinary = IPTCWriter.write(IPTCData(datasets: datasets))
+        let iptcBinary = try! IPTCWriter.write(IPTCData(datasets: datasets))
         let app13Data = buildAPP13(iptcData: iptcBinary)
         return jpegWithSegment(marker: .app13, data: app13Data)
     }
@@ -395,7 +395,7 @@ enum TestFixtures {
         if !includeUTF8Charset {
             iptcData.removeAll(for: .codedCharacterSet)
         }
-        return IPTCWriter.write(iptcData)
+        return try! IPTCWriter.write(iptcData)
     }
 
     // MARK: - Exif APP1 Data

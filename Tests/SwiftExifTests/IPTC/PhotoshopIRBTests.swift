@@ -4,7 +4,7 @@ import XCTest
 final class PhotoshopIRBTests: XCTestCase {
 
     func testParseMinimalAPP13() throws {
-        let iptcData = IPTCWriter.write(IPTCData(datasets: [
+        let iptcData = try! IPTCWriter.write(IPTCData(datasets: [
             IPTCDataSet(tag: .headline, stringValue: "Test"),
         ]))
         let app13Data = TestFixtures.buildAPP13(iptcData: iptcData)
@@ -15,7 +15,7 @@ final class PhotoshopIRBTests: XCTestCase {
     }
 
     func testExtractIPTCData() throws {
-        let iptcData = IPTCWriter.write(IPTCData(datasets: [
+        let iptcData = try! IPTCWriter.write(IPTCData(datasets: [
             IPTCDataSet(tag: .headline, stringValue: "Extract Test"),
         ]))
         let app13Data = TestFixtures.buildAPP13(iptcData: iptcData)
@@ -30,7 +30,7 @@ final class PhotoshopIRBTests: XCTestCase {
     func testMultipleIRBBlocks() throws {
         // Create APP13 with IPTC + a dummy block
         var blocks = [
-            IRBBlock(resourceID: 0x0404, data: IPTCWriter.write(IPTCData(datasets: [
+            IRBBlock(resourceID: 0x0404, data: try! IPTCWriter.write(IPTCData(datasets: [
                 IPTCDataSet(tag: .headline, stringValue: "Multi Block"),
             ]))),
             IRBBlock(resourceID: 0x040C, name: "", data: Data([0x01, 0x02, 0x03])), // Dummy thumbnail
@@ -47,7 +47,7 @@ final class PhotoshopIRBTests: XCTestCase {
     func testReplaceIPTCPreservesOtherBlocks() throws {
         // Create APP13 with IPTC + dummy block
         let blocks = [
-            IRBBlock(resourceID: 0x0404, data: IPTCWriter.write(IPTCData(datasets: [
+            IRBBlock(resourceID: 0x0404, data: try! IPTCWriter.write(IPTCData(datasets: [
                 IPTCDataSet(tag: .headline, stringValue: "Original"),
             ]))),
             IRBBlock(resourceID: 0x040C, data: Data([0xAA, 0xBB, 0xCC])),
@@ -56,7 +56,7 @@ final class PhotoshopIRBTests: XCTestCase {
         let original = PhotoshopIRB.write(blocks: blocks)
 
         // Replace IPTC
-        let newIPTC = IPTCWriter.write(IPTCData(datasets: [
+        let newIPTC = try! IPTCWriter.write(IPTCData(datasets: [
             IPTCDataSet(tag: .headline, stringValue: "Replaced"),
         ]))
         let modified = try PhotoshopIRB.replaceIPTCData(in: original, with: newIPTC)

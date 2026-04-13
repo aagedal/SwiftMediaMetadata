@@ -14,7 +14,7 @@ public struct TIFFWriter {
 
     /// Reconstruct a TIFF file with updated metadata.
     /// Preserves all non-metadata IFD entries and their data.
-    public static func write(_ tiffFile: TIFFFile, exif: ExifData?, iptc: IPTCData?, xmp: XMPData?) -> Data {
+    public static func write(_ tiffFile: TIFFFile, exif: ExifData?, iptc: IPTCData?, xmp: XMPData?) throws -> Data {
         let endian = tiffFile.header.byteOrder
         var writer = BinaryWriter(capacity: tiffFile.rawData.count + 4096)
 
@@ -26,7 +26,7 @@ public struct TIFFWriter {
         for (ifdIndex, ifd) in tiffFile.ifds.enumerated() {
             if ifdIndex == 0 {
                 // IFD0: merge in metadata entries
-                let updatedEntries = buildIFD0Entries(
+                let updatedEntries = try buildIFD0Entries(
                     existing: ifd.entries,
                     endian: endian,
                     exif: exif,
@@ -44,7 +44,7 @@ public struct TIFFWriter {
 
         // If no IFDs existed, create IFD0 from scratch
         if tiffFile.ifds.isEmpty {
-            let entries = buildIFD0Entries(
+            let entries = try buildIFD0Entries(
                 existing: [],
                 endian: endian,
                 exif: exif,
@@ -70,7 +70,7 @@ public struct TIFFWriter {
         iptc: IPTCData?,
         xmp: XMPData?,
         writerOffset: Int
-    ) -> [IFDEntry] {
+    ) throws -> [IFDEntry] {
         // Start with existing non-metadata entries
         var entries = existing.filter { !metadataTagIDs.contains($0.tag) }
 
@@ -87,7 +87,7 @@ public struct TIFFWriter {
 
         // Add Photoshop IRB with IPTC (0x8649)
         if let iptc = iptc, !iptc.datasets.isEmpty {
-            let iptcBinary = IPTCWriter.write(iptc)
+            let iptcBinary = try IPTCWriter.write(iptc)
             let irbData = PhotoshopIRB.write(blocks: [
                 IRBBlock(resourceID: PhotoshopIRB.iptcResourceID, data: iptcBinary)
             ])
