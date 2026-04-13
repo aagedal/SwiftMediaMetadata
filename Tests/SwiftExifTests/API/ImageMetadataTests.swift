@@ -83,6 +83,36 @@ final class ImageMetadataTests: XCTestCase {
         XCTAssertEqual(metadata.iptc.keywords, ["xmp", "keywords"])
     }
 
+    func testNoWarningsWhenClean() throws {
+        let jpeg = TestFixtures.minimalJPEG()
+        let metadata = try ImageMetadata.read(from: jpeg)
+        XCTAssertTrue(metadata.warnings.isEmpty)
+    }
+
+    func testCorruptedC2PAProducesWarning() throws {
+        // Build APP11 segment with valid framing but a jumb box whose
+        // first child is "free" instead of "jumd" — triggers parseSuperbox error
+        var segmentData = Data()
+        segmentData.append(contentsOf: [0x4A, 0x50])             // "JP" common identifier
+        segmentData.append(contentsOf: [0x00, 0x01])             // instance number 1
+        segmentData.append(contentsOf: [0x00, 0x00, 0x00, 0x01]) // sequence number 1
+        // JUMBF payload: a "jumb" box containing a "free" box (no jumd descriptor)
+        segmentData.append(contentsOf: [0x00, 0x00, 0x00, 0x14]) // jumb size = 20
+        segmentData.append(contentsOf: [0x6A, 0x75, 0x6D, 0x62]) // "jumb"
+        segmentData.append(contentsOf: [0x00, 0x00, 0x00, 0x08]) // free size = 8
+        segmentData.append(contentsOf: [0x66, 0x72, 0x65, 0x65]) // "free"
+        segmentData.append(contentsOf: [0x00, 0x00, 0x00, 0x00]) // padding
+
+        let jpeg = TestFixtures.jpegWithSegment(marker: .app11, data: segmentData)
+        let metadata = try ImageMetadata.read(from: jpeg)
+
+        // Read should succeed — other metadata is fine
+        XCTAssertNil(metadata.c2pa)
+        // But the warning should tell us C2PA parsing failed
+        XCTAssertFalse(metadata.warnings.isEmpty, "Expected a C2PA warning for corrupted data")
+        XCTAssertTrue(metadata.warnings.first?.contains("C2PA") == true)
+    }
+
     func testImageDataPreserved() throws {
         let original = TestFixtures.minimalJPEG()
         let originalFile = try JPEGParser.parse(original)

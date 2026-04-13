@@ -9,13 +9,17 @@ public struct ImageMetadata: Sendable {
     public var xmp: XMPData?
     public var c2pa: C2PAData?
 
-    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil) {
+    /// Non-fatal issues encountered during parsing (e.g. corrupted C2PA data).
+    public var warnings: [String]
+
+    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, warnings: [String] = []) {
         self.container = container
         self.format = format
         self.iptc = iptc
         self.exif = exif
         self.xmp = xmp
         self.c2pa = c2pa
+        self.warnings = warnings
     }
 
     // MARK: - Reading
@@ -174,7 +178,7 @@ public struct ImageMetadata: Sendable {
             file.replaceOrAddXMPSegment(JPEGSegment(marker: .app1, data: xmpData))
         }
 
-        return JPEGWriter.write(file)
+        return try JPEGWriter.write(file)
     }
 
     private func writePNG(_ file: inout PNGFile) -> Data {
@@ -240,11 +244,16 @@ public struct ImageMetadata: Sendable {
 
         // C2PA from APP11 JUMBF segments
         var c2pa: C2PAData?
-        if let jumbfData = try? C2PAReader.extractJUMBFFromJPEG(jpegFile) {
-            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+        var warnings: [String] = []
+        do {
+            if let jumbfData = try C2PAReader.extractJUMBFFromJPEG(jpegFile) {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            }
+        } catch {
+            warnings.append("C2PA parsing failed: \(error)")
         }
 
-        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa)
+        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
     }
 
     private static func readTIFF(from data: Data, format: ImageFormat) throws -> ImageMetadata {
@@ -284,11 +293,16 @@ public struct ImageMetadata: Sendable {
 
         // C2PA from jumb box
         var c2pa: C2PAData?
+        var warnings: [String] = []
         if let jumbfData = C2PAReader.extractJUMBFFromJPEGXL(jxlFile) {
-            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+            do {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            } catch {
+                warnings.append("C2PA parsing failed: \(error)")
+            }
         }
 
-        return ImageMetadata(container: .jpegXL(jxlFile), format: .jpegXL, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa)
+        return ImageMetadata(container: .jpegXL(jxlFile), format: .jpegXL, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
     }
 
     private static func readPNG(from data: Data) throws -> ImageMetadata {
@@ -307,11 +321,16 @@ public struct ImageMetadata: Sendable {
 
         // C2PA from caBX chunk
         var c2pa: C2PAData?
+        var warnings: [String] = []
         if let jumbfData = C2PAReader.extractJUMBFFromPNG(pngFile) {
-            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+            do {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            } catch {
+                warnings.append("C2PA parsing failed: \(error)")
+            }
         }
 
-        return ImageMetadata(container: .png(pngFile), format: .png, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa)
+        return ImageMetadata(container: .png(pngFile), format: .png, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
     }
 
     private static func readAVIF(from data: Data) throws -> ImageMetadata {
@@ -322,10 +341,15 @@ public struct ImageMetadata: Sendable {
 
         // C2PA from jumb or uuid box
         var c2pa: C2PAData?
+        var warnings: [String] = []
         if let jumbfData = C2PAReader.extractJUMBFFromAVIF(avifFile) {
-            c2pa = try? C2PAReader.parseManifestStore(from: jumbfData)
+            do {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            } catch {
+                warnings.append("C2PA parsing failed: \(error)")
+            }
         }
 
-        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa)
+        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
     }
 }
