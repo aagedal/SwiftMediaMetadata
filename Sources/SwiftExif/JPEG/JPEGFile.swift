@@ -36,6 +36,11 @@ public struct JPEGFile: Sendable {
         segments.first { $0.isXMP }
     }
 
+    /// Find all ICC profile APP2 segments.
+    public func iccProfileSegments() -> [JPEGSegment] {
+        segments.filter { $0.isICCProfile }
+    }
+
     /// Find the Photoshop/IPTC APP13 segment.
     public func iptcSegment() -> JPEGSegment? {
         segments.first { $0.isPhotoshop }
@@ -94,6 +99,35 @@ public struct JPEGFile: Sendable {
             segments.insert(segment, at: index + 1)
         } else {
             segments.append(segment)
+        }
+    }
+
+    /// Replace or add ICC profile APP2 segments.
+    /// Chunks the profile data into segments of up to 65519 bytes each.
+    public mutating func replaceOrAddICCProfileSegments(_ profileData: Data) {
+        // Remove existing ICC profile segments
+        segments.removeAll { $0.isICCProfile }
+
+        // ICC_PROFILE header: 12 bytes identifier + 1 byte chunk number + 1 byte total chunks = 14 bytes
+        let maxPayload = 65533 - 14 // 65519 bytes of profile data per segment
+        let totalChunks = max(1, (profileData.count + maxPayload - 1) / maxPayload)
+
+        var offset = 0
+        for i in 0..<totalChunks {
+            let chunkSize = min(maxPayload, profileData.count - offset)
+            var segmentData = JPEGSegment.iccProfileIdentifier // 12 bytes
+            segmentData.append(UInt8(i + 1))                    // chunk number (1-based)
+            segmentData.append(UInt8(totalChunks))              // total chunks
+            segmentData.append(profileData[profileData.startIndex + offset ..< profileData.startIndex + offset + chunkSize])
+            offset += chunkSize
+
+            let segment = JPEGSegment(marker: .app2, data: segmentData)
+            // Insert after APP1 segments
+            if let lastApp1 = segments.lastIndex(where: { $0.rawMarker == JPEGMarker.app1.rawValue }) {
+                segments.insert(segment, at: lastApp1 + 1)
+            } else {
+                insertSegment(segment, after: .app0)
+            }
         }
     }
 

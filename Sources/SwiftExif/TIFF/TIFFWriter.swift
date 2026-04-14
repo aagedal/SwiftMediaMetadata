@@ -6,6 +6,7 @@ public struct TIFFWriter: Sendable {
     /// Metadata tag IDs that we manage (replaced during write).
     private static let metadataTagIDs: Set<UInt16> = [
         ExifTag.xmpTag,          // 0x02BC — XMP
+        ExifTag.iccProfile,      // 0x8773 — ICC color profile
         ExifTag.iptcNAA,         // 0x83BB — raw IPTC-NAA
         ExifTag.photoshopIRB,    // 0x8649 — Photoshop IRB (IPTC container)
         ExifTag.exifIFDPointer,  // 0x8769 — Exif sub-IFD pointer
@@ -14,7 +15,7 @@ public struct TIFFWriter: Sendable {
 
     /// Reconstruct a TIFF file with updated metadata.
     /// Preserves all non-metadata IFD entries and their data.
-    public static func write(_ tiffFile: TIFFFile, exif: ExifData?, iptc: IPTCData?, xmp: XMPData?) throws -> Data {
+    public static func write(_ tiffFile: TIFFFile, exif: ExifData?, iptc: IPTCData?, xmp: XMPData?, iccProfile: ICCProfile? = nil) throws -> Data {
         let endian = tiffFile.header.byteOrder
         var writer = BinaryWriter(capacity: tiffFile.rawData.count + 4096)
 
@@ -32,6 +33,7 @@ public struct TIFFWriter: Sendable {
                     exif: exif,
                     iptc: iptc,
                     xmp: xmp,
+                    iccProfile: iccProfile,
                     writerOffset: writer.count
                 )
                 writeIFD(&writer, entries: updatedEntries, endian: endian, nextIFDOffset: tiffFile.ifds.count > 1 ? 0xFFFFFFFF : 0)
@@ -50,6 +52,7 @@ public struct TIFFWriter: Sendable {
                 exif: exif,
                 iptc: iptc,
                 xmp: xmp,
+                iccProfile: iccProfile,
                 writerOffset: writer.count
             )
             writeIFD(&writer, entries: entries, endian: endian, nextIFDOffset: 0)
@@ -69,6 +72,7 @@ public struct TIFFWriter: Sendable {
         exif: ExifData?,
         iptc: IPTCData?,
         xmp: XMPData?,
+        iccProfile: ICCProfile?,
         writerOffset: Int
     ) throws -> [IFDEntry] {
         // Start with existing non-metadata entries
@@ -96,6 +100,16 @@ public struct TIFFWriter: Sendable {
                 type: .undefined,
                 count: UInt32(irbData.count),
                 valueData: irbData
+            ))
+        }
+
+        // Add ICC profile (0x8773)
+        if let icc = iccProfile {
+            entries.append(IFDEntry(
+                tag: ExifTag.iccProfile,
+                type: .undefined,
+                count: UInt32(icc.data.count),
+                valueData: icc.data
             ))
         }
 

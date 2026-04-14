@@ -77,6 +77,7 @@ public enum ExifTag: Sendable {
     public static let iptcNAA: UInt16      = 0x83BB  // Raw IPTC-NAA data in IFD
     public static let photoshopIRB: UInt16 = 0x8649  // Photoshop IRB (contains IPTC)
     public static let xmpTag: UInt16       = 0x02BC  // Raw XMP XML string
+    public static let iccProfile: UInt16   = 0x8773  // ICC color profile (InterColorProfile)
 
     // MARK: - IFD Type
 

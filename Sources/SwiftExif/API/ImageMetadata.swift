@@ -8,17 +8,19 @@ public struct ImageMetadata: Sendable {
     public var exif: ExifData?
     public var xmp: XMPData?
     public var c2pa: C2PAData?
+    public var iccProfile: ICCProfile?
 
     /// Non-fatal issues encountered during parsing (e.g. corrupted C2PA data).
     public var warnings: [String]
 
-    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, warnings: [String] = []) {
+    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, iccProfile: ICCProfile? = nil, warnings: [String] = []) {
         self.container = container
         self.format = format
         self.iptc = iptc
         self.exif = exif
         self.xmp = xmp
         self.c2pa = c2pa
+        self.iccProfile = iccProfile
         self.warnings = warnings
     }
 
@@ -97,12 +99,13 @@ public struct ImageMetadata: Sendable {
 
     // MARK: - Stripping
 
-    /// Remove all metadata (Exif, IPTC, XMP, C2PA).
+    /// Remove all metadata (Exif, IPTC, XMP, C2PA, ICC profile).
     public mutating func stripAllMetadata() {
         exif = nil
         iptc = IPTCData()
         xmp = nil
         c2pa = nil
+        iccProfile = nil
     }
 
     /// Remove all Exif data.
@@ -129,6 +132,11 @@ public struct ImageMetadata: Sendable {
     /// Remove C2PA provenance data.
     public mutating func stripC2PA() {
         c2pa = nil
+    }
+
+    /// Remove the embedded ICC color profile.
+    public mutating func stripICCProfile() {
+        iccProfile = nil
     }
 
     // MARK: - Date Shifting
@@ -271,6 +279,7 @@ public struct ImageMetadata: Sendable {
         case iptc
         case xmp
         case c2pa
+        case iccProfile
     }
 
     // MARK: - Copy Metadata
@@ -282,6 +291,7 @@ public struct ImageMetadata: Sendable {
         iptc = source.iptc
         xmp = source.xmp
         c2pa = source.c2pa
+        iccProfile = source.iccProfile
     }
 
     /// Copy selected metadata groups from another ImageMetadata instance.
@@ -290,6 +300,7 @@ public struct ImageMetadata: Sendable {
         if groups.contains(.iptc) { iptc = source.iptc }
         if groups.contains(.xmp) { xmp = source.xmp }
         if groups.contains(.c2pa) { c2pa = source.c2pa }
+        if groups.contains(.iccProfile) { iccProfile = source.iccProfile }
     }
 
     // MARK: - Metadata Diff
@@ -524,6 +535,14 @@ public struct ImageMetadata: Sendable {
             file.replaceOrAddXMPSegment(JPEGSegment(marker: .app1, data: xmpData))
         }
 
+        // Write ICC profile
+        if let iccProfile = iccProfile {
+            file.replaceOrAddICCProfileSegments(iccProfile.data)
+        } else {
+            // Remove existing ICC segments if profile was stripped
+            file.segments.removeAll { $0.isICCProfile }
+        }
+
         return try JPEGWriter.write(file)
     }
 
@@ -540,7 +559,28 @@ public struct ImageMetadata: Sendable {
             file.replaceOrAddXMPChunk(xml)
         }
 
+        // Write ICC profile as iCCP chunk
+        if let iccProfile = iccProfile {
+            Self.writeICCPChunk(&file, profile: iccProfile)
+        } else {
+            file.removeChunk("iCCP")
+        }
+
         return PNGWriter.write(file)
+    }
+
+    /// Build and write a PNG iCCP chunk from an ICC profile.
+    private static func writeICCPChunk(_ file: inout PNGFile, profile: ICCProfile) {
+        let name = profile.profileDescription ?? "ICC Profile"
+        var payload = Data(name.utf8)
+        payload.append(0x00) // null terminator
+        payload.append(0x00) // compression method: zlib deflate
+        if let compressed = try? (profile.data as NSData).compressed(using: .zlib) {
+            payload.append(Data(referencing: compressed))
+        } else {
+            payload.append(profile.data)
+        }
+        file.replaceOrAddChunk("iCCP", data: payload)
     }
 
     private func writeJXL(_ file: inout JXLFile) throws -> Data {
@@ -569,7 +609,7 @@ public struct ImageMetadata: Sendable {
     }
 
     private func writeTIFFFile(_ file: TIFFFile) throws -> Data {
-        return try TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp)
+        return try TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp, iccProfile: iccProfile)
     }
 
     // MARK: - Format-Specific Reading
@@ -592,6 +632,24 @@ public struct ImageMetadata: Sendable {
             xmp = try XMPReader.read(from: xmpSegment.data)
         }
 
+        // ICC profile from APP2 segments
+        var iccProfile: ICCProfile?
+        let iccSegments = jpegFile.iccProfileSegments()
+        if !iccSegments.isEmpty {
+            // Sort by sequence number (byte 12 of data, after 12-byte identifier)
+            let sorted = iccSegments.sorted { a, b in
+                let seqA = a.data.count > 12 ? a.data[a.data.startIndex + 12] : 0
+                let seqB = b.data.count > 12 ? b.data[b.data.startIndex + 12] : 0
+                return seqA < seqB
+            }
+            var profileData = Data()
+            for seg in sorted {
+                guard seg.data.count > 14 else { continue }
+                profileData.append(seg.data.suffix(from: seg.data.startIndex + 14))
+            }
+            iccProfile = ICCProfile(data: profileData)
+        }
+
         // C2PA from APP11 JUMBF segments
         var c2pa: C2PAData?
         var warnings: [String] = []
@@ -603,7 +661,7 @@ public struct ImageMetadata: Sendable {
             warnings.append("C2PA parsing failed: \(error)")
         }
 
-        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
+        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
     }
 
     private static func readTIFF(from data: Data, format: ImageFormat) throws -> ImageMetadata {
@@ -622,7 +680,10 @@ public struct ImageMetadata: Sendable {
         // Extract XMP (from tag 0x02BC)
         xmp = try TIFFFileParser.extractXMP(from: tiffFile)
 
-        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp)
+        // Extract ICC profile (tag 0x8773)
+        let iccProfile = TIFFFileParser.extractICCProfile(from: tiffFile)
+
+        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)
     }
 
     private static func readJPEGXL(from data: Data) throws -> ImageMetadata {
@@ -669,6 +730,12 @@ public struct ImageMetadata: Sendable {
         // XMP in iTXt chunk with keyword "XML:com.adobe.xmp"
         xmp = try PNGParser.extractXMP(from: pngFile)
 
+        // ICC profile from iCCP chunk
+        var iccProfile: ICCProfile?
+        if let iccpChunk = pngFile.findChunk("iCCP") {
+            iccProfile = Self.parseICCPChunk(iccpChunk.data)
+        }
+
         // C2PA from caBX chunk
         var c2pa: C2PAData?
         var warnings: [String] = []
@@ -680,7 +747,17 @@ public struct ImageMetadata: Sendable {
             }
         }
 
-        return ImageMetadata(container: .png(pngFile), format: .png, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
+        return ImageMetadata(container: .png(pngFile), format: .png, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
+    }
+
+    /// Parse a PNG iCCP chunk: profile name (null-terminated) + compression method (1 byte) + compressed data.
+    private static func parseICCPChunk(_ data: Data) -> ICCProfile? {
+        let bytes = [UInt8](data)
+        guard let nullIndex = bytes.firstIndex(of: 0), nullIndex + 2 < bytes.count else { return nil }
+        // Skip profile name + null + compression method byte
+        let compressedData = Data(bytes[(nullIndex + 2)...])
+        guard let decompressed = try? (compressedData as NSData).decompressed(using: .zlib) else { return nil }
+        return ICCProfile(data: Data(referencing: decompressed))
     }
 
     private static func readAVIF(from data: Data) throws -> ImageMetadata {
@@ -700,7 +777,9 @@ public struct ImageMetadata: Sendable {
             }
         }
 
-        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
+        let iccProfile = ISOBMFFMetadata.extractICCProfile(from: avifFile.boxes)
+
+        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
     }
 
     private static func readHEIF(from data: Data) throws -> ImageMetadata {
@@ -720,6 +799,8 @@ public struct ImageMetadata: Sendable {
             }
         }
 
-        return ImageMetadata(container: .heif(heifFile), format: .heif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
+        let iccProfile = ISOBMFFMetadata.extractICCProfile(from: heifFile.boxes)
+
+        return ImageMetadata(container: .heif(heifFile), format: .heif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
     }
 }

@@ -84,4 +84,11 @@ public struct TIFFFileParser: Sendable {
               let xmpEntry = ifd0.entry(for: ExifTag.xmpTag) else { return nil }
         return try XMPReader.readFromXML(xmpEntry.valueData)
     }
+
+    /// Extract ICC profile from TIFF IFD tag 0x8773.
+    public static func extractICCProfile(from tiffFile: TIFFFile) -> ICCProfile? {
+        guard let ifd0 = tiffFile.ifd0,
+              let iccEntry = ifd0.entry(for: ExifTag.iccProfile) else { return nil }
+        return ICCProfile(data: iccEntry.valueData)
+    }
 }

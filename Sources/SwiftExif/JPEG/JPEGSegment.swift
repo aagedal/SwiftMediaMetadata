@@ -42,6 +42,9 @@ extension JPEGSegment {
     /// The XMP identifier at the start of an XMP APP1 segment.
     public static let xmpIdentifier = "http://ns.adobe.com/xap/1.0/\0".data(using: .ascii)!
 
+    /// The ICC profile identifier at the start of an ICC APP2 segment.
+    public static let iccProfileIdentifier = "ICC_PROFILE\0".data(using: .ascii)!
+
     /// The Photoshop identifier at the start of an IPTC APP13 segment.
     public static let photoshopIdentifier = "Photoshop 3.0\0".data(using: .ascii)!
 
@@ -53,6 +56,11 @@ extension JPEGSegment {
     /// Whether this is an XMP APP1 segment.
     public var isXMP: Bool {
         rawMarker == JPEGMarker.app1.rawValue && data.starts(with: JPEGSegment.xmpIdentifier)
+    }
+
+    /// Whether this is an ICC profile APP2 segment.
+    public var isICCProfile: Bool {
+        rawMarker == JPEGMarker.app2.rawValue && data.starts(with: JPEGSegment.iccProfileIdentifier)
     }
 
     /// Whether this is a Photoshop/IPTC APP13 segment.

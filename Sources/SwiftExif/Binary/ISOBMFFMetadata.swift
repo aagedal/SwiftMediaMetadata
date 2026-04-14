@@ -49,6 +49,17 @@ public struct ISOBMFFMetadata: Sendable {
         return nil
     }
 
+    /// Extract ICC profile from a `colr` box with type `"prof"` in the ipco hierarchy.
+    public static func extractICCProfile(from boxes: [ISOBMFFBox]) -> ICCProfile? {
+        guard let colrBox = findBox(type: "colr", in: boxes) else { return nil }
+        // colr box payload: 4-byte color type + profile data
+        guard colrBox.data.count > 4 else { return nil }
+        let colorType = String(data: colrBox.data.prefix(4), encoding: .ascii) ?? ""
+        guard colorType == "prof" else { return nil }
+        let profileData = Data(colrBox.data.suffix(from: colrBox.data.startIndex + 4))
+        return ICCProfile(data: profileData)
+    }
+
     /// Recursively find a box of the given type.
     public static func findBox(type: String, in boxes: [ISOBMFFBox]) -> ISOBMFFBox? {
         for box in boxes {

@@ -73,6 +73,15 @@ public struct MetadataExporter: Sendable {
             addXMPFields(&dict, xmp)
         }
 
+        // ICC Profile
+        if let icc = metadata.iccProfile {
+            dict["ICCProfile:ColorSpace"] = icc.colorSpace.trimmingCharacters(in: .whitespaces)
+            if let desc = icc.profileDescription {
+                dict["ICCProfile:Description"] = desc
+            }
+            dict["ICCProfile:Size"] = Int(icc.profileSize)
+        }
+
         return dict
     }
 
