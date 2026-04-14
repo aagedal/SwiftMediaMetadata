@@ -1,7 +1,7 @@
 import Foundation
 
 /// Detect image format from file data using magic bytes.
-public struct FormatDetector {
+public struct FormatDetector: Sendable {
 
     /// Detect the image format from the first bytes of data.
     /// Returns nil if the format is not recognized.
@@ -37,8 +37,11 @@ public struct FormatDetector {
         if bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70 {
             // Read brand (4 bytes at offset 8)
             if let brand = detectISOBMFFBrand(data) {
-                if brand == "avif" || brand == "avis" || brand == "mif1" {
+                if brand == "avif" || brand == "avis" {
                     return .avif
+                }
+                if brand == "heic" || brand == "heix" || brand == "hevc" || brand == "hevx" || brand == "mif1" {
+                    return .heif
                 }
             }
         }
@@ -72,6 +75,8 @@ public struct FormatDetector {
             return .png
         case "avif":
             return .avif
+        case "heic", "heif":
+            return .heif
         default:
             return nil
         }

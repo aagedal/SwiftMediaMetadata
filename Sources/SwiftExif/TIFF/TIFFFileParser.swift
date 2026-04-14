@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parse standalone TIFF files (and TIFF-based RAW formats) for metadata.
-public struct TIFFFileParser {
+public struct TIFFFileParser: Sendable {
 
     /// Parse a TIFF file from raw data.
     public static func parse(_ data: Data) throws -> TIFFFile {

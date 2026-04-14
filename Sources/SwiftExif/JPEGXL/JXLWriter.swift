@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reconstructs a JPEG XL container file from parsed components.
-public struct JXLWriter {
+public struct JXLWriter: Sendable {
 
     /// Reconstruct a JPEG XL container file from its boxes.
     /// Only supported for container format; bare codestream files cannot carry metadata.

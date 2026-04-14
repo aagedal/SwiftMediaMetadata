@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parses a JPEG file into its constituent segments and scan data.
-public struct JPEGParser {
+public struct JPEGParser: Sendable {
 
     /// Parse JPEG data into a JPEGFile structure.
     /// Segments before SOS are stored individually; everything from SOS onward is preserved as opaque scanData.

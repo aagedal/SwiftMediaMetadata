@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reconstructs a PNG file from parsed components.
-public struct PNGWriter {
+public struct PNGWriter: Sendable {
 
     /// Reconstruct a PNG file from its chunks.
     public static func write(_ file: PNGFile) -> Data {

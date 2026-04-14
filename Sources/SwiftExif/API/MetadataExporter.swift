@@ -1,0 +1,222 @@
+import Foundation
+
+/// Export metadata in machine-readable formats (JSON, XML).
+public struct MetadataExporter: Sendable {
+
+    // MARK: - JSON Export
+
+    /// Export metadata as JSON Data, matching ExifTool's `-json` output format.
+    public static func toJSON(_ metadata: ImageMetadata) -> Data {
+        toJSON([metadata])
+    }
+
+    /// Export multiple files' metadata as a JSON array.
+    public static func toJSON(_ items: [ImageMetadata]) -> Data {
+        var entries: [[String: Any]] = []
+        for metadata in items {
+            entries.append(buildDictionary(metadata))
+        }
+        let data = try? JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .sortedKeys])
+        return data ?? Data("[]".utf8)
+    }
+
+    /// Export metadata as a JSON string.
+    public static func toJSONString(_ metadata: ImageMetadata) -> String {
+        String(data: toJSON(metadata), encoding: .utf8) ?? "[]"
+    }
+
+    // MARK: - XML Export
+
+    /// Export metadata as an XML string.
+    public static func toXML(_ metadata: ImageMetadata) -> String {
+        var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        xml += "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+        xml += "<rdf:Description>\n"
+
+        let dict = buildDictionary(metadata)
+        for key in dict.keys.sorted() {
+            let value = dict[key]!
+            if let array = value as? [String] {
+                xml += "  <\(escapeXMLTag(key))>\n"
+                for item in array {
+                    xml += "    <rdf:li>\(escapeXMLValue(item))</rdf:li>\n"
+                }
+                xml += "  </\(escapeXMLTag(key))>\n"
+            } else {
+                xml += "  <\(escapeXMLTag(key))>\(escapeXMLValue(String(describing: value)))</\(escapeXMLTag(key))>\n"
+            }
+        }
+
+        xml += "</rdf:Description>\n"
+        xml += "</rdf:RDF>\n"
+        return xml
+    }
+
+    // MARK: - Dictionary Building
+
+    /// Build a flat dictionary of all metadata fields.
+    public static func buildDictionary(_ metadata: ImageMetadata) -> [String: Any] {
+        var dict: [String: Any] = [:]
+
+        dict["FileFormat"] = formatName(metadata.format)
+
+        // EXIF
+        if let exif = metadata.exif {
+            addExifFields(&dict, exif)
+        }
+
+        // IPTC
+        addIPTCFields(&dict, metadata.iptc)
+
+        // XMP
+        if let xmp = metadata.xmp {
+            addXMPFields(&dict, xmp)
+        }
+
+        return dict
+    }
+
+    // MARK: - EXIF Fields
+
+    private static func addExifFields(_ dict: inout [String: Any], _ exif: ExifData) {
+        if let v = exif.make { dict["Make"] = v }
+        if let v = exif.model { dict["Model"] = v }
+        if let v = exif.software { dict["Software"] = v }
+        if let v = exif.dateTime { dict["DateTime"] = v }
+        if let v = exif.dateTimeOriginal { dict["DateTimeOriginal"] = v }
+        if let v = exif.copyright { dict["Copyright"] = v }
+        if let v = exif.artist { dict["Artist"] = v }
+        if let v = exif.lensModel { dict["LensModel"] = v }
+        if let v = exif.orientation { dict["Orientation"] = Int(v) }
+        if let v = exif.isoSpeed { dict["ISO"] = Int(v) }
+
+        if let v = exif.exposureTime {
+            if v.denominator != 0 {
+                dict["ExposureTime"] = "\(v.numerator)/\(v.denominator)"
+            }
+        }
+        if let v = exif.fNumber {
+            if v.denominator != 0 {
+                dict["FNumber"] = Double(v.numerator) / Double(v.denominator)
+            }
+        }
+        if let v = exif.focalLength {
+            if v.denominator != 0 {
+                dict["FocalLength"] = Double(v.numerator) / Double(v.denominator)
+            }
+        }
+
+        if let lat = exif.gpsLatitude { dict["GPSLatitude"] = lat }
+        if let lon = exif.gpsLongitude { dict["GPSLongitude"] = lon }
+
+        // DateTimeDigitized
+        if let entry = exif.exifIFD?.entry(for: ExifTag.dateTimeDigitized),
+           let v = entry.stringValue(endian: exif.byteOrder) {
+            dict["DateTimeDigitized"] = v
+        }
+
+        // Image dimensions
+        if let entry = exif.ifd0?.entry(for: ExifTag.imageWidth) {
+            if let v = entry.uint32Value(endian: exif.byteOrder) { dict["ImageWidth"] = Int(v) }
+            else if let v = entry.uint16Value(endian: exif.byteOrder) { dict["ImageWidth"] = Int(v) }
+        }
+        if let entry = exif.ifd0?.entry(for: ExifTag.imageHeight) {
+            if let v = entry.uint32Value(endian: exif.byteOrder) { dict["ImageHeight"] = Int(v) }
+            else if let v = entry.uint16Value(endian: exif.byteOrder) { dict["ImageHeight"] = Int(v) }
+        }
+    }
+
+    // MARK: - IPTC Fields
+
+    private static func addIPTCFields(_ dict: inout [String: Any], _ iptc: IPTCData) {
+        if let v = iptc.headline { dict["IPTC:Headline"] = v }
+        if let v = iptc.caption { dict["IPTC:Caption-Abstract"] = v }
+        if let v = iptc.byline { dict["IPTC:By-line"] = v }
+        if let v = iptc.credit { dict["IPTC:Credit"] = v }
+        if let v = iptc.source { dict["IPTC:Source"] = v }
+        if let v = iptc.copyright { dict["IPTC:CopyrightNotice"] = v }
+        if let v = iptc.city { dict["IPTC:City"] = v }
+        if let v = iptc.sublocation { dict["IPTC:Sub-location"] = v }
+        if let v = iptc.provinceState { dict["IPTC:Province-State"] = v }
+        if let v = iptc.countryCode { dict["IPTC:Country-PrimaryLocationCode"] = v }
+        if let v = iptc.countryName { dict["IPTC:Country-PrimaryLocationName"] = v }
+        if let v = iptc.dateCreated { dict["IPTC:DateCreated"] = v }
+        if let v = iptc.timeCreated { dict["IPTC:TimeCreated"] = v }
+        if let v = iptc.specialInstructions { dict["IPTC:SpecialInstructions"] = v }
+        if let v = iptc.objectName { dict["IPTC:ObjectName"] = v }
+        if let v = iptc.writerEditor { dict["IPTC:Writer-Editor"] = v }
+        if let v = iptc.jobId { dict["IPTC:OriginalTransmissionReference"] = v }
+
+        let keywords = iptc.keywords
+        if !keywords.isEmpty { dict["IPTC:Keywords"] = keywords }
+
+        let bylines = iptc.bylines
+        if bylines.count > 1 { dict["IPTC:By-line"] = bylines }
+    }
+
+    // MARK: - XMP Fields
+
+    private static func addXMPFields(_ dict: inout [String: Any], _ xmp: XMPData) {
+        for key in xmp.allKeys.sorted() {
+            guard let (prefix, localName) = resolveXMPKey(key) else { continue }
+            let exportKey = "XMP-\(prefix):\(localName)"
+
+            if let value = xmp.value(namespace: extractNamespace(from: key), property: localName) {
+                switch value {
+                case .simple(let s):
+                    dict[exportKey] = s
+                case .array(let items):
+                    dict[exportKey] = items
+                case .langAlternative(let s):
+                    dict[exportKey] = s
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private static func formatName(_ format: ImageFormat) -> String {
+        switch format {
+        case .jpeg: return "JPEG"
+        case .tiff: return "TIFF"
+        case .raw(let r): return r.rawValue.uppercased()
+        case .jpegXL: return "JXL"
+        case .png: return "PNG"
+        case .avif: return "AVIF"
+        case .heif: return "HEIF"
+        }
+    }
+
+    private static func resolveXMPKey(_ key: String) -> (prefix: String, localName: String)? {
+        for (ns, prefix) in XMPNamespace.prefixes.sorted(by: { $0.key.count > $1.key.count }) {
+            if key.hasPrefix(ns) {
+                let localName = String(key.dropFirst(ns.count))
+                guard !localName.isEmpty && !localName.contains("/") else { continue }
+                return (prefix, localName)
+            }
+        }
+        return nil
+    }
+
+    private static func extractNamespace(from key: String) -> String {
+        for ns in XMPNamespace.prefixes.keys.sorted(by: { $0.count > $1.count }) {
+            if key.hasPrefix(ns) { return ns }
+        }
+        return ""
+    }
+
+    private static func escapeXMLTag(_ name: String) -> String {
+        // Replace characters invalid in XML element names
+        name.replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+    }
+
+    private static func escapeXMLValue(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+}

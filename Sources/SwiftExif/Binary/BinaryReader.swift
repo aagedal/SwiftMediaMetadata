@@ -5,7 +5,7 @@ public enum ByteOrder: Sendable {
     case littleEndian
 }
 
-public struct BinaryReader {
+public struct BinaryReader: Sendable {
     private let data: Data
     public private(set) var offset: Int
 

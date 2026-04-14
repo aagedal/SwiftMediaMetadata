@@ -3,7 +3,7 @@ import Foundation
 /// Parse TIFF-based RAW camera files (DNG, CR2, NEF, ARW) for metadata.
 /// All these formats use TIFF IFD structure; this parser validates format-specific
 /// magic bytes and delegates to TIFFFileParser.
-public struct RAWFileParser {
+public struct RAWFileParser: Sendable {
 
     /// Validate that data looks like a specific RAW format.
     /// Returns the detected RAW format, or nil if not recognized.

@@ -1,7 +1,7 @@
 import Foundation
 
 /// XMP namespace constants and IIM-to-XMP mapping.
-public enum XMPNamespace {
+public enum XMPNamespace: Sendable {
     public static let xmpIdentifier = "http://ns.adobe.com/xap/1.0/\0"
 
     public static let dc        = "http://purl.org/dc/elements/1.1/"

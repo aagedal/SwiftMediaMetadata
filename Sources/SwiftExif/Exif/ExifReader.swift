@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parse Exif data from an APP1 segment or raw TIFF data.
-public struct ExifReader {
+public struct ExifReader: Sendable {
 
     /// Parse Exif data from APP1 segment payload (including "Exif\0\0" identifier).
     public static func read(from data: Data) throws -> ExifData {
@@ -14,9 +14,28 @@ public struct ExifReader {
     }
 
     /// Parse Exif data from raw TIFF data (no "Exif\0\0" prefix).
-    /// Used for standalone TIFF files, RAW files, PNG eXIf chunks, JPEG XL Exif boxes, AVIF Exif properties.
+    /// Used for standalone TIFF files, RAW files, PNG eXIf chunks.
     public static func readFromTIFF(data: Data) throws -> ExifData {
         return try parseFromTIFFStart(data: data, tiffStart: 0)
+    }
+
+    /// Parse Exif data from an ISOBMFF Exif box payload.
+    /// The box contains a 4-byte big-endian offset prefix followed by TIFF data.
+    /// Used by AVIF Exif properties and JPEG XL Exif boxes.
+    public static func readFromExifBox(data: Data) throws -> ExifData? {
+        guard data.count > 4 else { return nil }
+
+        var reader = BinaryReader(data: data)
+        let offset = try reader.readUInt32BigEndian()
+
+        if offset > 0 {
+            try reader.skip(Int(offset))
+        }
+
+        let tiffData = Data(data.suffix(from: data.startIndex + reader.offset))
+        guard !tiffData.isEmpty else { return nil }
+
+        return try readFromTIFF(data: tiffData)
     }
 
     // MARK: - Private

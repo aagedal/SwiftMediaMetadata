@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parse JPEG XL files for metadata.
-public struct JXLParser {
+public struct JXLParser: Sendable {
 
     /// JPEG XL container signature: the first 12 bytes of a JXL container file.
     /// This is actually the JXL file type box: size=12, type="JXL ".
@@ -36,22 +36,8 @@ public struct JXLParser {
     }
 
     /// Extract Exif data from a JPEG XL Exif box.
-    /// The box contains a 4-byte offset prefix followed by TIFF data.
     public static func extractExif(from exifBox: ISOBMFFBox) throws -> ExifData? {
-        guard exifBox.data.count > 4 else { return nil }
-
-        var reader = BinaryReader(data: exifBox.data)
-        let offset = try reader.readUInt32BigEndian()
-
-        // Skip the offset bytes (usually 0)
-        if offset > 0 {
-            try reader.skip(Int(offset))
-        }
-
-        let tiffData = Data(exifBox.data.suffix(from: exifBox.data.startIndex + reader.offset))
-        guard !tiffData.isEmpty else { return nil }
-
-        return try ExifReader.readFromTIFF(data: tiffData)
+        try ExifReader.readFromExifBox(data: exifBox.data)
     }
 
     // MARK: - Private

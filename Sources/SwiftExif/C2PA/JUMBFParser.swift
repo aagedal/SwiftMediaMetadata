@@ -29,7 +29,7 @@ public struct JUMBFDescription: Sendable {
 }
 
 /// Parse JUMBF box hierarchies from raw ISOBMFF box data.
-public struct JUMBFParser {
+public struct JUMBFParser: Sendable {
 
     /// C2PA UUID suffix (bytes 4-15): 0011-0010-8000-00AA00389B71
     static let c2paUUIDSuffix: [UInt8] = [

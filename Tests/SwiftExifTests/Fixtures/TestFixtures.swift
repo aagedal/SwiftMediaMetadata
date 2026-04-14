@@ -130,7 +130,7 @@ enum TestFixtures {
         } else {
             file.segments.insert(segment, at: 0)
         }
-        return JPEGWriter.write(file)
+        return try! JPEGWriter.write(file)
     }
 
     // MARK: - Minimal TIFF
@@ -326,6 +326,44 @@ enum TestFixtures {
     static func avifWithExif(make: String = "TestCamera", model: String = "Model X") -> Data {
         let tiffData = tiffWithExif(make: make, model: model)
         return minimalAVIF(exifTIFFData: tiffData)
+    }
+
+    // MARK: - Minimal HEIF
+
+    /// Generate a minimal HEIF/HEIC file with ftyp + optional meta box.
+    static func minimalHEIF(exifTIFFData: Data? = nil) -> Data {
+        var writer = BinaryWriter(capacity: 512)
+
+        // ftyp box with heic brand
+        let ftypPayload = Data("heic".utf8) + Data([0x00, 0x00, 0x00, 0x00]) // brand + minor version
+        writeISOBMFFBox(&writer, type: "ftyp", data: ftypPayload)
+
+        // If exif data provided, build meta → iprp → ipco → Exif hierarchy
+        if let exifData = exifTIFFData {
+            var exifBoxPayload = Data([0x00, 0x00, 0x00, 0x00]) // 4-byte offset prefix
+            exifBoxPayload.append(exifData)
+
+            var ipcoWriter = BinaryWriter(capacity: 256)
+            writeISOBMFFBox(&ipcoWriter, type: "Exif", data: exifBoxPayload)
+
+            var iprpWriter = BinaryWriter(capacity: 256)
+            writeISOBMFFBox(&iprpWriter, type: "ipco", data: ipcoWriter.data)
+
+            var metaPayload = Data([0x00, 0x00, 0x00, 0x00]) // version + flags
+            var metaChildrenWriter = BinaryWriter(capacity: 256)
+            writeISOBMFFBox(&metaChildrenWriter, type: "iprp", data: iprpWriter.data)
+            metaPayload.append(metaChildrenWriter.data)
+
+            writeISOBMFFBox(&writer, type: "meta", data: metaPayload)
+        }
+
+        return writer.data
+    }
+
+    /// Generate a HEIF with Exif containing Make/Model.
+    static func heifWithExif(make: String = "TestCamera", model: String = "Model X") -> Data {
+        let tiffData = tiffWithExif(make: make, model: model)
+        return minimalHEIF(exifTIFFData: tiffData)
     }
 
     private static func writeISOBMFFBox(_ writer: inout BinaryWriter, type: String, data: Data) {

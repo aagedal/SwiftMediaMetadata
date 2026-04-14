@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parse PNG files for metadata.
-public struct PNGParser {
+public struct PNGParser: Sendable {
 
     /// PNG file signature (8 bytes).
     static let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]

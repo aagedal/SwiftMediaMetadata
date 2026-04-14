@@ -6,7 +6,7 @@ final class JPEGWriterTests: XCTestCase {
     func testRoundTripMinimalJPEG() throws {
         let original = TestFixtures.minimalJPEG()
         let file = try JPEGParser.parse(original)
-        let reconstructed = JPEGWriter.write(file)
+        let reconstructed = try JPEGWriter.write(file)
 
         // Round-trip should produce identical output
         XCTAssertEqual(original, reconstructed)
@@ -19,7 +19,7 @@ final class JPEGWriterTests: XCTestCase {
         ]
         let original = TestFixtures.jpegWithIPTC(datasets: datasets)
         let file = try JPEGParser.parse(original)
-        let reconstructed = JPEGWriter.write(file)
+        let reconstructed = try JPEGWriter.write(file)
 
         XCTAssertEqual(original, reconstructed)
     }
@@ -36,7 +36,7 @@ final class JPEGWriterTests: XCTestCase {
         let segment = JPEGSegment(marker: .app13, data: app13Payload)
         file.segments.append(segment)
 
-        let modified = JPEGWriter.write(file)
+        let modified = try JPEGWriter.write(file)
         let reparsed = try JPEGParser.parse(modified)
 
         XCTAssertNotNil(reparsed.iptcSegment())
@@ -55,7 +55,7 @@ final class JPEGWriterTests: XCTestCase {
         let app13Payload = TestFixtures.buildAPP13(iptcData: iptcData)
         modifiedFile.segments.append(JPEGSegment(marker: .app13, data: app13Payload))
 
-        let modifiedData = JPEGWriter.write(modifiedFile)
+        let modifiedData = try JPEGWriter.write(modifiedFile)
         let reparsed = try JPEGParser.parse(modifiedData)
 
         // Scan data must be identical
@@ -71,7 +71,7 @@ final class JPEGWriterTests: XCTestCase {
         file.removeSegments(.app13)
         XCTAssertNil(file.iptcSegment())
 
-        let modified = JPEGWriter.write(file)
+        let modified = try JPEGWriter.write(file)
         let reparsed = try JPEGParser.parse(modified)
         XCTAssertNil(reparsed.iptcSegment())
     }
@@ -81,7 +81,32 @@ final class JPEGWriterTests: XCTestCase {
             segments: [JPEGSegment(marker: .app0, data: Data(repeating: 0, count: 14))],
             scanData: Data([0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9])
         )
-        let output = JPEGWriter.write(file)
+        let output = try JPEGWriter.write(file)
+        XCTAssertEqual(output[0], 0xFF)
+        XCTAssertEqual(output[1], 0xD8)
+    }
+
+    func testOversizedSegmentThrows() {
+        let oversizedData = Data(repeating: 0x41, count: JPEGWriter.maxSegmentPayload + 1)
+        let file = JPEGFile(
+            segments: [JPEGSegment(marker: .app1, data: oversizedData)],
+            scanData: Data([0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9])
+        )
+        XCTAssertThrowsError(try JPEGWriter.write(file)) { error in
+            guard case MetadataError.invalidSegmentLength = error else {
+                XCTFail("Expected invalidSegmentLength, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testMaxSizeSegmentSucceeds() throws {
+        let maxData = Data(repeating: 0x41, count: JPEGWriter.maxSegmentPayload)
+        let file = JPEGFile(
+            segments: [JPEGSegment(marker: .app1, data: maxData)],
+            scanData: Data([0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9])
+        )
+        let output = try JPEGWriter.write(file)
         XCTAssertEqual(output[0], 0xFF)
         XCTAssertEqual(output[1], 0xD8)
     }

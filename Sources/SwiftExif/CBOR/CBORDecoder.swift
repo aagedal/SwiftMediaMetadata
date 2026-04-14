@@ -1,7 +1,7 @@
 import Foundation
 
 /// Decodes CBOR (RFC 8949) binary data into CBORValue.
-public struct CBORDecoder {
+public struct CBORDecoder: Sendable {
 
     /// Decode a single CBOR value from the given data.
     public static func decode(from data: Data) throws -> CBORValue {

@@ -64,6 +64,8 @@ public struct ImageMetadata: Sendable {
             return try readPNG(from: data)
         case .avif:
             return try readAVIF(from: data)
+        case .heif:
+            return try readHEIF(from: data)
         }
     }
 
@@ -82,6 +84,8 @@ public struct ImageMetadata: Sendable {
             return try writeJXL(&file)
         case .avif(let file):
             return try writeAVIF(file)
+        case .heif(let file):
+            return try writeHEIF(file)
         }
     }
 
@@ -89,6 +93,174 @@ public struct ImageMetadata: Sendable {
     public func write(to url: URL) throws {
         let data = try writeToData()
         try data.write(to: url)
+    }
+
+    // MARK: - Stripping
+
+    /// Remove all metadata (Exif, IPTC, XMP, C2PA).
+    public mutating func stripAllMetadata() {
+        exif = nil
+        iptc = IPTCData()
+        xmp = nil
+        c2pa = nil
+    }
+
+    /// Remove all Exif data.
+    public mutating func stripExif() {
+        exif = nil
+    }
+
+    /// Remove all IPTC data.
+    public mutating func stripIPTC() {
+        iptc = IPTCData()
+    }
+
+    /// Remove all XMP data.
+    public mutating func stripXMP() {
+        xmp = nil
+    }
+
+    /// Remove GPS data from Exif and XMP.
+    public mutating func stripGPS() {
+        exif?.gpsIFD = nil
+        xmp?.removeValue(namespace: XMPNamespace.iptcCore, property: "Location")
+    }
+
+    /// Remove C2PA provenance data.
+    public mutating func stripC2PA() {
+        c2pa = nil
+    }
+
+    // MARK: - Date Shifting
+
+    /// Shift all date/time fields by the given interval.
+    /// Positive values move dates forward, negative values move them backward.
+    /// Updates EXIF (DateTime, DateTimeOriginal, DateTimeDigitized),
+    /// IPTC (DateCreated/TimeCreated, DigitalCreationDate/Time), and XMP (photoshop:DateCreated).
+    public mutating func shiftDates(by interval: TimeInterval) {
+        // EXIF dates: "YYYY:MM:DD HH:MM:SS"
+        if exif != nil {
+            shiftExifDate(tag: ExifTag.dateTime, ifdKeyPath: \.ifd0, interval: interval)
+            shiftExifDate(tag: ExifTag.dateTimeOriginal, ifdKeyPath: \.exifIFD, interval: interval)
+            shiftExifDate(tag: ExifTag.dateTimeDigitized, ifdKeyPath: \.exifIFD, interval: interval)
+        }
+
+        // IPTC dates: "YYYYMMDD" + "HHMMSS±HHMM"
+        shiftIPTCDate(dateTag: .dateCreated, timeTag: .timeCreated, interval: interval)
+        shiftIPTCDate(dateTag: .digitalCreationDate, timeTag: .digitalCreationTime, interval: interval)
+
+        // XMP: photoshop:DateCreated (ISO 8601 or EXIF format)
+        if let dateStr = xmp?.simpleValue(namespace: XMPNamespace.photoshop, property: "DateCreated"),
+           let shifted = Self.shiftDateString(dateStr, by: interval) {
+            xmp?.setValue(.simple(shifted), namespace: XMPNamespace.photoshop, property: "DateCreated")
+        }
+    }
+
+    private mutating func shiftExifDate(tag: UInt16, ifdKeyPath: WritableKeyPath<ExifData, IFD?>, interval: TimeInterval) {
+        guard let ifd = exif?[keyPath: ifdKeyPath],
+              let entry = ifd.entry(for: tag),
+              let dateStr = entry.stringValue(endian: exif!.byteOrder),
+              let shifted = Self.shiftExifDateString(dateStr, by: interval) else { return }
+
+        // Build new entry with shifted date
+        guard let newData = shifted.data(using: .ascii) else { return }
+        var padded = newData
+        padded.append(0x00) // null terminator
+        let newEntry = IFDEntry(tag: tag, type: .ascii, count: UInt32(padded.count), valueData: padded)
+
+        // Replace the entry in the IFD
+        var entries = ifd.entries.filter { $0.tag != tag }
+        entries.append(newEntry)
+        exif?[keyPath: ifdKeyPath] = IFD(entries: entries, nextIFDOffset: ifd.nextIFDOffset)
+    }
+
+    private mutating func shiftIPTCDate(dateTag: IPTCTag, timeTag: IPTCTag, interval: TimeInterval) {
+        guard let dateStr = iptc.value(for: dateTag) else { return }
+        let timeStr = iptc.value(for: timeTag)
+
+        // Combine into a parseable date, shift, then split back
+        let combined = Self.combineIPTCDateTime(date: dateStr, time: timeStr)
+        guard let shifted = Self.shiftExifDateString(combined, by: interval) else { return }
+
+        // Split back: first 10 chars "YYYY:MM:DD" → "YYYYMMDD", rest → time
+        let parts = shifted.split(separator: " ", maxSplits: 1)
+        if let datePart = parts.first {
+            let iptcDate = datePart.replacingOccurrences(of: ":", with: "")
+            try? iptc.setValue(iptcDate, for: dateTag)
+        }
+        if parts.count > 1 {
+            let timePart = String(parts[1]).replacingOccurrences(of: ":", with: "")
+            try? iptc.setValue(timePart, for: timeTag)
+        }
+    }
+
+    // MARK: - Date Parsing Helpers
+
+    private static let exifDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        return f
+    }()
+
+    static func shiftExifDateString(_ dateStr: String, by interval: TimeInterval) -> String? {
+        guard let date = exifDateFormatter.date(from: dateStr) else { return nil }
+        let shifted = date.addingTimeInterval(interval)
+        return exifDateFormatter.string(from: shifted)
+    }
+
+    /// Shift a date string in various formats (EXIF, ISO 8601).
+    static func shiftDateString(_ dateStr: String, by interval: TimeInterval) -> String? {
+        // Try EXIF format first
+        if let result = shiftExifDateString(dateStr, by: interval) {
+            return result
+        }
+        // Try ISO 8601 (e.g. "2024-01-15T14:30:00")
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let date = iso.date(from: dateStr) {
+            let shifted = date.addingTimeInterval(interval)
+            return iso.string(from: shifted)
+        }
+        // Try date-only ISO (e.g. "2024-01-15")
+        let dateOnly = DateFormatter()
+        dateOnly.dateFormat = "yyyy-MM-dd"
+        dateOnly.locale = Locale(identifier: "en_US_POSIX")
+        dateOnly.timeZone = TimeZone(secondsFromGMT: 0)
+        if let date = dateOnly.date(from: dateStr) {
+            let shifted = date.addingTimeInterval(interval)
+            return dateOnly.string(from: shifted)
+        }
+        return nil
+    }
+
+    /// Combine IPTC date "YYYYMMDD" and time "HHMMSS" into EXIF format "YYYY:MM:DD HH:MM:SS".
+    private static func combineIPTCDateTime(date: String, time: String?) -> String {
+        // Date: "YYYYMMDD" → "YYYY:MM:DD"
+        var result = date
+        if date.count == 8 && !date.contains(":") {
+            let y = date.prefix(4)
+            let m = date.dropFirst(4).prefix(2)
+            let d = date.dropFirst(6).prefix(2)
+            result = "\(y):\(m):\(d)"
+        }
+
+        // Time: "HHMMSS" → " HH:MM:SS"
+        if let time = time {
+            // Strip timezone suffix if present (±HHMM)
+            let core = time.prefix(6)
+            if core.count == 6 {
+                let h = core.prefix(2)
+                let min = core.dropFirst(2).prefix(2)
+                let s = core.dropFirst(4).prefix(2)
+                result += " \(h):\(min):\(s)"
+            }
+        } else {
+            result += " 00:00:00"
+        }
+
+        return result
     }
 
     // MARK: - IPTC ↔ XMP Sync
@@ -216,6 +388,10 @@ public struct ImageMetadata: Sendable {
 
     private func writeAVIF(_ file: AVIFFile) throws -> Data {
         return try AVIFWriter.write(file, exif: exif, xmp: xmp)
+    }
+
+    private func writeHEIF(_ file: HEIFFile) throws -> Data {
+        return try HEIFWriter.write(file, exif: exif, xmp: xmp)
     }
 
     private func writeTIFFFile(_ file: TIFFFile) throws -> Data {
@@ -351,5 +527,25 @@ public struct ImageMetadata: Sendable {
         }
 
         return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
+    }
+
+    private static func readHEIF(from data: Data) throws -> ImageMetadata {
+        let heifFile = try HEIFParser.parse(data)
+
+        let exif = try HEIFParser.extractExif(from: heifFile, fileData: data)
+        let xmp = try HEIFParser.extractXMP(from: heifFile, fileData: data)
+
+        // C2PA from jumb or uuid box
+        var c2pa: C2PAData?
+        var warnings: [String] = []
+        if let jumbfData = C2PAReader.extractJUMBFFromHEIF(heifFile) {
+            do {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            } catch {
+                warnings.append("C2PA parsing failed: \(error)")
+            }
+        }
+
+        return ImageMetadata(container: .heif(heifFile), format: .heif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, warnings: warnings)
     }
 }

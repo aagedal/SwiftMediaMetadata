@@ -139,7 +139,7 @@ final class IPTCRoundTripTests: XCTestCase {
         let newApp13 = try IPTCWriter.writeToAPP13(parsed, existingAPP13: file.iptcSegment()?.data)
         file.replaceOrAddIPTCSegment(JPEGSegment(marker: .app13, data: newApp13))
 
-        let modifiedJPEG = JPEGWriter.write(file)
+        let modifiedJPEG = try JPEGWriter.write(file)
 
         // Parse final result
         let finalFile = try JPEGParser.parse(modifiedJPEG)

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Standard Exif tag constants.
-public enum ExifTag {
+public enum ExifTag: Sendable {
     // MARK: - IFD0 (Main Image)
     public static let imageWidth: UInt16            = 0x0100
     public static let imageHeight: UInt16           = 0x0101

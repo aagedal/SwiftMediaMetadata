@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parse XMP XML from an APP1 segment or raw XML data.
-public struct XMPReader {
+public struct XMPReader: Sendable {
 
     /// Parse XMP data from APP1 segment payload (after XMP namespace identifier).
     public static func read(from data: Data) throws -> XMPData {

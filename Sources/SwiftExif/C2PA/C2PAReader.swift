@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reads and parses C2PA manifest stores from image data.
-public struct C2PAReader {
+public struct C2PAReader: Sendable {
 
     /// UUID user type for C2PA in BMFF uuid boxes (AVIF/HEIF/MP4).
     static let bmffC2PAUUID: [UInt8] = [
@@ -33,21 +33,29 @@ public struct C2PAReader {
         return nil
     }
 
+    /// Extract JUMBF data from HEIF/HEIC BMFF boxes.
+    public static func extractJUMBFFromHEIF(_ heifFile: HEIFFile) -> Data? {
+        extractJUMBFFromISOBMFF(heifFile.boxes)
+    }
+
     /// Extract JUMBF data from AVIF/BMFF boxes.
     public static func extractJUMBFFromAVIF(_ avifFile: AVIFFile) -> Data? {
+        extractJUMBFFromISOBMFF(avifFile.boxes)
+    }
+
+    /// Shared JUMBF extraction for any ISOBMFF-based format.
+    private static func extractJUMBFFromISOBMFF(_ boxes: [ISOBMFFBox]) -> Data? {
         // First try: top-level jumb box
-        if let jumbBox = avifFile.boxes.first(where: { $0.type == "jumb" }) {
+        if let jumbBox = boxes.first(where: { $0.type == "jumb" }) {
             return buildBoxData(type: "jumb", payload: jumbBox.data)
         }
 
         // Second try: uuid box with C2PA user type
-        for box in avifFile.boxes where box.type == "uuid" {
+        for box in boxes where box.type == "uuid" {
             guard box.data.count > 16 else { continue }
             let userType = [UInt8](box.data.prefix(16))
             guard userType == bmffC2PAUUID else { continue }
 
-            // After the 16-byte UUID, scan for the JUMBF data.
-            // Skip UUID(16) + version/flags(4) if present, then look for JUMBF start.
             let payload = Data(box.data.suffix(from: box.data.startIndex + 16))
             if let jumbfStart = findJUMBFStart(in: payload) {
                 return Data(payload.suffix(from: payload.startIndex + jumbfStart))

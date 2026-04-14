@@ -5,7 +5,7 @@ import Foundation
 /// XMP sidecar files are standalone XML files that store metadata alongside
 /// image files. They are commonly used with RAW formats where writing metadata
 /// directly into the image file is undesirable.
-public struct XMPSidecar {
+public struct XMPSidecar: Sendable {
 
     /// Read XMP data from a sidecar file.
     public static func read(from url: URL) throws -> XMPData {

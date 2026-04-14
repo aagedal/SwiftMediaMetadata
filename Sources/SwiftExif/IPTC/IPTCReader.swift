@@ -1,7 +1,7 @@
 import Foundation
 
 /// Parse raw IPTC binary data into an IPTCData collection.
-public struct IPTCReader {
+public struct IPTCReader: Sendable {
     /// The UTF-8 CodedCharacterSet escape sequence: ESC % G
     static let utf8EscapeSequence: [UInt8] = [0x1B, 0x25, 0x47]
 
@@ -9,7 +9,7 @@ public struct IPTCReader {
     public static func read(from data: Data) throws -> IPTCData {
         var reader = BinaryReader(data: data)
         var datasets: [IPTCDataSet] = []
-        var encoding: String.Encoding = .isoLatin1 // Default per IPTC spec
+        var explicitEncoding: String.Encoding? = nil
 
         while !reader.isAtEnd {
             // Each dataset starts with 0x1C tag marker
@@ -46,18 +46,75 @@ public struct IPTCReader {
 
             // Check for CodedCharacterSet (1:90)
             if tag == .codedCharacterSet {
-                if valueData.count >= 3,
-                   valueData[valueData.startIndex] == 0x1B,
-                   valueData[valueData.startIndex + 1] == 0x25,
-                   valueData[valueData.startIndex + 2] == 0x47 {
-                    encoding = .utf8
-                }
+                explicitEncoding = detectEncodingFromCharacterSet(valueData)
             }
 
             datasets.append(IPTCDataSet(tag: tag, rawValue: valueData))
         }
 
+        // Determine encoding: explicit from CodedCharacterSet, or heuristic from content
+        let encoding = explicitEncoding ?? detectEncodingFromContent(datasets)
         return IPTCData(datasets: datasets, encoding: encoding)
+    }
+
+    /// Detect encoding from IPTC CodedCharacterSet (Record 1:90) ESC sequences.
+    private static func detectEncodingFromCharacterSet(_ data: Data) -> String.Encoding {
+        if data.count >= 3,
+           data[data.startIndex] == 0x1B,
+           data[data.startIndex + 1] == 0x25,
+           data[data.startIndex + 2] == 0x47 {
+            return .utf8
+        }
+        // No other ESC sequence recognized — fall back to ISO-8859-1
+        return .isoLatin1
+    }
+
+    /// When no CodedCharacterSet is present, detect encoding from content heuristics.
+    /// Many programs write UTF-8 without setting the CodedCharacterSet tag.
+    private static func detectEncodingFromContent(_ datasets: [IPTCDataSet]) -> String.Encoding {
+        var hasHighBytes = false
+        var looksLikeUTF8 = true
+
+        for ds in datasets {
+            guard ds.tag.dataType == .string || ds.tag.dataType == .digits else { continue }
+
+            for byte in ds.rawValue {
+                if byte > 127 {
+                    hasHighBytes = true
+                    break
+                }
+            }
+            if hasHighBytes { break }
+        }
+
+        // All ASCII — encoding doesn't matter
+        if !hasHighBytes { return .utf8 }
+
+        // Collect all string bytes to test UTF-8 validity
+        var allStringBytes = Data()
+        for ds in datasets {
+            guard ds.tag.dataType == .string || ds.tag.dataType == .digits else { continue }
+            allStringBytes.append(ds.rawValue)
+        }
+
+        // If it's valid UTF-8, use UTF-8 (common in modern files without CodedCharacterSet)
+        if String(data: allStringBytes, encoding: .utf8) != nil {
+            looksLikeUTF8 = true
+        } else {
+            looksLikeUTF8 = false
+        }
+
+        if looksLikeUTF8 {
+            return .utf8
+        }
+
+        // Bytes in 0x80-0x9F exist only in Windows-1252, not ISO-8859-1
+        let hasCP1252OnlyBytes = allStringBytes.contains { $0 >= 0x80 && $0 <= 0x9F }
+        if hasCP1252OnlyBytes {
+            return .windowsCP1252
+        }
+
+        return .isoLatin1
     }
 
     /// Read IPTC data from an APP13 segment payload.

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MetadataError: Error, CustomStringConvertible {
+public enum MetadataError: Error, Sendable, CustomStringConvertible {
     case notAJPEG
     case unexpectedEndOfData
     case invalidSegmentLength
@@ -21,6 +21,7 @@ public enum MetadataError: Error, CustomStringConvertible {
     case invalidPNG(String)
     case invalidJPEGXL(String)
     case invalidAVIF(String)
+    case invalidHEIF(String)
     case invalidTIFFFile(String)
     case invalidRAW(String)
     case crcMismatch(expected: UInt32, actual: UInt32)
@@ -71,6 +72,8 @@ public enum MetadataError: Error, CustomStringConvertible {
             return "Invalid JPEG XL: \(detail)"
         case .invalidAVIF(let detail):
             return "Invalid AVIF: \(detail)"
+        case .invalidHEIF(let detail):
+            return "Invalid HEIF: \(detail)"
         case .invalidTIFFFile(let detail):
             return "Invalid TIFF file: \(detail)"
         case .invalidRAW(let detail):

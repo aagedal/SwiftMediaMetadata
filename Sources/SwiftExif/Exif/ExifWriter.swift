@@ -1,7 +1,7 @@
 import Foundation
 
 /// Serialize ExifData back to APP1 segment payload.
-public struct ExifWriter {
+public struct ExifWriter: Sendable {
 
     /// Serialize ExifData to APP1 segment payload (including "Exif\0\0" prefix).
     public static func write(_ exifData: ExifData) -> Data {

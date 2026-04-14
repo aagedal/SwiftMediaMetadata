@@ -1,7 +1,7 @@
 import Foundation
 
 /// Serialize XMPData to XMP XML.
-public struct XMPWriter {
+public struct XMPWriter: Sendable {
 
     /// Serialize XMPData to APP1 segment payload (including XMP namespace identifier prefix).
     public static func write(_ xmpData: XMPData) -> Data {

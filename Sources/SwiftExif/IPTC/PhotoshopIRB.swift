@@ -14,7 +14,7 @@ public struct IRBBlock: Equatable, Sendable {
 }
 
 /// Parse and write Photoshop Image Resource Blocks (the container for IPTC in APP13).
-public struct PhotoshopIRB {
+public struct PhotoshopIRB: Sendable {
     public static let photoshopHeader = "Photoshop 3.0"
     public static let signature8BIM: [UInt8] = [0x38, 0x42, 0x49, 0x4D] // "8BIM"
     public static let iptcResourceID: UInt16 = 0x0404

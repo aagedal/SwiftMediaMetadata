@@ -1,11 +1,15 @@
 import Foundation
 
 /// Reconstructs a JPEG file from parsed components.
-public struct JPEGWriter {
+public struct JPEGWriter: Sendable {
+
+    /// Maximum payload size for a single JPEG segment (UInt16 length field minus 2 bytes for the field itself).
+    public static let maxSegmentPayload = 65533
 
     /// Reconstruct a JPEG file from its segments and scan data.
     /// Output: SOI + segments (with proper length headers) + scanData
-    public static func write(_ file: JPEGFile) -> Data {
+    /// - Throws: `MetadataError.invalidSegmentLength` if any segment exceeds the 65,533-byte JPEG payload limit.
+    public static func write(_ file: JPEGFile) throws -> Data {
         var writer = BinaryWriter(capacity: estimateSize(file))
 
         // Write SOI marker
@@ -18,6 +22,10 @@ public struct JPEGWriter {
             if segment.marker.isStandalone {
                 // Standalone markers have no length or data
                 continue
+            }
+
+            guard segment.data.count <= maxSegmentPayload else {
+                throw MetadataError.invalidSegmentLength
             }
 
             // Length = data size + 2 (for the length field itself)

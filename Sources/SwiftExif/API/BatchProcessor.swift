@@ -16,7 +16,7 @@ public struct BatchResult: Sendable {
 }
 
 /// Process metadata across many files efficiently.
-public struct BatchProcessor {
+public struct BatchProcessor: Sendable {
     public typealias MetadataTransform = @Sendable (inout ImageMetadata) throws -> Void
 
     /// Apply a transformation to a single file.
@@ -60,13 +60,8 @@ public struct BatchProcessor {
         transform: @escaping MetadataTransform
     ) throws -> BatchResult {
         let start = Date()
-        var succeeded = 0
-        var failed: [(url: URL, error: any Error)] = []
+        let accumulator = Accumulator()
 
-        // Use a serial queue for thread-safe result collection
-        let lock = NSLock()
-
-        // Process with concurrency limiting via DispatchSemaphore
         let semaphore = DispatchSemaphore(value: max(1, concurrency))
         let group = DispatchGroup()
 
@@ -82,13 +77,9 @@ public struct BatchProcessor {
 
                 do {
                     try process(file: url, transform: transform)
-                    lock.lock()
-                    succeeded += 1
-                    lock.unlock()
+                    accumulator.recordSuccess()
                 } catch {
-                    lock.lock()
-                    failed.append((url: url, error: error))
-                    lock.unlock()
+                    accumulator.recordFailure(url: url, error: error)
                 }
             }
         }
@@ -96,10 +87,28 @@ public struct BatchProcessor {
         group.wait()
 
         let elapsed = Date().timeIntervalSince(start)
-        return BatchResult(succeeded: succeeded, failed: failed, totalTime: elapsed)
+        return BatchResult(succeeded: accumulator.succeeded, failed: accumulator.failed, totalTime: elapsed)
     }
 
     // MARK: - Private
+
+    private final class Accumulator: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var succeeded = 0
+        private(set) var failed: [(url: URL, error: any Error)] = []
+
+        func recordSuccess() {
+            lock.lock()
+            succeeded += 1
+            lock.unlock()
+        }
+
+        func recordFailure(url: URL, error: any Error) {
+            lock.lock()
+            failed.append((url: url, error: error))
+            lock.unlock()
+        }
+    }
 
     private static let supportedExtensions: Set<String> = [
         "jpg", "jpeg",
@@ -108,6 +117,7 @@ public struct BatchProcessor {
         "jxl",
         "png",
         "avif",
+        "heic", "heif",
     ]
 
     private static func isSupportedFormat(_ url: URL) -> Bool {
