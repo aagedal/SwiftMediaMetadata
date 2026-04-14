@@ -263,6 +263,180 @@ public struct ImageMetadata: Sendable {
         return result
     }
 
+    // MARK: - Metadata Groups
+
+    /// Groups of metadata that can be selectively copied or compared.
+    public enum MetadataGroup: CaseIterable, Sendable {
+        case exif
+        case iptc
+        case xmp
+        case c2pa
+    }
+
+    // MARK: - Copy Metadata
+
+    /// Copy all metadata from another ImageMetadata instance.
+    /// Replaces all Exif, IPTC, XMP, and C2PA data with the source's values.
+    public mutating func copyMetadata(from source: ImageMetadata) {
+        exif = source.exif
+        iptc = source.iptc
+        xmp = source.xmp
+        c2pa = source.c2pa
+    }
+
+    /// Copy selected metadata groups from another ImageMetadata instance.
+    public mutating func copyMetadata(from source: ImageMetadata, groups: Set<MetadataGroup>) {
+        if groups.contains(.exif) { exif = source.exif }
+        if groups.contains(.iptc) { iptc = source.iptc }
+        if groups.contains(.xmp) { xmp = source.xmp }
+        if groups.contains(.c2pa) { c2pa = source.c2pa }
+    }
+
+    // MARK: - Metadata Diff
+
+    /// A single difference between two metadata values.
+    public struct MetadataChange: Equatable, Sendable {
+        public enum ChangeType: Equatable, Sendable {
+            case added
+            case removed
+            case modified
+        }
+
+        public let key: String
+        public let type: ChangeType
+        public let oldValue: String?
+        public let newValue: String?
+
+        public init(key: String, type: ChangeType, oldValue: String? = nil, newValue: String? = nil) {
+            self.key = key
+            self.type = type
+            self.oldValue = oldValue
+            self.newValue = newValue
+        }
+    }
+
+    /// Result of comparing two metadata instances.
+    public struct MetadataDiff: Sendable {
+        public let changes: [MetadataChange]
+
+        public var additions: [MetadataChange] { changes.filter { $0.type == .added } }
+        public var removals: [MetadataChange] { changes.filter { $0.type == .removed } }
+        public var modifications: [MetadataChange] { changes.filter { $0.type == .modified } }
+        public var isEmpty: Bool { changes.isEmpty }
+    }
+
+    /// Compare this metadata against another instance and return differences.
+    public func diff(against other: ImageMetadata) -> MetadataDiff {
+        let selfDict = MetadataExporter.buildDictionary(self)
+        let otherDict = MetadataExporter.buildDictionary(other)
+
+        var changes: [MetadataChange] = []
+        let allKeys = Set(selfDict.keys).union(otherDict.keys)
+
+        for key in allKeys.sorted() {
+            let selfVal = selfDict[key].map { Self.stringifyValue($0) }
+            let otherVal = otherDict[key].map { Self.stringifyValue($0) }
+
+            switch (selfVal, otherVal) {
+            case (nil, .some(let new)):
+                changes.append(MetadataChange(key: key, type: .added, newValue: new))
+            case (.some(let old), nil):
+                changes.append(MetadataChange(key: key, type: .removed, oldValue: old))
+            case (.some(let old), .some(let new)) where old != new:
+                changes.append(MetadataChange(key: key, type: .modified, oldValue: old, newValue: new))
+            default:
+                break
+            }
+        }
+
+        return MetadataDiff(changes: changes)
+    }
+
+    private static func stringifyValue(_ value: Any) -> String {
+        if let arr = value as? [String] {
+            return arr.joined(separator: ", ")
+        }
+        return String(describing: value)
+    }
+
+    // MARK: - Thumbnail Extraction
+
+    /// Extract the embedded JPEG thumbnail from Exif IFD1, if present.
+    /// Returns the raw JPEG data of the thumbnail image.
+    public func extractThumbnail() -> Data? {
+        guard let exif = exif,
+              let ifd1 = exif.ifd1 else { return nil }
+
+        let endian = exif.byteOrder
+
+        // Check compression is JPEG (value 6)
+        if let compression = ifd1.entry(for: ExifTag.compression)?.uint16Value(endian: endian),
+           compression != 6 {
+            return nil
+        }
+
+        // Get the thumbnail data directly from IFD1 entries
+        // The thumbnail JPEG data was already resolved by the IFD parser into valueData
+        guard let offsetEntry = ifd1.entry(for: ExifTag.jpegIFOffset),
+              let lengthEntry = ifd1.entry(for: ExifTag.jpegIFByteCount),
+              let length = lengthEntry.uint32Value(endian: endian) else { return nil }
+
+        // The offset entry points to the thumbnail data within the original Exif blob.
+        // Since IFDParser resolves offset-based values, if the data was large enough
+        // it would be at the offset. But thumbnail offset/length are metadata about
+        // where to find the thumbnail in the original TIFF data — they aren't the
+        // thumbnail data itself. We need to extract from the container.
+        guard let offset = offsetEntry.uint32Value(endian: endian) else { return nil }
+
+        return extractThumbnailFromContainer(offset: Int(offset), length: Int(length))
+    }
+
+    private func extractThumbnailFromContainer(offset: Int, length: Int) -> Data? {
+        switch container {
+        case .jpeg(let file):
+            // Thumbnail offset is relative to TIFF start within the Exif APP1 segment
+            guard let exifSegment = file.exifSegment() else { return nil }
+            let tiffStart = 6 // Skip "Exif\0\0"
+            let absOffset = tiffStart + offset
+            let data = exifSegment.data
+            guard absOffset >= 0, absOffset + length <= data.count else { return nil }
+            return data[data.startIndex + absOffset ..< data.startIndex + absOffset + length]
+
+        case .tiff(let file):
+            // Offset is relative to file start (tiffStart = 0)
+            guard offset >= 0, offset + length <= file.rawData.count else { return nil }
+            return file.rawData[file.rawData.startIndex + offset ..< file.rawData.startIndex + offset + length]
+
+        case .png(let file):
+            guard let chunk = file.findChunk("eXIf") else { return nil }
+            // eXIf chunk is raw TIFF data, offset is relative to start of chunk data
+            guard offset >= 0, offset + length <= chunk.data.count else { return nil }
+            return chunk.data[chunk.data.startIndex + offset ..< chunk.data.startIndex + offset + length]
+
+        case .jpegXL(let file):
+            guard let box = file.findBox("Exif") else { return nil }
+            // Exif box has 4-byte offset prefix before TIFF data
+            let prefixSize = 4
+            let absOffset = prefixSize + offset
+            guard absOffset >= 0, absOffset + length <= box.data.count else { return nil }
+            return box.data[box.data.startIndex + absOffset ..< box.data.startIndex + absOffset + length]
+
+        case .avif(let file):
+            return extractThumbnailFromISOBMFF(boxes: file.boxes, offset: offset, length: length)
+
+        case .heif(let file):
+            return extractThumbnailFromISOBMFF(boxes: file.boxes, offset: offset, length: length)
+        }
+    }
+
+    private func extractThumbnailFromISOBMFF(boxes: [ISOBMFFBox], offset: Int, length: Int) -> Data? {
+        guard let exifBox = ISOBMFFMetadata.findBox(type: "Exif", in: boxes) else { return nil }
+        let prefixSize = 4
+        let absOffset = prefixSize + offset
+        guard absOffset >= 0, absOffset + length <= exifBox.data.count else { return nil }
+        return exifBox.data[exifBox.data.startIndex + absOffset ..< exifBox.data.startIndex + absOffset + length]
+    }
+
     // MARK: - IPTC ↔ XMP Sync
 
     /// Synchronize IPTC values to XMP (one-way: IPTC → XMP).

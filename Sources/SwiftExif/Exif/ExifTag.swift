@@ -58,6 +58,10 @@ public enum ExifTag: Sendable {
     public static let lensMake: UInt16              = 0xA433
     public static let lensSpecification: UInt16     = 0xA432
 
+    // MARK: - IFD1 (Thumbnail)
+    public static let jpegIFOffset: UInt16          = 0x0201  // Thumbnail data offset
+    public static let jpegIFByteCount: UInt16       = 0x0202  // Thumbnail data length
+
     // MARK: - GPS IFD
     public static let gpsVersionID: UInt16          = 0x0000
     public static let gpsLatitudeRef: UInt16        = 0x0001
