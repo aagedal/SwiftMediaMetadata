@@ -124,6 +124,89 @@ final class MakerNoteReaderTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    // MARK: - Fujifilm MakerNote
+
+    func testFujifilmSerialNumber() {
+        let makerNoteData = buildFujifilmMakerNote(serialNumber: "FX-99887766")
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "FUJIFILM", byteOrder: .bigEndian)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.manufacturer, .fujifilm)
+        if case .string(let serial) = result?.tags["SerialNumber"] {
+            XCTAssertEqual(serial, "FX-99887766")
+        } else {
+            XCTFail("SerialNumber not found")
+        }
+    }
+
+    func testFujifilmAlwaysLittleEndian() {
+        // Even with big-endian parent, Fujifilm uses little-endian
+        let makerNoteData = buildFujifilmMakerNote(serialNumber: "LE-TEST")
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "Fujifilm", byteOrder: .bigEndian)
+
+        XCTAssertNotNil(result)
+        if case .string(let serial) = result?.tags["SerialNumber"] {
+            XCTAssertEqual(serial, "LE-TEST")
+        } else {
+            XCTFail("SerialNumber not found")
+        }
+    }
+
+    // MARK: - Olympus MakerNote
+
+    func testOlympusOldFormat() {
+        let makerNoteData = buildOlympusMakerNote(cameraID: "E-M1 Mark III", useNewFormat: false)
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "OLYMPUS CORPORATION", byteOrder: .bigEndian)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.manufacturer, .olympus)
+        if case .string(let id) = result?.tags["CameraID"] {
+            XCTAssertEqual(id, "E-M1 Mark III")
+        } else {
+            XCTFail("CameraID not found")
+        }
+    }
+
+    func testOlympusNewFormat() {
+        let makerNoteData = buildOlympusMakerNote(cameraID: "OM-1", useNewFormat: true)
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "OM Digital Solutions", byteOrder: .bigEndian)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.manufacturer, .olympus)
+    }
+
+    // MARK: - Panasonic MakerNote
+
+    func testPanasonicSerialNumber() {
+        let makerNoteData = buildPanasonicMakerNote(serialNumber: "GH6-ABC123")
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "Panasonic", byteOrder: .bigEndian)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.manufacturer, .panasonic)
+        if case .string(let serial) = result?.tags["InternalSerialNumber"] {
+            XCTAssertEqual(serial, "GH6-ABC123")
+        } else {
+            XCTFail("InternalSerialNumber not found")
+        }
+    }
+
+    func testPanasonicLensType() {
+        let makerNoteData = buildPanasonicMakerNote(serialNumber: "SN1", lensType: "LUMIX G 25/F1.7")
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "Panasonic", byteOrder: .bigEndian)
+
+        if case .string(let lt) = result?.tags["LensType"] {
+            XCTAssertEqual(lt, "LUMIX G 25/F1.7")
+        } else {
+            XCTFail("LensType not found")
+        }
+    }
+
     // MARK: - Round-trip Preservation
 
     func testMakerNoteRawDataPreserved() {
@@ -247,6 +330,70 @@ final class MakerNoteReaderTests: XCTestCase {
         writer.writeUInt32(0, endian: byteOrder) // Next IFD offset
         writer.writeBytes(externalData)
 
+        return writer.data
+    }
+
+    /// Build a Fujifilm MakerNote: "FUJIFILM" (8B) + LE offset (4B) + IFD (little-endian).
+    private func buildFujifilmMakerNote(serialNumber: String) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+        let snBytes = Data(serialNumber.utf8) + Data([0x00])
+        entries.append((0x0010, .ascii, UInt32(snBytes.count), snBytes))
+        entries.sort { $0.tag < $1.tag }
+
+        let ifdData = buildMiniIFD(entries: entries, byteOrder: .littleEndian, offsetBase: 12)
+
+        var writer = BinaryWriter(capacity: 256)
+        // "FUJIFILM" header
+        writer.writeBytes(Data([0x46, 0x55, 0x4A, 0x49, 0x46, 0x49, 0x4C, 0x4D]))
+        // IFD offset (4 bytes, little-endian) — IFD starts right after this = offset 12
+        writer.writeUInt32(12, endian: .littleEndian)
+        // IFD data
+        writer.writeBytes(ifdData)
+        return writer.data
+    }
+
+    /// Build an Olympus MakerNote.
+    private func buildOlympusMakerNote(cameraID: String, useNewFormat: Bool) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+        let idBytes = Data(cameraID.utf8) + Data([0x00])
+        entries.append((0x0207, .ascii, UInt32(idBytes.count), idBytes))
+        entries.sort { $0.tag < $1.tag }
+
+        var writer = BinaryWriter(capacity: 256)
+        if useNewFormat {
+            // "OLYMPUS\0" + "II" (little-endian) + version (2B)
+            writer.writeBytes(Data([0x4F, 0x4C, 0x59, 0x4D, 0x50, 0x55, 0x53, 0x00])) // "OLYMPUS\0"
+            writer.writeBytes([0x49, 0x49]) // Little-endian
+            writer.writeBytes([0x03, 0x00]) // Version
+            let ifdData = buildMiniIFD(entries: entries, byteOrder: .littleEndian, offsetBase: 12)
+            writer.writeBytes(ifdData)
+        } else {
+            // "OLYMP\0" + version (2B)
+            writer.writeBytes(Data([0x4F, 0x4C, 0x59, 0x4D, 0x50, 0x00])) // "OLYMP\0"
+            writer.writeBytes([0x01, 0x00]) // Version
+            let ifdData = buildMiniIFD(entries: entries, byteOrder: .bigEndian, offsetBase: 8)
+            writer.writeBytes(ifdData)
+        }
+        return writer.data
+    }
+
+    /// Build a Panasonic MakerNote: "Panasonic\0\0\0" (12B) + IFD.
+    private func buildPanasonicMakerNote(serialNumber: String, lensType: String? = nil) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+        let snBytes = Data(serialNumber.utf8) + Data([0x00])
+        entries.append((0x0025, .ascii, UInt32(snBytes.count), snBytes))
+
+        if let lt = lensType {
+            let ltBytes = Data(lt.utf8) + Data([0x00])
+            entries.append((0x0051, .ascii, UInt32(ltBytes.count), ltBytes))
+        }
+
+        entries.sort { $0.tag < $1.tag }
+
+        var writer = BinaryWriter(capacity: 256)
+        writer.writeBytes(Data("Panasonic\0\0\0".utf8))
+        let ifdData = buildMiniIFD(entries: entries, byteOrder: .bigEndian, offsetBase: 12)
+        writer.writeBytes(ifdData)
         return writer.data
     }
 }

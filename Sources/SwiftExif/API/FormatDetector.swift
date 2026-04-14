@@ -156,4 +156,40 @@ public struct FormatDetector: Sendable {
         let brandBytes = data[data.startIndex + 8 ..< data.startIndex + 12]
         return String(data: brandBytes, encoding: .ascii)
     }
+
+    // MARK: - Video Detection
+
+    /// Detect video format from the first bytes of data.
+    public static func detectVideo(_ data: Data) -> VideoFormat? {
+        guard data.count >= 12 else { return nil }
+        let bytes = [UInt8](data.prefix(12))
+
+        // ISOBMFF: check for ftyp box at offset 4
+        guard bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70 else {
+            return nil
+        }
+
+        guard let brand = detectISOBMFFBrand(data) else { return nil }
+
+        switch brand {
+        case "mp41", "mp42", "isom", "iso2", "dash", "M4A ":
+            return .mp4
+        case "qt  ":
+            return .mov
+        case "M4V ", "M4VH", "M4VP":
+            return .m4v
+        default:
+            return nil
+        }
+    }
+
+    /// Detect video format from file extension.
+    public static func detectVideoFromExtension(_ pathExtension: String) -> VideoFormat? {
+        switch pathExtension.lowercased() {
+        case "mp4":  return .mp4
+        case "mov":  return .mov
+        case "m4v":  return .m4v
+        default:     return nil
+        }
+    }
 }

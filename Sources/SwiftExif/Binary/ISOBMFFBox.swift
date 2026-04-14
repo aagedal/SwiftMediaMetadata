@@ -70,7 +70,7 @@ public struct ISOBMFFBoxReader: Sendable {
 
             let size32 = try reader.readUInt32BigEndian()
             let typeBytes = try reader.readBytes(4)
-            guard let type = String(data: typeBytes, encoding: .ascii) else {
+            guard let type = String(data: typeBytes, encoding: .isoLatin1) else {
                 break
             }
 

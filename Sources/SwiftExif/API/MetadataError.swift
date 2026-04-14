@@ -31,6 +31,7 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
     case writeNotSupported(String)
     case invalidGPX(String)
     case invalidMakerNote(String)
+    case invalidVideo(String)
 
     public var description: String {
         switch self {
@@ -94,6 +95,8 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid GPX data: \(detail)"
         case .invalidMakerNote(let detail):
             return "Invalid MakerNote: \(detail)"
+        case .invalidVideo(let detail):
+            return "Invalid video file: \(detail)"
         }
     }
 }
