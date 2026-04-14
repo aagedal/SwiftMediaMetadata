@@ -1,22 +1,24 @@
 # SwiftExif
 
-A native Swift library for reading and writing image metadata — Exif, IPTC (IIM), and XMP — with no external dependencies.
+A native Swift library for reading and writing image and video metadata — Exif, IPTC (IIM), XMP, C2PA, MakerNotes, and ICC profiles — with no external dependencies.
 
 ## Supported Formats
 
 | Format | Read | Write | Metadata Types |
 |--------|------|-------|----------------|
-| JPEG | Yes | Yes | Exif, IPTC, XMP |
-| TIFF | Yes | Yes | Exif, IPTC, XMP |
-| RAW (DNG, CR2, NEF, ARW) | Yes | Yes | Exif, IPTC, XMP |
-| JPEG XL (container) | Yes | Yes | Exif, XMP |
-| PNG | Yes | Yes | Exif, XMP |
-| AVIF | Yes | Yes | Exif, XMP |
+| JPEG | Yes | Yes | Exif, IPTC, XMP, C2PA, ICC |
+| TIFF | Yes | Yes | Exif, IPTC, XMP, ICC |
+| RAW (DNG, CR2, NEF, ARW) | Yes | Yes | Exif, IPTC, XMP, MakerNotes, ICC |
+| JPEG XL (container) | Yes | Yes | Exif, XMP, ICC |
+| PNG | Yes | Yes | Exif, XMP, ICC |
+| AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
+| HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
+| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS |
 | XMP sidecar (.xmp) | Yes | Yes | XMP |
 
 ## Requirements
 
-- Swift 5.9+
+- Swift 6.0+
 - macOS 13+ / iOS 16+
 
 ## Installation
@@ -68,7 +70,7 @@ if let exif = metadata.exif {
 
 ### Writing Metadata
 
-Works for all supported formats (JPEG, TIFF, RAW, JPEG XL, PNG, AVIF):
+Works for all supported image formats (JPEG, TIFF, RAW, JPEG XL, PNG, AVIF, HEIF):
 
 ```swift
 var metadata = try readMetadata(from: imageURL)
@@ -105,6 +107,222 @@ metadata.syncIPTCToXMP()
 metadata.syncXMPToIPTC()
 ```
 
+### Video Metadata
+
+Read metadata from MP4, MOV, and M4V files:
+
+```swift
+let video = try VideoMetadata.read(from: videoURL)
+
+print(video.duration)       // TimeInterval?
+print(video.creationDate)   // Date?
+print(video.videoWidth)     // Int?
+print(video.videoHeight)    // Int?
+print(video.videoCodec)     // String?
+print(video.gpsLatitude)    // Double?
+
+// Export as JSON
+let json = VideoMetadataExporter.toJSONString(video)
+```
+
+### C2PA Content Provenance
+
+Access embedded C2PA manifests for content authenticity:
+
+```swift
+if let c2pa = metadata.c2pa {
+    for manifest in c2pa.manifests {
+        print(manifest.claim.claimGenerator)
+        print(manifest.claim.title)
+        for assertion in manifest.assertions {
+            print(assertion.label)
+        }
+    }
+}
+```
+
+### MakerNotes
+
+Camera-specific manufacturer metadata (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic):
+
+```swift
+if let makerNote = metadata.exif?.makerNote {
+    print(makerNote.manufacturer)  // .canon, .nikon, .sony, etc.
+    for (name, value) in makerNote.tags {
+        print("\(name): \(value)")
+    }
+}
+```
+
+### ICC Color Profiles
+
+```swift
+// Read
+if let icc = metadata.iccProfile {
+    print(icc.colorSpace)               // "RGB ", "CMYK", etc.
+    print(icc.profileDescription)       // "sRGB IEC61966-2.1"
+}
+
+// Copy ICC profile to another image
+var dest = try readMetadata(from: destURL)
+dest.iccProfile = metadata.iccProfile
+try dest.write(to: destURL)
+```
+
+### Composite Tags
+
+Derived values calculated from raw Exif data:
+
+```swift
+let composites = CompositeTagCalculator.calculate(from: metadata.exif!)
+
+composites["Megapixels"]     // 24.2
+composites["LightValue"]     // 10.5
+composites["FieldOfView"]    // 63.7
+composites["LensID"]         // "EF 24-70mm f/2.8L II USM"
+composites["GPSPosition"]    // "59.9139 N, 10.7522 E"
+```
+
+### GPX Geotagging
+
+Apply GPS coordinates from a GPX track to images based on capture time:
+
+```swift
+let track = try GPXParser.parse(from: gpxFileURL)
+
+var metadata = try readMetadata(from: imageURL)
+let matched = metadata.applyGPX(track, maxOffset: 60)
+if matched {
+    try metadata.write(to: imageURL)
+}
+```
+
+### Copy Metadata Between Files
+
+```swift
+var dest = try readMetadata(from: destURL)
+let source = try readMetadata(from: sourceURL)
+
+// Copy all metadata
+dest.copyMetadata(from: source)
+
+// Or selective groups
+dest.copyMetadata(from: source, groups: [.exif, .iptc])
+
+try dest.write(to: destURL)
+```
+
+### Metadata Diff
+
+```swift
+let a = try readMetadata(from: fileA)
+let b = try readMetadata(from: fileB)
+
+let diff = a.diff(against: b)
+for change in diff.changes {
+    print("\(change.type): \(change.key) — \(change.oldValue ?? "nil") → \(change.newValue ?? "nil")")
+}
+```
+
+### Thumbnail Extraction
+
+```swift
+if let jpegData = metadata.extractThumbnail() {
+    try jpegData.write(to: thumbnailURL)
+}
+```
+
+### Metadata Stripping
+
+```swift
+var metadata = try readMetadata(from: imageURL)
+
+metadata.stripAllMetadata()   // Remove everything
+metadata.stripGPS()           // Remove GPS only
+metadata.stripExif()          // Remove Exif only
+metadata.stripIPTC()          // Remove IPTC only
+metadata.stripXMP()           // Remove XMP only
+metadata.stripC2PA()          // Remove C2PA only
+metadata.stripICCProfile()    // Remove ICC profile only
+
+try metadata.write(to: outputURL)
+```
+
+### Date Shifting
+
+```swift
+var metadata = try readMetadata(from: imageURL)
+metadata.shiftDates(by: 3600)  // Shift all dates forward by 1 hour
+try metadata.write(to: imageURL)
+```
+
+### Conditional Batch Processing
+
+Process files that match specific conditions:
+
+```swift
+let condition: MetadataCondition = .and([
+    .equals(field: "IPTC:City", value: "Oslo"),
+    .greaterThan(field: "Exif:FocalLength", value: 50)
+])
+
+let result = try BatchProcessor.processDirectory(
+    at: directoryURL,
+    where: condition,
+    recursive: true
+) { metadata in
+    metadata.iptc.setValue("© 2026 Agency", for: .copyrightNotice)
+}
+```
+
+### File Renaming
+
+Rename files using metadata-driven templates:
+
+```swift
+let renamer = MetadataRenamer(
+    template: "%{DateTimeOriginal:yyyyMMdd}_%{IPTC:City}_%c",
+    counterDigits: 3
+)
+
+// Preview before renaming
+let preview = renamer.dryRun(files: imageURLs)
+for (from, to) in preview {
+    print("\(from.lastPathComponent) → \(to.lastPathComponent)")
+}
+
+// Perform rename
+let result = renamer.rename(files: imageURLs)
+print("\(result.renamed.count) files renamed")
+```
+
+### Export
+
+```swift
+// JSON
+let json = MetadataExporter.toJSONString(metadata)
+
+// Human-readable JSON with print conversions
+let readable = MetadataExporter.toReadableJSON(metadata)
+
+// XML
+let xml = MetadataExporter.toXML(metadata)
+
+// CSV (multiple files)
+let csv = CSVExporter.toCSV(metadataArray, fields: ["IPTC:Headline", "Exif:Make"])
+```
+
+### Print Conversion
+
+Convert raw numeric values to human-readable strings:
+
+```swift
+let readable = PrintConverter.buildReadableDictionary(metadata)
+// "Orientation" → "Rotate 90 CW" (instead of 6)
+// "ExposureTime" → "1/250" (instead of rational)
+// "Flash" → "Fired, Return detected" (instead of 15)
+```
+
 ### Batch Processing
 
 ```swift
@@ -119,17 +337,26 @@ print("\(result.succeeded) files updated, \(result.failed.count) errors")
 
 ```
 Sources/SwiftExif/
-├── API/            # Public API: ImageMetadata, BatchProcessor, FormatDetector
+├── API/            # Public API: ImageMetadata, BatchProcessor, FormatDetector,
+│                   #   MetadataExporter, CSVExporter, PrintConverter, MetadataRenamer
 ├── Binary/         # Low-level binary readers/writers, CRC32, ISO BMFF
 ├── Exif/           # Exif IFD parsing and writing
 ├── IPTC/           # IPTC IIM reader/writer, Photoshop IRB
 ├── XMP/            # XMP reader/writer with namespace mapping
+├── C2PA/           # C2PA manifest/claim/signature parsing
+├── CBOR/           # CBOR decoder for C2PA payloads
+├── MakerNote/      # Camera-specific MakerNote parsers
+├── Composite/      # Computed/derived tag calculator
+├── GPX/            # GPX track parser and geotagging
+├── ICC/            # ICC color profile reader
 ├── JPEG/           # JPEG segment parser and writer
 ├── TIFF/           # TIFF/RAW file parser and writer
 ├── RAW/            # Camera RAW format support
 ├── PNG/            # PNG chunk parser and writer
 ├── JPEGXL/         # JPEG XL box parser and writer
-└── AVIF/           # AVIF (ISOBMFF) parser and writer
+├── AVIF/           # AVIF (ISOBMFF) parser and writer
+├── HEIF/           # HEIF/HEIC parser and writer
+└── Video/          # MP4/MOV/M4V metadata parser
 ```
 
 ## License
