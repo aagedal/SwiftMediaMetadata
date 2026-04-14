@@ -515,6 +515,34 @@ public struct ImageMetadata: Sendable {
         try writeSidecar(to: sidecarURL)
     }
 
+    // MARK: - GPX Geotagging
+
+    /// Apply GPS coordinates from a GPX track by matching DateTimeOriginal.
+    /// - Parameters:
+    ///   - track: Parsed GPX track with timestamped points.
+    ///   - maxOffset: Maximum time difference to accept in seconds. Default 60.
+    ///   - timeZoneOffset: Camera timezone offset from UTC in seconds. Default 0.
+    /// - Returns: true if GPS was applied, false if no match found.
+    @discardableResult
+    public mutating func applyGPX(
+        _ track: GPXTrack,
+        maxOffset: TimeInterval = 60,
+        timeZoneOffset: TimeInterval = 0
+    ) -> Bool {
+        guard let dateTimeOriginal = exif?.dateTimeOriginal else { return false }
+        guard let matched = GPXGeotagger.match(
+            dateTimeOriginal: dateTimeOriginal,
+            track: track,
+            maxOffset: maxOffset,
+            timeZoneOffset: timeZoneOffset
+        ) else { return false }
+
+        let byteOrder = exif?.byteOrder ?? .bigEndian
+        if exif == nil { exif = ExifData(byteOrder: byteOrder) }
+        exif?.gpsIFD = GPXGeotagger.buildGPSIFD(from: matched, byteOrder: byteOrder)
+        return true
+    }
+
     // MARK: - Format-Specific Writing
 
     private func writeJPEG(_ file: inout JPEGFile) throws -> Data {

@@ -73,6 +73,28 @@ public struct MetadataExporter: Sendable {
             addXMPFields(&dict, xmp)
         }
 
+        // MakerNote
+        if let makerNote = metadata.exif?.makerNote {
+            for (key, value) in makerNote.tags {
+                switch value {
+                case .string(let s): dict["MakerNote:\(key)"] = s
+                case .int(let i): dict["MakerNote:\(key)"] = i
+                case .uint(let u): dict["MakerNote:\(key)"] = Int(u)
+                case .double(let d): dict["MakerNote:\(key)"] = d
+                case .data: break
+                case .intArray(let arr): dict["MakerNote:\(key)"] = arr.map(String.init).joined(separator: " ")
+                }
+            }
+        }
+
+        // Composite Tags
+        if let exif = metadata.exif {
+            let composites = CompositeTagCalculator.calculate(from: exif)
+            for (key, value) in composites {
+                dict[key] = value
+            }
+        }
+
         // ICC Profile
         if let icc = metadata.iccProfile {
             dict["ICCProfile:ColorSpace"] = icc.colorSpace.trimmingCharacters(in: .whitespaces)
@@ -143,6 +165,12 @@ public struct MetadataExporter: Sendable {
 
         if let lat = exif.gpsLatitude { dict["GPSLatitude"] = lat }
         if let lon = exif.gpsLongitude { dict["GPSLongitude"] = lon }
+
+        // Additional Exif fields
+        if let w = exif.pixelXDimension { dict["PixelXDimension"] = Int(w) }
+        if let h = exif.pixelYDimension { dict["PixelYDimension"] = Int(h) }
+        if let fl35 = exif.focalLengthIn35mmFilm { dict["FocalLengthIn35mmFilm"] = Int(fl35) }
+        if let lm = exif.lensMake { dict["LensMake"] = lm }
 
         // DateTimeDigitized
         if let entry = exif.exifIFD?.entry(for: ExifTag.dateTimeDigitized),

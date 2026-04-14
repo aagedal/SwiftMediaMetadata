@@ -29,6 +29,8 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
     case invalidJUMBF(String)
     case invalidC2PA(String)
     case writeNotSupported(String)
+    case invalidGPX(String)
+    case invalidMakerNote(String)
 
     public var description: String {
         switch self {
@@ -88,6 +90,10 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid C2PA data: \(detail)"
         case .writeNotSupported(let detail):
             return "Write not supported: \(detail)"
+        case .invalidGPX(let detail):
+            return "Invalid GPX data: \(detail)"
+        case .invalidMakerNote(let detail):
+            return "Invalid MakerNote: \(detail)"
         }
     }
 }

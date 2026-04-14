@@ -63,6 +63,18 @@ public struct PrintConverter: Sendable {
             }
         case "ISO":
             if let v = value as? Int { return String(v) }
+        case "Composite:Aperture":
+            if let v = value as? Double { return fNumber(v) }
+        case "Composite:ShutterSpeed":
+            if let v = value as? Double { return formatShutterSpeed(v) }
+        case "Composite:Megapixels":
+            if let v = value as? Double { return String(format: "%.1f", v) }
+        case "Composite:LightValue":
+            if let v = value as? Double { return String(format: "%.1f", v) }
+        case "Composite:ScaleFactor35efl":
+            if let v = value as? Double { return String(format: "%.1fx", v) }
+        case "Composite:FOV":
+            if let v = value as? Double { return String(format: "%.1f deg", v) }
         default:
             break
         }
@@ -324,6 +336,17 @@ public struct PrintConverter: Sendable {
         case 34712: return "JPEG 2000"
         default: return "Unknown (\(value))"
         }
+    }
+
+    // MARK: - Shutter Speed
+
+    public static func formatShutterSpeed(_ seconds: Double) -> String {
+        if seconds >= 1.0 {
+            if seconds == Double(Int(seconds)) { return "\(Int(seconds))s" }
+            return String(format: "%.1fs", seconds)
+        }
+        let reciprocal = Int(round(1.0 / seconds))
+        return "1/\(reciprocal)s"
     }
 
     // MARK: - GPS Coordinates

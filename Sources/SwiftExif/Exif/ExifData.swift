@@ -66,6 +66,42 @@ public struct ExifData: Equatable, Sendable {
         exifIFD?.entry(for: ExifTag.lensModel)?.stringValue(endian: byteOrder)
     }
 
+    public var lensMake: String? {
+        exifIFD?.entry(for: ExifTag.lensMake)?.stringValue(endian: byteOrder)
+    }
+
+    public var apertureValue: (numerator: UInt32, denominator: UInt32)? {
+        exifIFD?.entry(for: ExifTag.apertureValue)?.rationalValue(endian: byteOrder)
+    }
+
+    public var shutterSpeedValue: (numerator: Int32, denominator: Int32)? {
+        exifIFD?.entry(for: ExifTag.shutterSpeedValue)?.srationalValue(endian: byteOrder)
+    }
+
+    public var pixelXDimension: UInt32? {
+        if let entry = exifIFD?.entry(for: ExifTag.pixelXDimension) {
+            return entry.uint32Value(endian: byteOrder)
+                ?? entry.uint16Value(endian: byteOrder).map { UInt32($0) }
+        }
+        return nil
+    }
+
+    public var pixelYDimension: UInt32? {
+        if let entry = exifIFD?.entry(for: ExifTag.pixelYDimension) {
+            return entry.uint32Value(endian: byteOrder)
+                ?? entry.uint16Value(endian: byteOrder).map { UInt32($0) }
+        }
+        return nil
+    }
+
+    public var focalLengthIn35mmFilm: UInt16? {
+        exifIFD?.entry(for: ExifTag.focalLengthIn35mmFilm)?.uint16Value(endian: byteOrder)
+    }
+
+    // MARK: - MakerNote
+
+    public var makerNote: MakerNoteData?
+
     // MARK: - GPS
 
     public var gpsLatitude: Double? {

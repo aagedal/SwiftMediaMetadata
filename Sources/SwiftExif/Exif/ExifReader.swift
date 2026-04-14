@@ -75,6 +75,15 @@ public struct ExifReader: Sendable {
             exifData.ifd1 = ifd1
         }
 
+        // Parse MakerNote from Exif sub-IFD
+        if let exifIFD = exifData.exifIFD {
+            exifData.makerNote = MakerNoteReader.parse(
+                from: exifIFD,
+                make: exifData.make,
+                byteOrder: endian
+            )
+        }
+
         return exifData
     }
 }

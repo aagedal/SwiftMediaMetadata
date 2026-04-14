@@ -40,6 +40,7 @@ public enum ExifTag: Sendable {
     public static let lightSource: UInt16           = 0x9208
     public static let flash: UInt16                 = 0x9209
     public static let focalLength: UInt16           = 0x920A
+    public static let makerNote: UInt16             = 0x927C
     public static let userComment: UInt16           = 0x9286
     public static let colorSpace: UInt16            = 0xA001
     public static let pixelXDimension: UInt16       = 0xA002
@@ -113,9 +114,11 @@ public enum ExifTag: Sendable {
         0x9003: "DateTimeOriginal", 0x9004: "DateTimeDigitized",
         0x9201: "ShutterSpeedValue", 0x9202: "ApertureValue",
         0x9204: "ExposureBiasValue", 0x9207: "MeteringMode",
-        0x9209: "Flash", 0x920A: "FocalLength", 0xA001: "ColorSpace",
+        0x9209: "Flash", 0x920A: "FocalLength", 0x927C: "MakerNote",
+        0xA001: "ColorSpace",
         0xA002: "PixelXDimension", 0xA003: "PixelYDimension",
-        0xA434: "LensModel", 0xA433: "LensMake",
+        0xA405: "FocalLengthIn35mmFilm",
+        0xA432: "LensSpecification", 0xA433: "LensMake", 0xA434: "LensModel",
     ]
 
     private static let gpsTagNames: [UInt16: String] = [
