@@ -140,7 +140,14 @@ public struct C2PAReader: Sendable {
         var generator = "unknown"
         var generatorInfo: C2PAGeneratorInfo?
 
-        if let info = cbor["claim_generator_info"] {
+        if let infoArray = cbor["claim_generator_info"]?.arrayValue, let first = infoArray.first {
+            // C2PA v2: claim_generator_info is an array of {name, version, icon} maps
+            let name = first["name"]?.textStringValue ?? "unknown"
+            let version = first["version"]?.textStringValue
+            generatorInfo = C2PAGeneratorInfo(name: name, version: version)
+            generator = version != nil ? "\(name) \(version!)" : name
+        } else if let info = cbor["claim_generator_info"], info.arrayValue == nil {
+            // Tolerate non-array claim_generator_info (single map)
             let name = info["name"]?.textStringValue ?? "unknown"
             let version = info["version"]?.textStringValue
             generatorInfo = C2PAGeneratorInfo(name: name, version: version)
@@ -275,7 +282,8 @@ public struct C2PAReader: Sendable {
     static func parseAssertionContent(label: String, box: JUMBFBox) throws -> C2PAAssertionContent {
         // Thumbnails are stored as embedded files (bfdb + bidb)
         if label.hasPrefix("c2pa.thumbnail.") {
-            let format = String(label.dropFirst("c2pa.thumbnail.claim.".count))
+            // Extract format suffix after the last dot (e.g. "jpeg" from "c2pa.thumbnail.claim.jpeg")
+            let format = label.split(separator: ".").last.map(String.init) ?? "unknown"
             if let bidb = box.contentBoxes.first(where: { $0.type == "bidb" }) {
                 return .thumbnail(bidb.data, format: format)
             }
@@ -400,7 +408,7 @@ public struct C2PAReader: Sendable {
                 // Validate that the size makes sense
                 let size = UInt32(bytes[i]) << 24 | UInt32(bytes[i + 1]) << 16
                     | UInt32(bytes[i + 2]) << 8 | UInt32(bytes[i + 3])
-                if size > 8 && Int(size) + i <= bytes.count + 8 {
+                if size > 8 && Int(size) + i <= bytes.count {
                     return i
                 }
             }

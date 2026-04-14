@@ -24,6 +24,7 @@ public enum CBORValue: Sendable {
     case null
     case undefined
     case float(Double)
+    case simple(UInt8)
 }
 
 // MARK: - Convenience Accessors

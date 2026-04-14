@@ -263,10 +263,11 @@ final class C2PAReaderTests: XCTestCase {
     }
 
     private func buildClaimV2(name: String, version: String) -> Data {
-        // {"claim_generator_info": {"name": name, "version": version}}
+        // {"claim_generator_info": [{"name": name, "version": version}]}
         var cbor = Data()
         cbor.append(cborMap(1))
         cbor.append(cborTextString("claim_generator_info"))
+        cbor.append(cborArray(1))
         cbor.append(cborMap(2))
         cbor.append(cborTextString("name"))
         cbor.append(cborTextString(name))

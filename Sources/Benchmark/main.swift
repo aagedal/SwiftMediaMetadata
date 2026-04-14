@@ -186,6 +186,223 @@ func benchmarkSwiftExifBatch(files: [URL]) -> Double {
     return elapsed
 }
 
+// MARK: - Read Benchmarks
+
+func benchmarkExiftoolRead(files: [URL]) -> Double {
+    let paths = files.map { $0.path }
+
+    let elapsed = measureTime("exiftool-read") {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: exiftoolPath)
+        process.arguments = ["-json", "-IPTC:All", "-XMP:All", "-EXIF:All"] + paths
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
+
+    return elapsed
+}
+
+func benchmarkSwiftExifRead(files: [URL]) -> Double {
+    let elapsed = measureTime("SwiftExif-read") {
+        for file in files {
+            let _ = try? ImageMetadata.read(from: file)
+        }
+    }
+
+    return elapsed
+}
+
+func benchmarkSwiftExifReadBatch(files: [URL]) -> Double {
+    let elapsed = measureTime("SwiftExif-read-batch") {
+        let _ = try? BatchProcessor.processFiles(files) { _ in }
+    }
+
+    return elapsed
+}
+
+// MARK: - C2PA Benchmark Helpers
+
+func buildBenchmarkCBORMap(_ pairs: [(String, Data)]) -> Data {
+    var cbor = Data()
+    let count = pairs.count
+    if count <= 23 {
+        cbor.append(0xA0 | UInt8(count))
+    } else {
+        cbor.append(contentsOf: [0xB8, UInt8(count)])
+    }
+    for (key, value) in pairs {
+        let utf8 = [UInt8](key.utf8)
+        if utf8.count <= 23 {
+            cbor.append(0x60 | UInt8(utf8.count))
+        } else {
+            cbor.append(contentsOf: [0x78, UInt8(utf8.count)])
+        }
+        cbor.append(contentsOf: utf8)
+        cbor.append(value)
+    }
+    return cbor
+}
+
+func buildBenchmarkCBORText(_ s: String) -> Data {
+    let utf8 = [UInt8](s.utf8)
+    var header: [UInt8]
+    if utf8.count <= 23 {
+        header = [0x60 | UInt8(utf8.count)]
+    } else if utf8.count <= 255 {
+        header = [0x78, UInt8(utf8.count)]
+    } else {
+        header = [0x79, UInt8(utf8.count >> 8), UInt8(utf8.count & 0xFF)]
+    }
+    return Data(header + utf8)
+}
+
+func buildBenchmarkCBORBytes(_ bytes: Data) -> Data {
+    let count = bytes.count
+    var header: [UInt8]
+    if count <= 23 {
+        header = [0x40 | UInt8(count)]
+    } else if count <= 255 {
+        header = [0x58, UInt8(count)]
+    } else {
+        header = [0x59, UInt8(count >> 8), UInt8(count & 0xFF)]
+    }
+    return Data(header) + bytes
+}
+
+func buildBenchmarkBox(type: String, payload: Data) -> Data {
+    let size = UInt32(8 + payload.count)
+    var data = Data(capacity: Int(size))
+    data.append(contentsOf: withUnsafeBytes(of: size.bigEndian) { Array($0) })
+    data.append(type.data(using: .ascii)!)
+    data.append(payload)
+    return data
+}
+
+func buildBenchmarkJUMD(prefix: String, label: String) -> Data {
+    var data = Data()
+    data.append(contentsOf: [UInt8](prefix.utf8))
+    data.append(contentsOf: [0x00, 0x11, 0x00, 0x10, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71])
+    data.append(0x03)
+    data.append(contentsOf: [UInt8](label.utf8))
+    data.append(0x00)
+    return data
+}
+
+func buildBenchmarkManifestStore(manifestCount: Int, assertionsPerManifest: Int) -> Data {
+    var storePayload = Data()
+    storePayload.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2pa", label: "c2pa")))
+
+    for m in 0..<manifestCount {
+        var manifestPayload = Data()
+        manifestPayload.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2ma", label: "urn:c2pa:bench-\(m)")))
+
+        // Claim
+        let claimCBOR = buildBenchmarkCBORMap([
+            ("claim_generator_info", Data([0x81]) + buildBenchmarkCBORMap([
+                ("name", buildBenchmarkCBORText("BenchTool")),
+                ("version", buildBenchmarkCBORText("1.0")),
+            ])),
+            ("instanceID", buildBenchmarkCBORText("xmp:iid:\(UUID().uuidString)")),
+            ("dc:format", buildBenchmarkCBORText("image/jpeg")),
+            ("dc:title", buildBenchmarkCBORText("Benchmark Asset \(m)")),
+            ("alg", buildBenchmarkCBORText("sha256")),
+        ])
+        var claimSuper = Data()
+        claimSuper.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2cl", label: "c2pa.claim")))
+        claimSuper.append(buildBenchmarkBox(type: "cbor", payload: claimCBOR))
+        manifestPayload.append(buildBenchmarkBox(type: "jumb", payload: claimSuper))
+
+        // Signature (COSE Sign1)
+        var sigCBOR = Data()
+        sigCBOR.append(0xD2) // tag 18
+        sigCBOR.append(Data([0x84])) // array(4)
+        var protectedMap = Data([0xA1]) // map(1)
+        protectedMap.append(Data([0x01])) // key 1
+        protectedMap.append(Data([0x26])) // -7 (ES256)
+        sigCBOR.append(buildBenchmarkCBORBytes(protectedMap))
+        sigCBOR.append(Data([0xA0])) // empty map
+        sigCBOR.append(Data([0xF6])) // null
+        sigCBOR.append(buildBenchmarkCBORBytes(Data(repeating: 0xFF, count: 64)))
+
+        var sigSuper = Data()
+        sigSuper.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2cs", label: "c2pa.signature")))
+        sigSuper.append(buildBenchmarkBox(type: "cbor", payload: sigCBOR))
+        manifestPayload.append(buildBenchmarkBox(type: "jumb", payload: sigSuper))
+
+        // Assertion store
+        var assertionStorePayload = Data()
+        assertionStorePayload.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2as", label: "c2pa.assertions")))
+
+        for a in 0..<assertionsPerManifest {
+            let actionsCBOR = buildBenchmarkCBORMap([
+                ("actions", Data([0x82]) + // array(2)
+                    buildBenchmarkCBORMap([
+                        ("action", buildBenchmarkCBORText("c2pa.created")),
+                        ("softwareAgent", buildBenchmarkCBORText("BenchTool 1.0")),
+                    ]) +
+                    buildBenchmarkCBORMap([
+                        ("action", buildBenchmarkCBORText("c2pa.edited")),
+                        ("softwareAgent", buildBenchmarkCBORText("BenchEditor 2.0")),
+                        ("description", buildBenchmarkCBORText("Benchmark edit operation \(a)")),
+                    ])
+                ),
+            ])
+
+            var assertionPayload = Data()
+            assertionPayload.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2as", label: "c2pa.actions")))
+            assertionPayload.append(buildBenchmarkBox(type: "cbor", payload: actionsCBOR))
+            assertionStorePayload.append(buildBenchmarkBox(type: "jumb", payload: assertionPayload))
+        }
+
+        // Add a hash.data assertion
+        let hashCBOR = buildBenchmarkCBORMap([
+            ("alg", buildBenchmarkCBORText("sha256")),
+            ("hash", buildBenchmarkCBORBytes(Data(repeating: 0xAA, count: 32))),
+            ("exclusions", Data([0x81]) + buildBenchmarkCBORMap([
+                ("start", Data([0x19, 0x03, 0xE8])), // uint 1000
+                ("length", Data([0x19, 0x07, 0xD0])), // uint 2000
+            ])),
+        ])
+        var hashPayload = Data()
+        hashPayload.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2as", label: "c2pa.hash.data")))
+        hashPayload.append(buildBenchmarkBox(type: "cbor", payload: hashCBOR))
+        assertionStorePayload.append(buildBenchmarkBox(type: "jumb", payload: hashPayload))
+
+        // Add an ingredient assertion
+        let ingredientCBOR = buildBenchmarkCBORMap([
+            ("dc:title", buildBenchmarkCBORText("source_\(m).jpg")),
+            ("dc:format", buildBenchmarkCBORText("image/jpeg")),
+            ("instanceID", buildBenchmarkCBORText("xmp:iid:\(UUID().uuidString)")),
+            ("relationship", buildBenchmarkCBORText("parentOf")),
+        ])
+        var ingredientPayload = Data()
+        ingredientPayload.append(buildBenchmarkBox(type: "jumd", payload: buildBenchmarkJUMD(prefix: "c2as", label: "c2pa.ingredient")))
+        ingredientPayload.append(buildBenchmarkBox(type: "cbor", payload: ingredientCBOR))
+        assertionStorePayload.append(buildBenchmarkBox(type: "jumb", payload: ingredientPayload))
+
+        manifestPayload.append(buildBenchmarkBox(type: "jumb", payload: assertionStorePayload))
+        storePayload.append(buildBenchmarkBox(type: "jumb", payload: manifestPayload))
+    }
+
+    var jumbfData = Data()
+    jumbfData.append(buildBenchmarkBox(type: "jumb", payload: storePayload))
+    return jumbfData
+}
+
+func benchmarkC2PAParsing(iterations: Int, manifestCount: Int, assertionsPerManifest: Int) -> (time: Double, dataSize: Int) {
+    let data = buildBenchmarkManifestStore(manifestCount: manifestCount, assertionsPerManifest: assertionsPerManifest)
+
+    let elapsed = measureTime("C2PA-parse") {
+        for _ in 0..<iterations {
+            let _ = try? C2PAReader.parseManifestStore(from: data)
+        }
+    }
+
+    return (elapsed, data.count)
+}
+
 // MARK: - Verification
 
 func verify(files: [URL]) {
@@ -253,9 +470,9 @@ let swiftBatchTime = benchmarkSwiftExifBatch(files: swiftBatchFiles)
 verify(files: swiftBatchFiles)
 print(String(format: "   %.3f s  (%.1f ms/file)\n", swiftBatchTime, swiftBatchTime / Double(fileCount) * 1000))
 
-// --- Summary ---
+// --- Write Summary ---
 print("┌──────────────────────────────────────────────────────────┐")
-print("│  Results                                                 │")
+print("│  Write Results                                           │")
 print("├──────────────────────────────────────────────────────────┤")
 print(String(format: "│  exiftool batch:        %7.3f s  (%5.1f ms/file)       │", exifBatchTime, exifBatchTime / Double(fileCount) * 1000))
 print(String(format: "│  exiftool sequential:   %7.3f s  (%5.1f ms/file)       │", exifSeqTime, exifSeqTime / Double(fileCount) * 1000))
@@ -271,4 +488,83 @@ print(String(format: "│  SwiftExif is %.0fx faster than exiftool (best vs wors
 
 let fairSpeedup = exifSeqTime / swiftSeqTime
 print(String(format: "│  Sequential comparison: %.0fx faster                      │", fairSpeedup))
+print("└──────────────────────────────────────────────────────────┘")
+
+// ==========================================================================
+// READ BENCHMARKS
+// ==========================================================================
+print()
+print("╔══════════════════════════════════════════════════════════╗")
+print("║       SwiftExif vs exiftool — Read Benchmark            ║")
+print("╚══════════════════════════════════════════════════════════╝")
+print()
+
+// --- exiftool read (batch JSON) ---
+print("5) exiftool — read batch (single invocation, \(fileCount) files)")
+let exifReadFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "exif_read", count: fileCount)
+let exifReadTime = benchmarkExiftoolRead(files: exifReadFiles)
+print(String(format: "   %.3f s  (%.1f ms/file)\n", exifReadTime, exifReadTime / Double(fileCount) * 1000))
+
+// --- SwiftExif read sequential ---
+print("6) SwiftExif — read sequential")
+let swiftReadSeqFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "swift_read_seq", count: fileCount)
+let swiftReadSeqTime = benchmarkSwiftExifRead(files: swiftReadSeqFiles)
+print(String(format: "   %.3f s  (%.1f ms/file)\n", swiftReadSeqTime, swiftReadSeqTime / Double(fileCount) * 1000))
+
+// --- SwiftExif read batch (concurrent) ---
+print("7) SwiftExif — read batch (concurrent, \(ProcessInfo.processInfo.activeProcessorCount) cores)")
+let swiftReadBatchFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "swift_read_batch", count: fileCount)
+let swiftReadBatchTime = benchmarkSwiftExifReadBatch(files: swiftReadBatchFiles)
+print(String(format: "   %.3f s  (%.1f ms/file)\n", swiftReadBatchTime, swiftReadBatchTime / Double(fileCount) * 1000))
+
+// --- Read Summary ---
+print("┌──────────────────────────────────────────────────────────┐")
+print("│  Read Results                                            │")
+print("├──────────────────────────────────────────────────────────┤")
+print(String(format: "│  exiftool batch:        %7.3f s  (%5.1f ms/file)       │", exifReadTime, exifReadTime / Double(fileCount) * 1000))
+print(String(format: "│  SwiftExif sequential:  %7.3f s  (%5.1f ms/file)       │", swiftReadSeqTime, swiftReadSeqTime / Double(fileCount) * 1000))
+print(String(format: "│  SwiftExif batch:       %7.3f s  (%5.1f ms/file)       │", swiftReadBatchTime, swiftReadBatchTime / Double(fileCount) * 1000))
+print("├──────────────────────────────────────────────────────────┤")
+
+let readFastest = min(swiftReadSeqTime, swiftReadBatchTime)
+let readSpeedup = exifReadTime / readFastest
+print(String(format: "│  SwiftExif is %.0fx faster than exiftool (read)          │", readSpeedup))
+print("└──────────────────────────────────────────────────────────┘")
+
+// ==========================================================================
+// C2PA PARSING BENCHMARK
+// ==========================================================================
+print()
+print("╔══════════════════════════════════════════════════════════╗")
+print("║       C2PA Manifest Store Parsing Benchmark             ║")
+print("╚══════════════════════════════════════════════════════════╝")
+print()
+
+let c2paIterations = 1000
+
+// Small: 1 manifest, 2 assertions
+print("8) C2PA parse — small (1 manifest, 2 action assertions + hash + ingredient)")
+let c2paSmall = benchmarkC2PAParsing(iterations: c2paIterations, manifestCount: 1, assertionsPerManifest: 2)
+print(String(format: "   %d iterations, %.1f KB payload", c2paIterations, Double(c2paSmall.dataSize) / 1024))
+print(String(format: "   %.3f s  (%.1f µs/parse)\n", c2paSmall.time, c2paSmall.time / Double(c2paIterations) * 1_000_000))
+
+// Medium: 3 manifests, 5 assertions each
+print("9) C2PA parse — medium (3 manifests, 5 action assertions + hash + ingredient each)")
+let c2paMedium = benchmarkC2PAParsing(iterations: c2paIterations, manifestCount: 3, assertionsPerManifest: 5)
+print(String(format: "   %d iterations, %.1f KB payload", c2paIterations, Double(c2paMedium.dataSize) / 1024))
+print(String(format: "   %.3f s  (%.1f µs/parse)\n", c2paMedium.time, c2paMedium.time / Double(c2paIterations) * 1_000_000))
+
+// Large: 10 manifests, 10 assertions each
+print("10) C2PA parse — large (10 manifests, 10 action assertions + hash + ingredient each)")
+let c2paLarge = benchmarkC2PAParsing(iterations: c2paIterations, manifestCount: 10, assertionsPerManifest: 10)
+print(String(format: "   %d iterations, %.1f KB payload", c2paIterations, Double(c2paLarge.dataSize) / 1024))
+print(String(format: "   %.3f s  (%.1f µs/parse)\n", c2paLarge.time, c2paLarge.time / Double(c2paIterations) * 1_000_000))
+
+// --- C2PA Summary ---
+print("┌──────────────────────────────────────────────────────────┐")
+print("│  C2PA Parsing Results (per parse)                        │")
+print("├──────────────────────────────────────────────────────────┤")
+print(String(format: "│  Small  (%.1f KB):  %7.1f µs                           │", Double(c2paSmall.dataSize) / 1024, c2paSmall.time / Double(c2paIterations) * 1_000_000))
+print(String(format: "│  Medium (%.1f KB):  %7.1f µs                           │", Double(c2paMedium.dataSize) / 1024, c2paMedium.time / Double(c2paIterations) * 1_000_000))
+print(String(format: "│  Large  (%.1f KB): %7.1f µs                           │", Double(c2paLarge.dataSize) / 1024, c2paLarge.time / Double(c2paIterations) * 1_000_000))
 print("└──────────────────────────────────────────────────────────┘")

@@ -158,12 +158,12 @@ public struct CBORDecoder: Sendable {
             let bits = try reader.readUInt64BigEndian()
             return .float(Double(bitPattern: bits))
         case 0...19:
-            // Simple value encoded directly
-            return .unsignedInt(UInt64(info))
+            // Simple value encoded directly (RFC 8949 §3.3)
+            return .simple(info)
         case 24:
-            // Simple value in following byte
+            // Simple value in following byte (RFC 8949 §3.3)
             let value = try reader.readUInt8()
-            return .unsignedInt(UInt64(value))
+            return .simple(value)
         default:
             throw MetadataError.invalidCBOR("Reserved CBOR simple value: \(info)")
         }
