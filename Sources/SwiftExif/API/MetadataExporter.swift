@@ -115,6 +115,32 @@ public struct MetadataExporter: Sendable {
             }
         }
 
+        // Numeric Exif fields (raw values for PrintConverter)
+        if let entry = exif.exifIFD?.entry(for: ExifTag.exposureProgram),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["ExposureProgram"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.meteringMode),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["MeteringMode"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.flash),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["Flash"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.colorSpace),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["ColorSpace"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.whiteBalance),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["WhiteBalance"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.sceneCaptureType),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["SceneCaptureType"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.exposureMode),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["ExposureMode"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.customRendered),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["CustomRendered"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.lightSource),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["LightSource"] = Int(v) }
+        if let entry = exif.exifIFD?.entry(for: ExifTag.sensingMethod),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["SensingMethod"] = Int(v) }
+        if let entry = exif.ifd0?.entry(for: ExifTag.resolutionUnit),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["ResolutionUnit"] = Int(v) }
+        if let entry = exif.ifd0?.entry(for: ExifTag.compression),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["Compression"] = Int(v) }
+
         if let lat = exif.gpsLatitude { dict["GPSLatitude"] = lat }
         if let lon = exif.gpsLongitude { dict["GPSLongitude"] = lon }
 

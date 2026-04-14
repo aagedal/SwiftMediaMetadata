@@ -92,7 +92,7 @@ public struct BatchProcessor: Sendable {
 
     // MARK: - Private
 
-    private final class Accumulator: @unchecked Sendable {
+    final class Accumulator: @unchecked Sendable {
         private let lock = NSLock()
         private(set) var succeeded = 0
         private(set) var failed: [(url: URL, error: any Error)] = []
@@ -110,7 +110,7 @@ public struct BatchProcessor: Sendable {
         }
     }
 
-    private static let supportedExtensions: Set<String> = [
+    static let supportedExtensions: Set<String> = [
         "jpg", "jpeg",
         "tif", "tiff",
         "dng", "cr2", "nef", "arw",
@@ -120,7 +120,7 @@ public struct BatchProcessor: Sendable {
         "heic", "heif",
     ]
 
-    private static func isSupportedFormat(_ url: URL) -> Bool {
+    static func isSupportedFormat(_ url: URL) -> Bool {
         supportedExtensions.contains(url.pathExtension.lowercased())
     }
 
