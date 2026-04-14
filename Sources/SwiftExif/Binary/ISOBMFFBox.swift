@@ -14,13 +14,20 @@ public struct ISOBMFFBox: Sendable, Equatable {
 }
 
 /// Serialize ISOBMFF boxes.
-public struct ISOBMFFBoxWriter {
+public struct ISOBMFFBoxWriter: Sendable {
 
-    /// Write a single box (size + type + payload).
+    /// Write a single box (size + type + payload). Uses extended size for payloads that exceed the 32-bit limit.
     public static func writeBox(_ writer: inout BinaryWriter, box: ISOBMFFBox) {
-        let boxSize = UInt32(8 + box.data.count)
-        writer.writeUInt32BigEndian(boxSize)
-        writer.writeString(box.type, encoding: .ascii)
+        let totalSize = 8 + box.data.count
+        if totalSize > UInt32.max {
+            // Extended size: size32 = 1 signals 64-bit size follows
+            writer.writeUInt32BigEndian(1)
+            writer.writeString(box.type, encoding: .ascii)
+            writer.writeUInt64BigEndian(UInt64(16 + box.data.count))
+        } else {
+            writer.writeUInt32BigEndian(UInt32(totalSize))
+            writer.writeString(box.type, encoding: .ascii)
+        }
         writer.writeBytes(box.data)
     }
 
@@ -33,14 +40,18 @@ public struct ISOBMFFBoxWriter {
 
     /// Serialize a sequence of boxes to Data.
     public static func serialize(boxes: [ISOBMFFBox]) -> Data {
-        var writer = BinaryWriter(capacity: boxes.reduce(0) { $0 + 8 + $1.data.count })
+        let capacity = boxes.reduce(0) { total, box in
+            let headerSize = (8 + box.data.count > UInt32.max) ? 16 : 8
+            return total + headerSize + box.data.count
+        }
+        var writer = BinaryWriter(capacity: capacity)
         writeBoxes(&writer, boxes: boxes)
         return writer.data
     }
 }
 
 /// Parse ISOBMFF box sequences.
-public struct ISOBMFFBoxReader {
+public struct ISOBMFFBoxReader: Sendable {
 
     /// Parse a flat sequence of top-level boxes from the given data.
     public static func parseBoxes(from data: Data) throws -> [ISOBMFFBox] {

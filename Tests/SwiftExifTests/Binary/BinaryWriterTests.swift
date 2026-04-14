@@ -149,27 +149,52 @@ final class BinaryWriterTests: XCTestCase {
 
     // MARK: - Patching
 
-    func testPatchUInt16BigEndian() {
+    func testPatchUInt16BigEndian() throws {
         var writer = BinaryWriter()
         writer.writeUInt16BigEndian(0x0000) // placeholder
         writer.writeUInt16BigEndian(0x1234)
-        writer.patchUInt16BigEndian(0xABCD, at: 0)
+        try writer.patchUInt16BigEndian(0xABCD, at: 0)
         XCTAssertEqual(writer.data[0], 0xAB)
         XCTAssertEqual(writer.data[1], 0xCD)
     }
 
-    func testPatchUInt32BigEndian() {
+    func testPatchUInt32BigEndian() throws {
         var writer = BinaryWriter()
         writer.writeUInt32BigEndian(0x00000000) // placeholder
-        writer.patchUInt32BigEndian(0xDEADBEEF, at: 0)
+        try writer.patchUInt32BigEndian(0xDEADBEEF, at: 0)
         XCTAssertEqual(writer.data, Data([0xDE, 0xAD, 0xBE, 0xEF]))
     }
 
-    func testPatchUInt32LittleEndian() {
+    func testPatchUInt32LittleEndian() throws {
         var writer = BinaryWriter()
         writer.writeUInt32LittleEndian(0x00000000)
-        writer.patchUInt32LittleEndian(0xDEADBEEF, at: 0)
+        try writer.patchUInt32LittleEndian(0xDEADBEEF, at: 0)
         XCTAssertEqual(writer.data, Data([0xEF, 0xBE, 0xAD, 0xDE]))
+    }
+
+    func testPatchUInt16OutOfBoundsThrows() {
+        var writer = BinaryWriter()
+        writer.writeUInt8(0x01) // only 1 byte, need 2
+        XCTAssertThrowsError(try writer.patchUInt16BigEndian(0xABCD, at: 0))
+    }
+
+    func testPatchUInt32OutOfBoundsThrows() {
+        var writer = BinaryWriter()
+        writer.writeUInt16BigEndian(0x0102) // only 2 bytes, need 4
+        XCTAssertThrowsError(try writer.patchUInt32BigEndian(0xDEADBEEF, at: 0))
+        XCTAssertThrowsError(try writer.patchUInt32LittleEndian(0xDEADBEEF, at: 0))
+    }
+
+    func testPatchNegativeOffsetThrows() {
+        var writer = BinaryWriter()
+        writer.writeUInt32BigEndian(0x00000000)
+        XCTAssertThrowsError(try writer.patchUInt32BigEndian(0xDEADBEEF, at: -1))
+        XCTAssertThrowsError(try writer.patchUInt16BigEndian(0xABCD, at: -1))
+    }
+
+    func testPatchEmptyWriterThrows() {
+        var writer = BinaryWriter()
+        XCTAssertThrowsError(try writer.patchUInt32BigEndian(0xDEADBEEF, at: 0))
     }
 
     // MARK: - Count

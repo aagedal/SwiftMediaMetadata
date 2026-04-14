@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reconstructs a TIFF file from parsed components with updated metadata.
-public struct TIFFWriter {
+public struct TIFFWriter: Sendable {
 
     /// Metadata tag IDs that we manage (replaced during write).
     private static let metadataTagIDs: Set<UInt16> = [
@@ -190,7 +190,7 @@ public struct TIFFWriter {
                 var offsetReader = BinaryReader(data: data)
                 _ = try? offsetReader.seek(to: nextOffsetPosition)
                 if let currentValue = try? offsetReader.readUInt32(endian: endian), currentValue == 0xFFFFFFFF {
-                    writer.patchUInt32(UInt32(nextIFDStart), at: nextOffsetPosition, endian: endian)
+                    try? writer.patchUInt32(UInt32(nextIFDStart), at: nextOffsetPosition, endian: endian)
                 }
             }
 

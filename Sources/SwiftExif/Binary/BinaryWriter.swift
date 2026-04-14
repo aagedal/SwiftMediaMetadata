@@ -1,6 +1,6 @@
 import Foundation
 
-public struct BinaryWriter {
+public struct BinaryWriter: Sendable {
     public private(set) var data: Data
 
     public init(capacity: Int = 256) {
@@ -116,29 +116,38 @@ public struct BinaryWriter {
     // MARK: - Patching
 
     /// Overwrite bytes at a specific offset without changing the writer position.
-    public mutating func patchUInt16BigEndian(_ value: UInt16, at offset: Int) {
+    public mutating func patchUInt16BigEndian(_ value: UInt16, at offset: Int) throws {
+        guard offset >= 0 && offset + 2 <= data.count else {
+            throw MetadataError.unexpectedEndOfData
+        }
         data[offset] = UInt8(value >> 8)
         data[offset + 1] = UInt8(value & 0xFF)
     }
 
-    public mutating func patchUInt32BigEndian(_ value: UInt32, at offset: Int) {
+    public mutating func patchUInt32BigEndian(_ value: UInt32, at offset: Int) throws {
+        guard offset >= 0 && offset + 4 <= data.count else {
+            throw MetadataError.unexpectedEndOfData
+        }
         data[offset] = UInt8((value >> 24) & 0xFF)
         data[offset + 1] = UInt8((value >> 16) & 0xFF)
         data[offset + 2] = UInt8((value >> 8) & 0xFF)
         data[offset + 3] = UInt8(value & 0xFF)
     }
 
-    public mutating func patchUInt32LittleEndian(_ value: UInt32, at offset: Int) {
+    public mutating func patchUInt32LittleEndian(_ value: UInt32, at offset: Int) throws {
+        guard offset >= 0 && offset + 4 <= data.count else {
+            throw MetadataError.unexpectedEndOfData
+        }
         data[offset] = UInt8(value & 0xFF)
         data[offset + 1] = UInt8((value >> 8) & 0xFF)
         data[offset + 2] = UInt8((value >> 16) & 0xFF)
         data[offset + 3] = UInt8((value >> 24) & 0xFF)
     }
 
-    public mutating func patchUInt32(_ value: UInt32, at offset: Int, endian: ByteOrder) {
+    public mutating func patchUInt32(_ value: UInt32, at offset: Int, endian: ByteOrder) throws {
         switch endian {
-        case .bigEndian: patchUInt32BigEndian(value, at: offset)
-        case .littleEndian: patchUInt32LittleEndian(value, at: offset)
+        case .bigEndian: try patchUInt32BigEndian(value, at: offset)
+        case .littleEndian: try patchUInt32LittleEndian(value, at: offset)
         }
     }
 }
