@@ -145,13 +145,13 @@ public struct C2PAReader: Sendable {
             let name = first["name"]?.textStringValue ?? "unknown"
             let version = first["version"]?.textStringValue
             generatorInfo = C2PAGeneratorInfo(name: name, version: version)
-            generator = version != nil ? "\(name) \(version!)" : name
+            generator = version.map { "\(name) \($0)" } ?? name
         } else if let info = cbor["claim_generator_info"], info.arrayValue == nil {
             // Tolerate non-array claim_generator_info (single map)
             let name = info["name"]?.textStringValue ?? "unknown"
             let version = info["version"]?.textStringValue
             generatorInfo = C2PAGeneratorInfo(name: name, version: version)
-            generator = version != nil ? "\(name) \(version!)" : name
+            generator = version.map { "\(name) \($0)" } ?? name
         } else if let gen = cbor["claim_generator"]?.textStringValue {
             generator = gen
         }

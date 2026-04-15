@@ -34,8 +34,7 @@ public struct MetadataExporter: Sendable {
         xml += "<rdf:Description>\n"
 
         let dict = buildDictionary(metadata)
-        for key in dict.keys.sorted() {
-            let value = dict[key]!
+        for (key, value) in dict.sorted(by: { $0.key < $1.key }) {
             if let array = value as? [String] {
                 xml += "  <\(escapeXMLTag(key))>\n"
                 for item in array {

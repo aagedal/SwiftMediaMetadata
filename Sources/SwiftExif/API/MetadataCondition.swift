@@ -1,5 +1,21 @@
 import Foundation
 
+/// Thread-safe cache for compiled regular expressions.
+private final class RegexCache: @unchecked Sendable {
+    static let shared = RegexCache()
+    private let lock = NSLock()
+    private var cache: [String: NSRegularExpression] = [:]
+
+    func regex(for pattern: String) -> NSRegularExpression? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache[pattern] { return cached }
+        guard let compiled = try? NSRegularExpression(pattern: pattern) else { return nil }
+        cache[pattern] = compiled
+        return compiled
+    }
+}
+
 /// A condition for filtering metadata, equivalent to ExifTool's `-if` flag.
 /// Conditions are evaluated against the flattened metadata dictionary from `MetadataExporter.buildDictionary`.
 public indirect enum MetadataCondition: Sendable {
@@ -68,7 +84,7 @@ public indirect enum MetadataCondition: Sendable {
 
         case .matches(let field, let pattern):
             guard let str = stringValue(for: field, in: dict) else { return false }
-            return (try? NSRegularExpression(pattern: pattern))
+            return RegexCache.shared.regex(for: pattern)
                 .map { $0.firstMatch(in: str, range: NSRange(str.startIndex..., in: str)) != nil }
                 ?? false
 
@@ -130,38 +146,13 @@ extension BatchProcessor {
         concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
         transform: @escaping MetadataTransform
     ) throws -> BatchResult {
-        let start = Date()
-        let accumulator = Accumulator()
-
-        let semaphore = DispatchSemaphore(value: max(1, concurrency))
-        let group = DispatchGroup()
-
-        for url in urls {
-            group.enter()
-            semaphore.wait()
-
-            DispatchQueue.global(qos: .userInitiated).async {
-                defer {
-                    semaphore.signal()
-                    group.leave()
-                }
-
-                do {
-                    var metadata = try ImageMetadata.read(from: url)
-                    guard condition.matches(metadata) else { return }
-                    try transform(&metadata)
-                    try metadata.write(to: url)
-                    accumulator.recordSuccess()
-                } catch {
-                    accumulator.recordFailure(url: url, error: error)
-                }
-            }
+        runBatch(urls, concurrency: concurrency) { url in
+            var metadata = try ImageMetadata.read(from: url)
+            guard condition.matches(metadata) else { return false }
+            try transform(&metadata)
+            try metadata.write(to: url)
+            return true
         }
-
-        group.wait()
-
-        let elapsed = Date().timeIntervalSince(start)
-        return BatchResult(succeeded: accumulator.succeeded, failed: accumulator.failed, totalTime: elapsed)
     }
 
     /// Apply a transformation to directory files matching a condition.
@@ -172,23 +163,37 @@ extension BatchProcessor {
         concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
         transform: @escaping MetadataTransform
     ) throws -> BatchResult {
-        let fm = FileManager.default
-
-        var urls: [URL] = []
-
-        if recursive {
-            if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
-                for case let fileURL as URL in enumerator {
-                    if isSupportedFormat(fileURL) {
-                        urls.append(fileURL)
-                    }
-                }
-            }
-        } else {
-            let contents = try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
-            urls = contents.filter { isSupportedFormat($0) }
-        }
-
+        let urls = try enumerateFiles(in: url, recursive: recursive)
         return try processFiles(urls, where: condition, concurrency: concurrency, transform: transform)
+    }
+
+    // MARK: - Async Conditional Processing
+
+    /// Apply a transformation only to files whose metadata matches the condition, using structured concurrency.
+    public static func processFiles(
+        _ urls: [URL],
+        where condition: MetadataCondition,
+        concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
+        transform: @escaping MetadataTransform
+    ) async -> BatchResult {
+        await runBatchAsync(urls, concurrency: concurrency) { url in
+            var metadata = try ImageMetadata.read(from: url)
+            guard condition.matches(metadata) else { return false }
+            try transform(&metadata)
+            try metadata.write(to: url)
+            return true
+        }
+    }
+
+    /// Apply a transformation to directory files matching a condition, using structured concurrency.
+    public static func processDirectory(
+        at url: URL,
+        where condition: MetadataCondition,
+        recursive: Bool = false,
+        concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
+        transform: @escaping MetadataTransform
+    ) async throws -> BatchResult {
+        let urls = try enumerateFiles(in: url, recursive: recursive)
+        return await processFiles(urls, where: condition, concurrency: concurrency, transform: transform)
     }
 }

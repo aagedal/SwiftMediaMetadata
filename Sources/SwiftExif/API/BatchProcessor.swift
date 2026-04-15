@@ -26,30 +26,14 @@ public struct BatchProcessor: Sendable {
         try metadata.write(to: url)
     }
 
-    /// Apply a transformation to all JPEG files in a directory.
+    /// Apply a transformation to all supported files in a directory.
     public static func processDirectory(
         at url: URL,
         recursive: Bool = false,
         concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
         transform: @escaping MetadataTransform
     ) throws -> BatchResult {
-        let fm = FileManager.default
-
-        var urls: [URL] = []
-
-        if recursive {
-            if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
-                for case let fileURL as URL in enumerator {
-                    if isSupportedFormat(fileURL) {
-                        urls.append(fileURL)
-                    }
-                }
-            }
-        } else {
-            let contents = try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
-            urls = contents.filter { isSupportedFormat($0) }
-        }
-
+        let urls = try enumerateFiles(in: url, recursive: recursive)
         return try processFiles(urls, concurrency: concurrency, transform: transform)
     }
 
@@ -59,6 +43,22 @@ public struct BatchProcessor: Sendable {
         concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
         transform: @escaping MetadataTransform
     ) throws -> BatchResult {
+        runBatch(urls, concurrency: concurrency) { url in
+            try process(file: url, transform: transform)
+            return true
+        }
+    }
+
+    // MARK: - Internal Helpers
+
+    /// Run a batch operation over URLs with bounded concurrency.
+    /// The `operation` closure returns `true` if the file was processed (counted as success),
+    /// `false` if skipped (not counted), or throws on failure.
+    internal static func runBatch(
+        _ urls: [URL],
+        concurrency: Int,
+        operation: @escaping @Sendable (URL) throws -> Bool
+    ) -> BatchResult {
         let start = Date()
         let accumulator = Accumulator()
 
@@ -76,8 +76,9 @@ public struct BatchProcessor: Sendable {
                 }
 
                 do {
-                    try process(file: url, transform: transform)
-                    accumulator.recordSuccess()
+                    if try operation(url) {
+                        accumulator.recordSuccess()
+                    }
                 } catch {
                     accumulator.recordFailure(url: url, error: error)
                 }
@@ -88,6 +89,25 @@ public struct BatchProcessor: Sendable {
 
         let elapsed = Date().timeIntervalSince(start)
         return BatchResult(succeeded: accumulator.succeeded, failed: accumulator.failed, totalTime: elapsed)
+    }
+
+    /// Enumerate supported image files in a directory.
+    internal static func enumerateFiles(in url: URL, recursive: Bool) throws -> [URL] {
+        let fm = FileManager.default
+        if recursive {
+            var urls: [URL] = []
+            if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
+                for case let fileURL as URL in enumerator {
+                    if isSupportedFormat(fileURL) {
+                        urls.append(fileURL)
+                    }
+                }
+            }
+            return urls
+        } else {
+            return try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+                .filter { isSupportedFormat($0) }
+        }
     }
 
     // MARK: - Private
@@ -122,6 +142,87 @@ public struct BatchProcessor: Sendable {
 
     static func isSupportedFormat(_ url: URL) -> Bool {
         supportedExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    // MARK: - Async API (Swift Concurrency)
+
+    /// Apply a transformation to a list of files using structured concurrency.
+    public static func processFiles(
+        _ urls: [URL],
+        concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
+        transform: @escaping MetadataTransform
+    ) async -> BatchResult {
+        await runBatchAsync(urls, concurrency: concurrency) { url in
+            try process(file: url, transform: transform)
+            return true
+        }
+    }
+
+    /// Apply a transformation to all supported files in a directory using structured concurrency.
+    public static func processDirectory(
+        at url: URL,
+        recursive: Bool = false,
+        concurrency: Int = ProcessInfo.processInfo.activeProcessorCount,
+        transform: @escaping MetadataTransform
+    ) async throws -> BatchResult {
+        let urls = try enumerateFiles(in: url, recursive: recursive)
+        return await processFiles(urls, concurrency: concurrency, transform: transform)
+    }
+
+    /// Run a batch operation with bounded concurrency using TaskGroup.
+    internal static func runBatchAsync(
+        _ urls: [URL],
+        concurrency: Int,
+        operation: @escaping @Sendable (URL) throws -> Bool
+    ) async -> BatchResult {
+        let start = Date()
+        let limit = max(1, concurrency)
+
+        return await withTaskGroup(of: (URL, Result<Bool, any Error>).self) { group in
+            var succeeded = 0
+            var failed: [(url: URL, error: any Error)] = []
+            var iterator = urls.makeIterator()
+
+            // Seed initial batch up to concurrency limit
+            for _ in 0..<min(limit, urls.count) {
+                guard let url = iterator.next() else { break }
+                group.addTask {
+                    do {
+                        let result = try operation(url)
+                        return (url, .success(result))
+                    } catch {
+                        return (url, .failure(error))
+                    }
+                }
+            }
+
+            // As each task completes, collect result and enqueue next
+            for await (url, result) in group {
+                switch result {
+                case .success(let processed):
+                    if processed { succeeded += 1 }
+                case .failure(let error):
+                    failed.append((url: url, error: error))
+                }
+
+                if let nextURL = iterator.next() {
+                    group.addTask {
+                        do {
+                            let result = try operation(nextURL)
+                            return (nextURL, .success(result))
+                        } catch {
+                            return (nextURL, .failure(error))
+                        }
+                    }
+                }
+            }
+
+            return BatchResult(
+                succeeded: succeeded,
+                failed: failed,
+                totalTime: Date().timeIntervalSince(start)
+            )
+        }
     }
 
 }
