@@ -39,6 +39,14 @@ public struct FormatDetector: Sendable {
             return .webp
         }
 
+        // Fujifilm RAF: starts with "FUJIFILMCCD-RAW"
+        if data.count >= 16 {
+            let rafMagic = "FUJIFILMCCD-RAW"
+            if let prefix = String(data: data.prefix(15), encoding: .ascii), prefix == rafMagic {
+                return .raw(.raf)
+            }
+        }
+
         // AVIF/HEIF: check for ftyp box at offset 4
         if bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70 {
             // Read brand (4 bytes at offset 8)
@@ -58,6 +66,14 @@ public struct FormatDetector: Sendable {
         // TIFF-based formats (must check more specific formats first)
         if isTIFFMagic(bytes) {
             return detectTIFFVariant(data)
+        }
+
+        // RW2 (Panasonic): TIFF-like but uses version 0x0055 instead of 0x002A
+        if data.count >= 4 {
+            let isRW2LE = bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x55 && bytes[3] == 0x00
+            if isRW2LE {
+                return .raw(.rw2)
+            }
         }
 
         return nil
@@ -80,6 +96,14 @@ public struct FormatDetector: Sendable {
             return .raw(.arw)
         case "cr3":
             return .raw(.cr3)
+        case "raf":
+            return .raw(.raf)
+        case "rw2":
+            return .raw(.rw2)
+        case "orf":
+            return .raw(.orf)
+        case "pef":
+            return .raw(.pef)
         case "jxl":
             return .jpegXL
         case "png":
@@ -128,7 +152,7 @@ public struct FormatDetector: Sendable {
     }
 
     private static func detectRAWFromIFD(_ data: Data) -> ImageFormat? {
-        // Quick scan for DNG: look for DNGVersion tag (0xC612) in IFD0
+        // Quick scan IFD0 tags for format-specific indicators
         guard data.count >= 16 else { return nil }
 
         var reader = BinaryReader(data: data)
@@ -144,15 +168,45 @@ public struct FormatDetector: Sendable {
 
             // Scan tag IDs (first 2 bytes of each 12-byte entry)
             let maxEntries = min(Int(entryCount), (data.count - ifdOffset - 2) / 12)
+            var makeString: String?
+
             for i in 0..<maxEntries {
                 let entryOffset = ifdOffset + 2 + (i * 12)
-                guard entryOffset + 2 <= data.count else { break }
+                guard entryOffset + 12 <= data.count else { break }
                 try reader.seek(to: entryOffset)
                 let tag = try reader.readUInt16(endian: endian)
 
                 // DNGVersion tag
                 if tag == 0xC612 {
                     return .raw(.dng)
+                }
+
+                // Read Make tag (0x010F) to help distinguish formats
+                if tag == 0x010F {
+                    let type = try reader.readUInt16(endian: endian)
+                    let count = try reader.readUInt32(endian: endian)
+                    if type == 2 { // ASCII
+                        let valueOffset: Int
+                        if count <= 4 {
+                            valueOffset = entryOffset + 8
+                        } else {
+                            valueOffset = Int(try reader.readUInt32(endian: endian))
+                        }
+                        if valueOffset + Int(count) <= data.count {
+                            let strData = data[data.startIndex + valueOffset ..< data.startIndex + valueOffset + Int(count)]
+                            makeString = String(data: strData, encoding: .ascii)?.trimmingCharacters(in: .controlCharacters)
+                        }
+                    }
+                }
+            }
+
+            // Use Make to distinguish ORF (Olympus) and PEF (Pentax)
+            if let make = makeString?.uppercased() {
+                if make.contains("OLYMPUS") {
+                    return .raw(.orf)
+                }
+                if make.contains("PENTAX") || make.contains("RICOH") {
+                    return .raw(.pef)
                 }
             }
         } catch {

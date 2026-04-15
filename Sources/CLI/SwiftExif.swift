@@ -9,6 +9,7 @@ struct SwiftExifCLI: ParsableCommand {
         subcommands: [
             ReadCommand.self,
             WriteCommand.self,
+            WriteVideoCommand.self,
             StripCommand.self,
             CopyCommand.self,
             DiffCommand.self,

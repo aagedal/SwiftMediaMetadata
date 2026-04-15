@@ -60,6 +60,8 @@ public struct ImageMetadata: Sendable {
             return try readJPEG(from: data)
         case .raw(.cr3):
             return try readCR3(from: data)
+        case .raw(.raf), .raw(.rw2):
+            return try readRAW(from: data, format: format)
         case .tiff, .raw:
             return try readTIFF(from: data, format: format)
         case .jpegXL:
@@ -1018,6 +1020,24 @@ public struct ImageMetadata: Sendable {
         xmp = try TIFFFileParser.extractXMP(from: tiffFile)
 
         // Extract ICC profile (tag 0x8773)
+        let iccProfile = TIFFFileParser.extractICCProfile(from: tiffFile)
+
+        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)
+    }
+
+    private static func readRAW(from data: Data, format: ImageFormat) throws -> ImageMetadata {
+        guard case .raw(let rawFormat) = format else {
+            throw MetadataError.invalidRAW("Expected RAW format")
+        }
+        let tiffFile = try RAWFileParser.parse(data, format: rawFormat)
+
+        var iptc = IPTCData()
+        var exif: ExifData?
+        var xmp: XMPData?
+
+        exif = try TIFFFileParser.extractExif(from: tiffFile, data: tiffFile.rawData)
+        iptc = try TIFFFileParser.extractIPTC(from: tiffFile)
+        xmp = try TIFFFileParser.extractXMP(from: tiffFile)
         let iccProfile = TIFFFileParser.extractICCProfile(from: tiffFile)
 
         return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)

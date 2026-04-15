@@ -425,6 +425,69 @@ enum TestFixtures {
         return writer.data
     }
 
+    // MARK: - Minimal RAF (Fujifilm)
+
+    /// Generate a minimal Fujifilm RAF file with embedded JPEG containing Exif.
+    static func minimalRAF(make: String = "FUJIFILM", model: String = "X-T5") -> Data {
+        var writer = BinaryWriter(capacity: 512)
+
+        // RAF header: "FUJIFILMCCD-RAW " (16 bytes, space-padded)
+        writer.writeString("FUJIFILMCCD-RAW ", encoding: .ascii)
+
+        // Format version (4 bytes)
+        writer.writeString("0201", encoding: .ascii)
+
+        // Camera model ID (8 bytes, padded)
+        var modelID = Data(model.prefix(8).utf8)
+        while modelID.count < 8 { modelID.append(0x00) }
+        writer.writeBytes(modelID)
+
+        // Camera model string (32 bytes, padded)
+        var modelStr = Data(model.utf8)
+        while modelStr.count < 32 { modelStr.append(0x00) }
+        writer.writeBytes(modelStr)
+
+        // Padding to offset 84 (currently at 60, need 24 more bytes)
+        writer.writeBytes(Data(repeating: 0, count: 24))
+
+        // Build the embedded JPEG with Exif data
+        let exifAPP1 = exifAPP1Data(byteOrder: .bigEndian, ifd0Entries: [
+            (tag: ExifTag.make, stringValue: make),
+            (tag: ExifTag.model, stringValue: model),
+        ])
+        let embeddedJPEG = jpegWithSegment(marker: .app1, data: exifAPP1)
+
+        // Write JPEG offset and length at offsets 84-91 (big-endian)
+        let jpegOffset = UInt32(108) // Start of JPEG data (after header fields)
+        let jpegLength = UInt32(embeddedJPEG.count)
+        writer.writeUInt32BigEndian(jpegOffset)
+        writer.writeUInt32BigEndian(jpegLength)
+
+        // CFA header offset/length + CFA offset/length (placeholder zeros)
+        writer.writeBytes(Data(repeating: 0, count: 16)) // offsets 92-107
+
+        // Embedded JPEG at offset 108
+        writer.writeBytes(embeddedJPEG)
+
+        return writer.data
+    }
+
+    // MARK: - Minimal RW2 (Panasonic)
+
+    /// Generate a minimal Panasonic RW2 file. RW2 is TIFF-like with version 0x55.
+    static func minimalRW2(make: String = "Panasonic", model: String = "DC-GH6") -> Data {
+        // Build a standard TIFF, then patch version byte to 0x55
+        let makeBytes = Data(make.utf8) + Data([0x00])
+        let modelBytes = Data(model.utf8) + Data([0x00])
+        var tiffData = minimalTIFF(byteOrder: .littleEndian, entries: [
+            (tag: ExifTag.make, type: .ascii, count: UInt32(makeBytes.count), valueData: makeBytes),
+            (tag: ExifTag.model, type: .ascii, count: UInt32(modelBytes.count), valueData: modelBytes),
+        ])
+        // Patch version from 0x2A to 0x55 (offset 2 for little-endian)
+        tiffData[tiffData.startIndex + 2] = 0x55
+        return tiffData
+    }
+
     // MARK: - Raw IPTC Binary Data
 
     /// Generate raw IPTC binary data for testing the reader directly.

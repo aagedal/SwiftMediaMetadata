@@ -22,11 +22,11 @@ public struct ISOBMFFBoxWriter: Sendable {
         if totalSize > UInt32.max {
             // Extended size: size32 = 1 signals 64-bit size follows
             writer.writeUInt32BigEndian(1)
-            writer.writeString(box.type, encoding: .ascii)
+            writer.writeString(box.type, encoding: .isoLatin1)
             writer.writeUInt64BigEndian(UInt64(16 + box.data.count))
         } else {
             writer.writeUInt32BigEndian(UInt32(totalSize))
-            writer.writeString(box.type, encoding: .ascii)
+            writer.writeString(box.type, encoding: .isoLatin1)
         }
         writer.writeBytes(box.data)
     }
