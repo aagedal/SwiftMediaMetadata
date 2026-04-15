@@ -361,6 +361,11 @@ Sources/SwiftExif/
 └── Video/          # MP4/MOV/M4V metadata parser
 ```
 
+## Acknowledgements
+
+- **GeoNames** (https://www.geonames.org/) — The reverse geocoding database is built from GeoNames geographical data, licensed under [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/). The embedded city database contains ~33,500 cities with population >= 15,000.
+- **ExifTool** by Phil Harvey (https://exiftool.org/) — The reference implementation for image metadata processing. SwiftExif aims to provide equivalent functionality as a native Swift library.
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE) for details.

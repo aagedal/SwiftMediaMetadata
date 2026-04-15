@@ -20,6 +20,9 @@ struct GeotagCommand: ParsableCommand {
     @Option(name: .long, help: "Timezone offset in hours (e.g. +2, -5) to adjust camera time to UTC.")
     var tzOffset: Double = 0
 
+    @Flag(name: .long, help: "Auto-fill IPTC location fields via reverse geocoding after geotagging.")
+    var fillLocation = false
+
     func run() throws {
         let gpxURL = URL(fileURLWithPath: gpx)
         let track = try GPXParser.parse(from: gpxURL)
@@ -42,9 +45,16 @@ struct GeotagCommand: ParsableCommand {
                 let applied = metadata.applyGPX(track, maxOffset: maxOffset, timeZoneOffset: tzOffset * 3600)
 
                 if applied {
+                    if fillLocation {
+                        metadata.fillLocationFromGPS(overwrite: true)
+                    }
                     try metadata.write(to: url)
                     if let lat = metadata.exif?.gpsLatitude, let lon = metadata.exif?.gpsLongitude {
-                        print("  \(url.lastPathComponent): \(String(format: "%.6f", lat)), \(String(format: "%.6f", lon))")
+                        var line = "  \(url.lastPathComponent): \(String(format: "%.6f", lat)), \(String(format: "%.6f", lon))"
+                        if fillLocation, let city = metadata.iptc.city, let country = metadata.iptc.countryName {
+                            line += " — \(city), \(country)"
+                        }
+                        print(line)
                     }
                     tagged += 1
                 } else {

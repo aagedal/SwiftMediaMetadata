@@ -698,6 +698,77 @@ public struct ImageMetadata: Sendable {
         try writeSidecar(to: sidecarURL)
     }
 
+    // MARK: - Direct GPS Writing
+
+    /// Set GPS coordinates directly on the image.
+    /// - Parameters:
+    ///   - latitude: Latitude in decimal degrees (-90...90, positive = North).
+    ///   - longitude: Longitude in decimal degrees (-180...180, positive = East).
+    ///   - altitude: Altitude in meters above sea level. Negative values are below sea level.
+    ///   - timestamp: GPS fix timestamp. Defaults to current time.
+    public mutating func setGPS(
+        latitude: Double,
+        longitude: Double,
+        altitude: Double? = nil,
+        timestamp: Date = Date()
+    ) {
+        let trackpoint = GPXTrackpoint(
+            latitude: latitude,
+            longitude: longitude,
+            elevation: altitude,
+            timestamp: timestamp
+        )
+        let byteOrder = exif?.byteOrder ?? .bigEndian
+        if exif == nil { exif = ExifData(byteOrder: byteOrder) }
+        exif?.gpsIFD = GPXGeotagger.buildGPSIFD(from: trackpoint, byteOrder: byteOrder)
+    }
+
+    /// Remove all GPS data from the image.
+    public mutating func removeGPS() {
+        stripGPS()
+    }
+
+    /// Reverse-geocode the image's GPS coordinates and fill IPTC/XMP location fields.
+    /// - Parameters:
+    ///   - geocoder: The reverse geocoder to use. Defaults to the shared instance.
+    ///   - overwrite: If true, overwrites existing location fields. Default false.
+    /// - Returns: The resolved GeoLocation, or nil if no GPS data or no match found.
+    @discardableResult
+    public mutating func fillLocationFromGPS(
+        geocoder: ReverseGeocoder = .shared,
+        overwrite: Bool = false
+    ) -> GeoLocation? {
+        guard let lat = exif?.gpsLatitude, let lon = exif?.gpsLongitude else { return nil }
+        guard let location = geocoder.lookup(latitude: lat, longitude: lon) else { return nil }
+
+        if overwrite || iptc.city == nil {
+            iptc.city = location.city
+        }
+        if overwrite || iptc.provinceState == nil {
+            iptc.provinceState = location.region
+        }
+        if overwrite || iptc.countryName == nil {
+            iptc.countryName = location.country
+        }
+        if overwrite || iptc.countryCode == nil {
+            iptc.countryCode = location.countryCode
+        }
+
+        // Also sync to XMP
+        if xmp == nil { xmp = XMPData() }
+        if overwrite || xmp?.city == nil {
+            xmp?.city = location.city
+        }
+        if overwrite || xmp?.state == nil {
+            xmp?.state = location.region
+        }
+        if overwrite || xmp?.country == nil {
+            xmp?.country = location.country
+        }
+
+        return location
+    }
+
     // MARK: - GPX Geotagging
 
     /// Apply GPS coordinates from a GPX track by matching DateTimeOriginal.
