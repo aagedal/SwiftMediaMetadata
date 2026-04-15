@@ -177,6 +177,16 @@ public struct MetadataExporter: Sendable {
             dict["DateTimeDigitized"] = v
         }
 
+        // SubSecond time tags
+        if let v = exif.subSecTime { dict["SubSecTime"] = v }
+        if let v = exif.subSecTimeOriginal { dict["SubSecTimeOriginal"] = v }
+        if let v = exif.subSecTimeDigitized { dict["SubSecTimeDigitized"] = v }
+
+        // Timezone offset tags (EXIF 2.31+)
+        if let v = exif.offsetTime { dict["OffsetTime"] = v }
+        if let v = exif.offsetTimeOriginal { dict["OffsetTimeOriginal"] = v }
+        if let v = exif.offsetTimeDigitized { dict["OffsetTimeDigitized"] = v }
+
         // Image dimensions
         if let entry = exif.ifd0?.entry(for: ExifTag.imageWidth) {
             if let v = entry.uint32Value(endian: exif.byteOrder) { dict["ImageWidth"] = Int(v) }

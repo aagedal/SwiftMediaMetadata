@@ -98,6 +98,32 @@ public struct ExifData: Equatable, Sendable {
         exifIFD?.entry(for: ExifTag.focalLengthIn35mmFilm)?.uint16Value(endian: byteOrder)
     }
 
+    // MARK: - SubSecond & Timezone Tags
+
+    public var subSecTime: String? {
+        exifIFD?.entry(for: ExifTag.subSecTime)?.stringValue(endian: byteOrder)
+    }
+
+    public var subSecTimeOriginal: String? {
+        exifIFD?.entry(for: ExifTag.subSecTimeOriginal)?.stringValue(endian: byteOrder)
+    }
+
+    public var subSecTimeDigitized: String? {
+        exifIFD?.entry(for: ExifTag.subSecTimeDigitized)?.stringValue(endian: byteOrder)
+    }
+
+    public var offsetTime: String? {
+        exifIFD?.entry(for: ExifTag.offsetTime)?.stringValue(endian: byteOrder)
+    }
+
+    public var offsetTimeOriginal: String? {
+        exifIFD?.entry(for: ExifTag.offsetTimeOriginal)?.stringValue(endian: byteOrder)
+    }
+
+    public var offsetTimeDigitized: String? {
+        exifIFD?.entry(for: ExifTag.offsetTimeDigitized)?.stringValue(endian: byteOrder)
+    }
+
     // MARK: - MakerNote
 
     public var makerNote: MakerNoteData?

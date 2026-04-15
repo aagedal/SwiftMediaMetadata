@@ -71,6 +71,35 @@ public struct ImageMetadata: Sendable {
         }
     }
 
+    // MARK: - Write Options
+
+    /// Options controlling how metadata is written to disk.
+    public struct WriteOptions: Sendable {
+        /// Write to a temporary file then atomically rename (prevents corruption on crash).
+        /// Default: true.
+        public var atomic: Bool
+
+        /// Create a backup of the original file before overwriting (e.g. "photo.jpg_original").
+        /// Default: false.
+        public var createBackup: Bool
+
+        /// Suffix appended to the original filename for the backup (e.g. "_original").
+        /// Default: "_original".
+        public var backupSuffix: String
+
+        public init(atomic: Bool = true, createBackup: Bool = false, backupSuffix: String = "_original") {
+            self.atomic = atomic
+            self.createBackup = createBackup
+            self.backupSuffix = backupSuffix
+        }
+
+        /// Default options: atomic write, no backup.
+        public static let `default` = WriteOptions()
+
+        /// Safe options: atomic write with backup file creation.
+        public static let safe = WriteOptions(atomic: true, createBackup: true)
+    }
+
     // MARK: - Writing
 
     /// Write all metadata back to a new Data blob (preserving image data).
@@ -91,10 +120,51 @@ public struct ImageMetadata: Sendable {
         }
     }
 
-    /// Write metadata to a file URL.
+    /// Write metadata to a file URL with default options (atomic, no backup).
     public func write(to url: URL) throws {
+        try write(to: url, options: .default)
+    }
+
+    /// Write metadata to a file URL with the given options.
+    public func write(to url: URL, options: WriteOptions) throws {
         let data = try writeToData()
-        try data.write(to: url)
+        let fm = FileManager.default
+
+        // Create backup if requested and original file exists
+        if options.createBackup && fm.fileExists(atPath: url.path) {
+            let backupURL = Self.backupURL(for: url, suffix: options.backupSuffix)
+            // Remove existing backup to allow overwrite
+            try? fm.removeItem(at: backupURL)
+            try fm.copyItem(at: url, to: backupURL)
+        }
+
+        if options.atomic {
+            // Write to a temporary file in the same directory, then atomically rename
+            let dir = url.deletingLastPathComponent()
+            let tempURL = dir.appendingPathComponent(".swiftexif_tmp_\(UUID().uuidString)")
+            do {
+                try data.write(to: tempURL)
+                _ = try fm.replaceItemAt(url, withItemAt: tempURL)
+            } catch {
+                // Clean up temp file on failure
+                try? fm.removeItem(at: tempURL)
+                throw MetadataError.fileWriteError("Atomic write failed: \(error.localizedDescription)")
+            }
+        } else {
+            try data.write(to: url)
+        }
+    }
+
+    /// Get the backup URL for a given file URL.
+    public static func backupURL(for url: URL, suffix: String = "_original") -> URL {
+        let ext = url.pathExtension
+        let base = url.deletingPathExtension()
+        if ext.isEmpty {
+            return base.appendingPathExtension(suffix.trimmingCharacters(in: CharacterSet(charactersIn: ".")))
+        }
+        // "photo.jpg" → "photo.jpg_original"
+        return url.deletingLastPathComponent()
+            .appendingPathComponent(url.lastPathComponent + suffix)
     }
 
     // MARK: - Stripping
@@ -137,6 +207,110 @@ public struct ImageMetadata: Sendable {
     /// Remove the embedded ICC color profile.
     public mutating func stripICCProfile() {
         iccProfile = nil
+    }
+
+    // MARK: - Individual Tag Deletion
+
+    /// Remove a specific EXIF tag from IFD0.
+    /// - Returns: true if the tag was found and removed.
+    @discardableResult
+    public mutating func removeExifTag(_ tag: UInt16) -> Bool {
+        guard let ifd = exif?.ifd0, ifd.hasEntry(for: tag) else { return false }
+        exif?.ifd0 = ifd.removingEntry(for: tag)
+        return true
+    }
+
+    /// Remove a specific EXIF tag from the Exif sub-IFD.
+    /// - Returns: true if the tag was found and removed.
+    @discardableResult
+    public mutating func removeExifSubIFDTag(_ tag: UInt16) -> Bool {
+        guard let ifd = exif?.exifIFD, ifd.hasEntry(for: tag) else { return false }
+        exif?.exifIFD = ifd.removingEntry(for: tag)
+        return true
+    }
+
+    /// Remove a specific GPS tag from the GPS IFD.
+    /// - Returns: true if the tag was found and removed.
+    @discardableResult
+    public mutating func removeGPSTag(_ tag: UInt16) -> Bool {
+        guard let ifd = exif?.gpsIFD, ifd.hasEntry(for: tag) else { return false }
+        exif?.gpsIFD = ifd.removingEntry(for: tag)
+        return true
+    }
+
+    /// Remove a specific IPTC field.
+    /// - Returns: true if the field was found and removed.
+    @discardableResult
+    public mutating func removeIPTCTag(_ tag: IPTCTag) -> Bool {
+        let before = iptc.datasets.count
+        iptc.removeAll(for: tag)
+        return iptc.datasets.count < before
+    }
+
+    /// Remove a specific XMP property.
+    /// - Returns: true if the property was found and removed.
+    @discardableResult
+    public mutating func removeXMPProperty(namespace: String, property: String) -> Bool {
+        guard xmp?.value(namespace: namespace, property: property) != nil else { return false }
+        xmp?.removeValue(namespace: namespace, property: property)
+        return true
+    }
+
+    /// Remove a tag by its qualified name (e.g. "EXIF:Make", "IPTC:Headline", "XMP-dc:title").
+    /// Supports group prefixes: EXIF:, ExifIFD:, GPS:, IPTC:, XMP-prefix:
+    /// - Returns: true if the tag was found and removed.
+    @discardableResult
+    public mutating func removeTag(_ qualifiedName: String) -> Bool {
+        if qualifiedName.hasPrefix("EXIF:") {
+            let tagName = String(qualifiedName.dropFirst(5))
+            if let tagID = ExifTag.tagID(for: tagName, ifd: .ifd0) {
+                return removeExifTag(tagID)
+            }
+            // Also try exif sub-IFD
+            if let tagID = ExifTag.tagID(for: tagName, ifd: .exifIFD) {
+                return removeExifSubIFDTag(tagID)
+            }
+            return false
+        }
+
+        if qualifiedName.hasPrefix("ExifIFD:") {
+            let tagName = String(qualifiedName.dropFirst(8))
+            if let tagID = ExifTag.tagID(for: tagName, ifd: .exifIFD) {
+                return removeExifSubIFDTag(tagID)
+            }
+            return false
+        }
+
+        if qualifiedName.hasPrefix("GPS:") {
+            let tagName = String(qualifiedName.dropFirst(4))
+            if let tagID = ExifTag.tagID(for: tagName, ifd: .gpsIFD) {
+                return removeGPSTag(tagID)
+            }
+            return false
+        }
+
+        if qualifiedName.hasPrefix("IPTC:") {
+            let tagName = String(qualifiedName.dropFirst(5))
+            if let tag = IPTCTag.byName(tagName) {
+                return removeIPTCTag(tag)
+            }
+            return false
+        }
+
+        if qualifiedName.hasPrefix("XMP-") {
+            // Format: "XMP-prefix:property"
+            let rest = qualifiedName.dropFirst(4) // drop "XMP-"
+            if let colonIdx = rest.firstIndex(of: ":") {
+                let prefix = String(rest[rest.startIndex..<colonIdx])
+                let property = String(rest[rest.index(after: colonIdx)...])
+                if let namespace = XMPNamespace.namespace(for: prefix) {
+                    return removeXMPProperty(namespace: namespace, property: property)
+                }
+            }
+            return false
+        }
+
+        return false
     }
 
     // MARK: - Date Shifting
@@ -522,6 +696,7 @@ public struct ImageMetadata: Sendable {
     ///   - track: Parsed GPX track with timestamped points.
     ///   - maxOffset: Maximum time difference to accept in seconds. Default 60.
     ///   - timeZoneOffset: Camera timezone offset from UTC in seconds. Default 0.
+    ///     If 0, automatically reads OffsetTimeOriginal from EXIF (e.g. "+02:00") when available.
     /// - Returns: true if GPS was applied, false if no match found.
     @discardableResult
     public mutating func applyGPX(
@@ -530,17 +705,37 @@ public struct ImageMetadata: Sendable {
         timeZoneOffset: TimeInterval = 0
     ) -> Bool {
         guard let dateTimeOriginal = exif?.dateTimeOriginal else { return false }
+
+        // Auto-detect timezone from OffsetTimeOriginal if no explicit offset provided
+        var effectiveOffset = timeZoneOffset
+        if effectiveOffset == 0, let offsetStr = exif?.offsetTimeOriginal {
+            effectiveOffset = Self.parseTimezoneOffset(offsetStr) ?? 0
+        }
+
         guard let matched = GPXGeotagger.match(
             dateTimeOriginal: dateTimeOriginal,
             track: track,
             maxOffset: maxOffset,
-            timeZoneOffset: timeZoneOffset
+            timeZoneOffset: effectiveOffset
         ) else { return false }
 
         let byteOrder = exif?.byteOrder ?? .bigEndian
         if exif == nil { exif = ExifData(byteOrder: byteOrder) }
         exif?.gpsIFD = GPXGeotagger.buildGPSIFD(from: matched, byteOrder: byteOrder)
         return true
+    }
+
+    /// Parse an EXIF OffsetTime string (e.g. "+02:00", "-05:30") to seconds from UTC.
+    static func parseTimezoneOffset(_ offset: String) -> TimeInterval? {
+        let trimmed = offset.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 5 else { return nil }
+        let sign: Double = trimmed.hasPrefix("-") ? -1.0 : 1.0
+        let digits = trimmed.dropFirst() // drop +/-
+        let parts = digits.split(separator: ":")
+        guard parts.count == 2,
+              let hours = Double(parts[0]),
+              let minutes = Double(parts[1]) else { return nil }
+        return sign * (hours * 3600 + minutes * 60)
     }
 
     // MARK: - Format-Specific Writing

@@ -34,6 +34,11 @@ public enum XMPNamespace: Sendable {
         .writerEditor:                  (photoshop, "CaptionWriter"),
     ]
 
+    /// Reverse lookup: find namespace URI from prefix (e.g. "dc" → "http://purl.org/dc/elements/1.1/").
+    public static func namespace(for prefix: String) -> String? {
+        prefixes.first { $0.value == prefix }?.key
+    }
+
     /// Namespace prefix mappings for XMP serialization.
     public static let prefixes: [String: String] = [
         dc: "dc",

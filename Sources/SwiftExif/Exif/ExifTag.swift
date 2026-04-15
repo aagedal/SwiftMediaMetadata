@@ -55,6 +55,12 @@ public enum ExifTag: Sendable {
     public static let digitalZoomRatio: UInt16      = 0xA404
     public static let focalLengthIn35mmFilm: UInt16 = 0xA405
     public static let sceneCaptureType: UInt16      = 0xA406
+    public static let offsetTime: UInt16             = 0x9010  // UTC offset for DateTime
+    public static let offsetTimeOriginal: UInt16    = 0x9011  // UTC offset for DateTimeOriginal
+    public static let offsetTimeDigitized: UInt16   = 0x9012  // UTC offset for DateTimeDigitized
+    public static let subSecTime: UInt16            = 0x9290  // Fractional seconds for DateTime
+    public static let subSecTimeOriginal: UInt16    = 0x9291  // Fractional seconds for DateTimeOriginal
+    public static let subSecTimeDigitized: UInt16   = 0x9292  // Fractional seconds for DateTimeDigitized
     public static let lensModel: UInt16             = 0xA434
     public static let lensMake: UInt16              = 0xA433
     public static let lensSpecification: UInt16     = 0xA432
@@ -88,6 +94,19 @@ public enum ExifTag: Sendable {
 
     // MARK: - Name Lookup
 
+    /// Reverse lookup: find a tag ID by its name within a specific IFD.
+    public static func tagID(for name: String, ifd: IFDType = .ifd0) -> UInt16? {
+        switch ifd {
+        case .gpsIFD:
+            return gpsTagNames.first { $0.value == name }?.key
+        case .exifIFD:
+            return exifTagNames.first { $0.value == name }?.key
+                ?? ifd0TagNames.first { $0.value == name }?.key
+        default:
+            return ifd0TagNames.first { $0.value == name }?.key
+        }
+    }
+
     public static func name(for tag: UInt16, ifd: IFDType = .ifd0) -> String {
         switch ifd {
         case .gpsIFD:
@@ -112,9 +131,12 @@ public enum ExifTag: Sendable {
         0x829A: "ExposureTime", 0x829D: "FNumber", 0x8822: "ExposureProgram",
         0x8827: "ISOSpeedRatings", 0x9000: "ExifVersion",
         0x9003: "DateTimeOriginal", 0x9004: "DateTimeDigitized",
+        0x9010: "OffsetTime", 0x9011: "OffsetTimeOriginal", 0x9012: "OffsetTimeDigitized",
         0x9201: "ShutterSpeedValue", 0x9202: "ApertureValue",
         0x9204: "ExposureBiasValue", 0x9207: "MeteringMode",
         0x9209: "Flash", 0x920A: "FocalLength", 0x927C: "MakerNote",
+        0x9286: "UserComment",
+        0x9290: "SubSecTime", 0x9291: "SubSecTimeOriginal", 0x9292: "SubSecTimeDigitized",
         0xA001: "ColorSpace",
         0xA002: "PixelXDimension", 0xA003: "PixelYDimension",
         0xA405: "FocalLengthIn35mmFilm",

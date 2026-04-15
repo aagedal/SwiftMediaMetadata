@@ -108,6 +108,13 @@ public struct IPTCTag: Hashable, Comparable, CustomStringConvertible, Sendable {
     public static let writerEditor                   = IPTCTag(record: 2, dataSet: 122)
     public static let languageIdentifier             = IPTCTag(record: 2, dataSet: 135)
 
+    // MARK: - Name Lookup
+
+    /// Find an IPTC tag by its metadata name (e.g. "Headline", "By-line", "Keywords").
+    public static func byName(_ name: String) -> IPTCTag? {
+        metadata.first { $0.value.name == name }?.key
+    }
+
     // MARK: - Tag Metadata
 
     struct TagMetadata {

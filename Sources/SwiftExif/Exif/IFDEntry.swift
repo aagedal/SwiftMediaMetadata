@@ -118,4 +118,14 @@ public struct IFD: Equatable, Sendable {
     public subscript(tag: UInt16) -> IFDEntry? {
         entry(for: tag)
     }
+
+    /// Return a new IFD with the given tag removed.
+    public func removingEntry(for tag: UInt16) -> IFD {
+        IFD(entries: entries.filter { $0.tag != tag }, nextIFDOffset: nextIFDOffset)
+    }
+
+    /// Whether this IFD contains an entry for the given tag.
+    public func hasEntry(for tag: UInt16) -> Bool {
+        entries.contains { $0.tag == tag }
+    }
 }
