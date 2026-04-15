@@ -167,4 +167,24 @@ public struct XMPData: Equatable, Sendable {
             else { removeValue(namespace: XMPNamespace.iptcCore, property: "AltTextAccessibility") }
         }
     }
+
+    // MARK: - Rights & Usage Terms
+
+    /// Usage terms for the image (xmpRights:UsageTerms).
+    public var usageTerms: String? {
+        get { simpleValue(namespace: XMPNamespace.xmpRights, property: "UsageTerms") }
+        set {
+            if let v = newValue { setValue(.langAlternative(v), namespace: XMPNamespace.xmpRights, property: "UsageTerms") }
+            else { removeValue(namespace: XMPNamespace.xmpRights, property: "UsageTerms") }
+        }
+    }
+
+    /// URL of a web page describing the license or usage terms (xmpRights:WebStatement).
+    public var webStatement: String? {
+        get { simpleValue(namespace: XMPNamespace.xmpRights, property: "WebStatement") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.xmpRights, property: "WebStatement") }
+            else { removeValue(namespace: XMPNamespace.xmpRights, property: "WebStatement") }
+        }
+    }
 }

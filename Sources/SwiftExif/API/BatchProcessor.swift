@@ -15,6 +15,43 @@ public struct BatchResult: Sendable {
     public var totalProcessed: Int { succeeded + failed.count }
 }
 
+/// The validation result for a single file.
+public struct FileValidationResult: Sendable {
+    public let url: URL
+    public let result: ValidationResult?
+    public let readError: (any Error)?
+
+    public var passed: Bool { result?.isValid ?? false }
+    public var errorCount: Int { result?.errors.count ?? (readError != nil ? 1 : 0) }
+    public var warningCount: Int { result?.warnings.count ?? 0 }
+}
+
+/// Report from validating multiple files against a profile.
+public struct BatchValidationReport: Sendable {
+    public let results: [FileValidationResult]
+    public let totalTime: TimeInterval
+
+    public var passed: Int { results.filter(\.passed).count }
+    public var failed: Int { results.count - passed }
+    public var totalFiles: Int { results.count }
+
+    /// Export the report as CSV with one row per file.
+    public func toCSV() -> String {
+        var lines = ["File,Status,Errors,Warnings,Details"]
+        for entry in results.sorted(by: { $0.url.lastPathComponent < $1.url.lastPathComponent }) {
+            let file = CSVExporter.escapeCSV(entry.url.lastPathComponent)
+            if let error = entry.readError {
+                lines.append("\(file),Error,1,0,\(CSVExporter.escapeCSV(String(describing: error)))")
+            } else if let result = entry.result {
+                let status = result.isValid ? "Pass" : "Fail"
+                let details = result.issues.map(\.description).joined(separator: "; ")
+                lines.append("\(file),\(status),\(result.errors.count),\(result.warnings.count),\(CSVExporter.escapeCSV(details))")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 /// Process metadata across many files efficiently.
 public struct BatchProcessor: Sendable {
     public typealias MetadataTransform = @Sendable (inout ImageMetadata) throws -> Void
@@ -143,6 +180,76 @@ public struct BatchProcessor: Sendable {
 
     static func isSupportedFormat(_ url: URL) -> Bool {
         supportedExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    // MARK: - Batch Validation
+
+    /// Validate all files against a MetadataValidator profile.
+    public static func validateFiles(
+        _ urls: [URL],
+        validator: MetadataValidator,
+        concurrency: Int = ProcessInfo.processInfo.activeProcessorCount
+    ) throws -> BatchValidationReport {
+        let start = Date()
+        let collector = ValidationCollector()
+
+        let semaphore = DispatchSemaphore(value: max(1, concurrency))
+        let group = DispatchGroup()
+
+        for url in urls {
+            group.enter()
+            semaphore.wait()
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer {
+                    semaphore.signal()
+                    group.leave()
+                }
+
+                do {
+                    let metadata = try ImageMetadata.read(from: url)
+                    let result = validator.validate(metadata)
+                    collector.record(url: url, result: result)
+                } catch {
+                    collector.recordError(url: url, error: error)
+                }
+            }
+        }
+
+        group.wait()
+
+        return BatchValidationReport(
+            results: collector.results,
+            totalTime: Date().timeIntervalSince(start)
+        )
+    }
+
+    /// Validate all supported files in a directory against a MetadataValidator profile.
+    public static func validateDirectory(
+        at url: URL,
+        validator: MetadataValidator,
+        recursive: Bool = false,
+        concurrency: Int = ProcessInfo.processInfo.activeProcessorCount
+    ) throws -> BatchValidationReport {
+        let urls = try enumerateFiles(in: url, recursive: recursive)
+        return try validateFiles(urls, validator: validator, concurrency: concurrency)
+    }
+
+    final class ValidationCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var results: [FileValidationResult] = []
+
+        func record(url: URL, result: ValidationResult) {
+            lock.lock()
+            results.append(FileValidationResult(url: url, result: result, readError: nil))
+            lock.unlock()
+        }
+
+        func recordError(url: URL, error: any Error) {
+            lock.lock()
+            results.append(FileValidationResult(url: url, result: nil, readError: error))
+            lock.unlock()
+        }
     }
 
     // MARK: - Async API (Swift Concurrency)

@@ -247,4 +247,95 @@ public struct IPTCData: Equatable, Sendable {
             else { removeAll(for: .programVersion) }
         }
     }
+
+    public var bylineTitle: String? {
+        get { value(for: .bylineTitle) }
+        set {
+            if let v = newValue { try? setValue(v, for: .bylineTitle) }
+            else { removeAll(for: .bylineTitle) }
+        }
+    }
+
+    public var bylineTitles: [String] {
+        get { values(for: .bylineTitle) }
+        set { try? setValues(newValue, for: .bylineTitle) }
+    }
+
+    /// Urgency as an integer (1-8, where 1 is most urgent).
+    public var urgency: Int? {
+        get {
+            guard let str = value(for: .urgency) else { return nil }
+            return Int(str)
+        }
+        set {
+            if let v = newValue { try? setValue(String(v), for: .urgency) }
+            else { removeAll(for: .urgency) }
+        }
+    }
+
+    public var category: String? {
+        get { value(for: .category) }
+        set {
+            if let v = newValue { try? setValue(v, for: .category) }
+            else { removeAll(for: .category) }
+        }
+    }
+
+    public var supplementalCategories: [String] {
+        get { values(for: .supplementalCategories) }
+        set { try? setValues(newValue, for: .supplementalCategories) }
+    }
+
+    public var contacts: [String] {
+        get { values(for: .contact) }
+        set { try? setValues(newValue, for: .contact) }
+    }
+
+    public var editStatus: String? {
+        get { value(for: .editStatus) }
+        set {
+            if let v = newValue { try? setValue(v, for: .editStatus) }
+            else { removeAll(for: .editStatus) }
+        }
+    }
+
+    public var languageIdentifier: String? {
+        get { value(for: .languageIdentifier) }
+        set {
+            if let v = newValue { try? setValue(v, for: .languageIdentifier) }
+            else { removeAll(for: .languageIdentifier) }
+        }
+    }
+
+    public var releaseDate: String? {
+        get { value(for: .releaseDate) }
+        set {
+            if let v = newValue { try? setValue(v, for: .releaseDate) }
+            else { removeAll(for: .releaseDate) }
+        }
+    }
+
+    public var releaseTime: String? {
+        get { value(for: .releaseTime) }
+        set {
+            if let v = newValue { try? setValue(v, for: .releaseTime) }
+            else { removeAll(for: .releaseTime) }
+        }
+    }
+
+    public var expirationDate: String? {
+        get { value(for: .expirationDate) }
+        set {
+            if let v = newValue { try? setValue(v, for: .expirationDate) }
+            else { removeAll(for: .expirationDate) }
+        }
+    }
+
+    public var expirationTime: String? {
+        get { value(for: .expirationTime) }
+        set {
+            if let v = newValue { try? setValue(v, for: .expirationTime) }
+            else { removeAll(for: .expirationTime) }
+        }
+    }
 }

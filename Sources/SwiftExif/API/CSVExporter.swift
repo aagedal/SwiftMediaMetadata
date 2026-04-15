@@ -54,6 +54,11 @@ public struct CSVExporter: Sendable {
         return String(describing: value)
     }
 
+    /// Escape a string for safe inclusion in a CSV field (RFC 4180).
+    public static func escapeCSV(_ field: String) -> String {
+        escapeCSVField(field)
+    }
+
     private static func escapeCSVField(_ field: String) -> String {
         if field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r") {
             let escaped = field.replacingOccurrences(of: "\"", with: "\"\"")

@@ -17,6 +17,9 @@ struct SwiftExifCLI: ParsableCommand {
             ShiftDatesCommand.self,
             ThumbnailCommand.self,
             SidecarCommand.self,
+            ValidateCommand.self,
+            SetGPSCommand.self,
+            GeocodeCommand.self,
         ],
         defaultSubcommand: ReadCommand.self
     )

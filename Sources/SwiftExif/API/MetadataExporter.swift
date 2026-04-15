@@ -218,12 +218,30 @@ public struct MetadataExporter: Sendable {
         if let v = iptc.objectName { dict["IPTC:ObjectName"] = v }
         if let v = iptc.writerEditor { dict["IPTC:Writer-Editor"] = v }
         if let v = iptc.jobId { dict["IPTC:OriginalTransmissionReference"] = v }
+        if let v = iptc.bylineTitle { dict["IPTC:By-lineTitle"] = v }
+        if let v = iptc.category { dict["IPTC:Category"] = v }
+        if let v = iptc.editStatus { dict["IPTC:EditStatus"] = v }
+        if let v = iptc.languageIdentifier { dict["IPTC:LanguageIdentifier"] = v }
+        if let v = iptc.releaseDate { dict["IPTC:ReleaseDate"] = v }
+        if let v = iptc.releaseTime { dict["IPTC:ReleaseTime"] = v }
+        if let v = iptc.expirationDate { dict["IPTC:ExpirationDate"] = v }
+        if let v = iptc.expirationTime { dict["IPTC:ExpirationTime"] = v }
+        if let v = iptc.urgency { dict["IPTC:Urgency"] = v }
 
         let keywords = iptc.keywords
         if !keywords.isEmpty { dict["IPTC:Keywords"] = keywords }
 
         let bylines = iptc.bylines
         if bylines.count > 1 { dict["IPTC:By-line"] = bylines }
+
+        let bylineTitles = iptc.bylineTitles
+        if bylineTitles.count > 1 { dict["IPTC:By-lineTitle"] = bylineTitles }
+
+        let categories = iptc.supplementalCategories
+        if !categories.isEmpty { dict["IPTC:SupplementalCategories"] = categories }
+
+        let contacts = iptc.contacts
+        if !contacts.isEmpty { dict["IPTC:Contact"] = contacts }
     }
 
     // MARK: - XMP Fields
