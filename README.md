@@ -13,6 +13,7 @@ A native Swift library for reading and writing image and video metadata — Exif
 | PNG | Yes | Yes | Exif, XMP, ICC |
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
+| WebP | Yes | Yes | Exif, XMP, ICC |
 | MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS |
 | XMP sidecar (.xmp) | Yes | Yes | XMP |
 
@@ -70,7 +71,7 @@ if let exif = metadata.exif {
 
 ### Writing Metadata
 
-Works for all supported image formats (JPEG, TIFF, RAW, JPEG XL, PNG, AVIF, HEIF):
+Works for all supported image formats (JPEG, TIFF, RAW, JPEG XL, PNG, AVIF, HEIF, WebP):
 
 ```swift
 var metadata = try readMetadata(from: imageURL)
@@ -356,6 +357,7 @@ Sources/SwiftExif/
 ├── JPEGXL/         # JPEG XL box parser and writer
 ├── AVIF/           # AVIF (ISOBMFF) parser and writer
 ├── HEIF/           # HEIF/HEIC parser and writer
+├── WebP/           # WebP (RIFF container) parser and writer
 └── Video/          # MP4/MOV/M4V metadata parser
 ```
 

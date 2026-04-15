@@ -8,4 +8,5 @@ public enum ImageContainer: Sendable {
     case jpegXL(JXLFile)
     case avif(AVIFFile)
     case heif(HEIFFile)
+    case webp(WebPFile)
 }

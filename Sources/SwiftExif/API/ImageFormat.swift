@@ -9,6 +9,7 @@ public enum ImageFormat: Sendable, Equatable {
     case png
     case avif
     case heif
+    case webp
 
     /// RAW camera formats (all TIFF-based for metadata purposes).
     public enum RawFormat: String, Sendable, CaseIterable, Equatable {

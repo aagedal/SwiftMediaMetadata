@@ -68,6 +68,8 @@ public struct ImageMetadata: Sendable {
             return try readAVIF(from: data)
         case .heif:
             return try readHEIF(from: data)
+        case .webp:
+            return try readWebP(from: data)
         }
     }
 
@@ -117,6 +119,8 @@ public struct ImageMetadata: Sendable {
             return try writeAVIF(file)
         case .heif(let file):
             return try writeHEIF(file)
+        case .webp(let file):
+            return try writeWebP(file)
         }
     }
 
@@ -611,6 +615,11 @@ public struct ImageMetadata: Sendable {
 
         case .heif(let file):
             return extractThumbnailFromISOBMFF(boxes: file.boxes, offset: offset, length: length)
+
+        case .webp(let file):
+            guard let chunk = file.findChunk("EXIF") else { return nil }
+            guard offset >= 0, offset + length <= chunk.data.count else { return nil }
+            return chunk.data[chunk.data.startIndex + offset ..< chunk.data.startIndex + offset + length]
         }
     }
 
@@ -831,6 +840,10 @@ public struct ImageMetadata: Sendable {
         return try HEIFWriter.write(file, exif: exif, xmp: xmp)
     }
 
+    private func writeWebP(_ file: WebPFile) throws -> Data {
+        return try WebPWriter.write(file, exif: exif, xmp: xmp, iccProfile: iccProfile)
+    }
+
     private func writeTIFFFile(_ file: TIFFFile) throws -> Data {
         return try TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp, iccProfile: iccProfile)
     }
@@ -1025,5 +1038,15 @@ public struct ImageMetadata: Sendable {
         let iccProfile = ISOBMFFMetadata.extractICCProfile(from: heifFile.boxes)
 
         return ImageMetadata(container: .heif(heifFile), format: .heif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
+    }
+
+    private static func readWebP(from data: Data) throws -> ImageMetadata {
+        let webpFile = try WebPParser.parse(data)
+
+        let exif = try WebPParser.extractExif(from: webpFile)
+        let xmp = try WebPParser.extractXMP(from: webpFile)
+        let iccProfile = WebPParser.extractICCProfile(from: webpFile)
+
+        return ImageMetadata(container: .webp(webpFile), format: .webp, iptc: IPTCData(), exif: exif, xmp: xmp, iccProfile: iccProfile)
     }
 }

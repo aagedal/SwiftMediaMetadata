@@ -33,6 +33,12 @@ public struct FormatDetector: Sendable {
             return .jpegXL
         }
 
+        // WebP: RIFF xxxx WEBP
+        if bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
+           bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50 {
+            return .webp
+        }
+
         // AVIF/HEIF: check for ftyp box at offset 4
         if bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70 {
             // Read brand (4 bytes at offset 8)
@@ -77,6 +83,8 @@ public struct FormatDetector: Sendable {
             return .avif
         case "heic", "heif":
             return .heif
+        case "webp":
+            return .webp
         default:
             return nil
         }

@@ -257,6 +257,7 @@ public struct MetadataExporter: Sendable {
         case .png: return "PNG"
         case .avif: return "AVIF"
         case .heif: return "HEIF"
+        case .webp: return "WebP"
         }
     }
 

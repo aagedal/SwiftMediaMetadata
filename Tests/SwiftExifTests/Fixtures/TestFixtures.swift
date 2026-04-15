@@ -494,4 +494,80 @@ enum TestFixtures {
         _ = tiffStart // suppress unused warning
         return writer.data
     }
+
+    // MARK: - Minimal WebP
+
+    /// Generate a minimal WebP file with VP8 (lossy) image data and optional metadata chunks.
+    static func minimalWebP(exifTIFFData: Data? = nil, xmpData: Data? = nil) -> Data {
+        var chunks = Data()
+
+        // VP8X chunk (extended header) — needed if any metadata chunk present
+        let hasExif = exifTIFFData != nil
+        let hasXMP = xmpData != nil
+        let needsVP8X = hasExif || hasXMP
+
+        if needsVP8X {
+            var flags: UInt8 = 0
+            if hasExif { flags |= (1 << 3) }
+            if hasXMP  { flags |= (1 << 2) }
+
+            var vp8xPayload = Data(count: 10)
+            vp8xPayload[0] = flags
+            // Canvas: 1x1 (width-1=0, height-1=0) — already zeroed
+            appendRIFFChunk(&chunks, fourCC: "VP8X", payload: vp8xPayload)
+        }
+
+        // Minimal VP8 bitstream (1x1 pixel, lossy)
+        // This is the smallest valid VP8 keyframe: frame tag + sync code + dimensions + partition
+        let vp8Payload = Data([
+            0x30, 0x01, 0x00, // Frame tag: keyframe, version 0, show frame, partition length
+            0x9D, 0x01, 0x2A, // VP8 sync code
+            0x01, 0x00,       // width = 1 (14 bits) + scale = 0
+            0x01, 0x00,       // height = 1 (14 bits) + scale = 0
+            0x01, 0x40,       // minimal partition data
+        ])
+        appendRIFFChunk(&chunks, fourCC: "VP8 ", payload: vp8Payload)
+
+        // EXIF chunk
+        if let exifData = exifTIFFData {
+            appendRIFFChunk(&chunks, fourCC: "EXIF", payload: exifData)
+        }
+
+        // XMP chunk
+        if let xmp = xmpData {
+            appendRIFFChunk(&chunks, fourCC: "XMP ", payload: xmp)
+        }
+
+        // RIFF header
+        var riff = Data()
+        riff.append(contentsOf: "RIFF".utf8)
+        appendUInt32LE(&riff, UInt32(4 + chunks.count)) // file size minus 8
+        riff.append(contentsOf: "WEBP".utf8)
+        riff.append(chunks)
+
+        return riff
+    }
+
+    /// Generate a WebP with Exif containing Make/Model.
+    static func webpWithExif(make: String = "TestCamera", model: String = "Model X") -> Data {
+        let tiffData = tiffWithExif(make: make, model: model)
+        return minimalWebP(exifTIFFData: tiffData)
+    }
+
+    private static func appendRIFFChunk(_ data: inout Data, fourCC: String, payload: Data) {
+        data.append(contentsOf: fourCC.utf8)
+        appendUInt32LE(&data, UInt32(payload.count))
+        data.append(payload)
+        // Pad to even boundary
+        if payload.count & 1 != 0 {
+            data.append(0)
+        }
+    }
+
+    private static func appendUInt32LE(_ data: inout Data, _ value: UInt32) {
+        data.append(UInt8(value & 0xFF))
+        data.append(UInt8((value >> 8) & 0xFF))
+        data.append(UInt8((value >> 16) & 0xFF))
+        data.append(UInt8((value >> 24) & 0xFF))
+    }
 }
