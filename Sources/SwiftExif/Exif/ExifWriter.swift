@@ -30,8 +30,20 @@ public struct ExifWriter: Sendable {
 
         // Collect all IFDs and their data
         var ifd0Entries = exifData.ifd0?.entries ?? []
-        let exifIFDEntries = exifData.exifIFD?.entries ?? []
+        var exifIFDEntries = exifData.exifIFD?.entries ?? []
         let gpsIFDEntries = exifData.gpsIFD?.entries ?? []
+
+        // If MakerNote is dirty, regenerate its binary and update the Exif IFD entry
+        if let makerNote = exifData.makerNote, makerNote.isDirty {
+            let newMakerNoteData = MakerNoteWriter.write(makerNote, byteOrder: endian)
+            exifIFDEntries = exifIFDEntries.map { entry in
+                if entry.tag == ExifTag.makerNote {
+                    return IFDEntry(tag: ExifTag.makerNote, type: .undefined,
+                                    count: UInt32(newMakerNoteData.count), valueData: newMakerNoteData)
+                }
+                return entry
+            }
+        }
 
         // Remove existing sub-IFD pointers (we'll recalculate)
         ifd0Entries.removeAll { $0.tag == ExifTag.exifIFDPointer || $0.tag == ExifTag.gpsIFDPointer }
@@ -132,7 +144,7 @@ public struct ExifWriter: Sendable {
 
     // MARK: - Private
 
-    private static func writeIFD(_ writer: inout BinaryWriter, entries: [IFDEntry], endian: ByteOrder, dataOffset: Int, nextIFDOffset: UInt32, tiffStart: Int) {
+    static func writeIFD(_ writer: inout BinaryWriter, entries: [IFDEntry], endian: ByteOrder, dataOffset: Int, nextIFDOffset: UInt32, tiffStart: Int) {
         writer.writeUInt16(UInt16(entries.count), endian: endian)
 
         // Track where external data will go

@@ -34,6 +34,8 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
     case invalidWebP(String)
     case invalidCR3(String)
     case invalidVideo(String)
+    case invalidPDF(String)
+    case invalidPSD(String)
 
     public var description: String {
         switch self {
@@ -103,6 +105,10 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid CR3 file: \(detail)"
         case .invalidVideo(let detail):
             return "Invalid video file: \(detail)"
+        case .invalidPDF(let detail):
+            return "Invalid PDF file: \(detail)"
+        case .invalidPSD(let detail):
+            return "Invalid PSD file: \(detail)"
         }
     }
 }

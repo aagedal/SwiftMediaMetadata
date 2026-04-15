@@ -10,4 +10,6 @@ public enum ImageContainer: Sendable {
     case heif(HEIFFile)
     case webp(WebPFile)
     case cr3(CR3File)
+    case pdf(PDFFile)
+    case psd(PSDFile)
 }

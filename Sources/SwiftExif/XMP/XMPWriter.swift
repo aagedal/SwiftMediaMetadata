@@ -25,6 +25,13 @@ public struct XMPWriter: Sendable {
             }
         }
 
+        // Add region namespaces if needed
+        if let regions = xmpData.regions, !regions.regions.isEmpty {
+            usedNamespaces.insert(XMPNamespace.mwgRegions)
+            usedNamespaces.insert(XMPNamespace.stArea)
+            usedNamespaces.insert(XMPNamespace.stDim)
+        }
+
         // Build namespace declarations
         var nsDeclarations = ""
         for ns in usedNamespaces.sorted() {
@@ -60,6 +67,11 @@ public struct XMPWriter: Sendable {
             }
         }
 
+        // Add region XML if present
+        if let regions = xmpData.regions, !regions.regions.isEmpty {
+            complexProps += writeRegions(regions)
+        }
+
         let hasComplexProps = !complexProps.isEmpty
 
         var xml = """
@@ -84,6 +96,56 @@ public struct XMPWriter: Sendable {
         xml += "<?xpacket end=\"w\"?>"
 
         return xml
+    }
+
+    /// Serialize MWG regions to XMP XML fragment.
+    private static func writeRegions(_ regionList: XMPRegionList) -> String {
+        var xml = "\n  <mwg-rs:Regions>"
+
+        // AppliedToDimensions
+        if let w = regionList.appliedToDimensionsW, let h = regionList.appliedToDimensionsH {
+            let unit = regionList.appliedToDimensionsUnit ?? "pixel"
+            xml += "\n   <mwg-rs:AppliedToDimensions stDim:w=\"\(w)\" stDim:h=\"\(h)\" stDim:unit=\"\(unit)\"/>"
+        }
+
+        // RegionList
+        xml += "\n   <mwg-rs:RegionList>\n    <rdf:Bag>"
+
+        for region in regionList.regions {
+            xml += "\n     <rdf:li>"
+            xml += "\n      <rdf:Description"
+            if let name = region.name {
+                xml += " mwg-rs:Name=\"\(escapeXML(name))\""
+            }
+            if let type = region.type {
+                xml += " mwg-rs:Type=\"\(type.rawValue)\""
+            }
+            if let desc = region.description {
+                xml += " mwg-rs:Description=\"\(escapeXML(desc))\""
+            }
+            xml += ">"
+            let a = region.area
+            xml += "\n       <mwg-rs:Area stArea:x=\"\(formatDouble(a.x))\" stArea:y=\"\(formatDouble(a.y))\""
+            xml += " stArea:w=\"\(formatDouble(a.w))\" stArea:h=\"\(formatDouble(a.h))\""
+            xml += " stArea:unit=\"\(a.unit)\"/>"
+            xml += "\n      </rdf:Description>"
+            xml += "\n     </rdf:li>"
+        }
+
+        xml += "\n    </rdf:Bag>\n   </mwg-rs:RegionList>"
+        xml += "\n  </mwg-rs:Regions>"
+        return xml
+    }
+
+    /// Format a double for XMP output, removing trailing zeros.
+    private static func formatDouble(_ value: Double) -> String {
+        let s = String(format: "%.6f", value)
+        // Remove trailing zeros but keep at least one decimal place
+        var trimmed = s
+        while trimmed.hasSuffix("0") && !trimmed.hasSuffix(".0") {
+            trimmed = String(trimmed.dropLast())
+        }
+        return trimmed
     }
 
     // MARK: - Private

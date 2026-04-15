@@ -94,6 +94,13 @@ public struct MetadataExporter: Sendable {
             }
         }
 
+        // PDF Info dictionary
+        if case .pdf(let pdfFile) = metadata.container {
+            for (key, value) in pdfFile.infoDict {
+                dict["PDF:\(key)"] = value
+            }
+        }
+
         // ICC Profile
         if let icc = metadata.iccProfile {
             dict["ICCProfile:ColorSpace"] = icc.colorSpace.trimmingCharacters(in: .whitespaces)
@@ -104,6 +111,11 @@ public struct MetadataExporter: Sendable {
         }
 
         return dict
+    }
+
+    /// Build a filtered dictionary, including only keys that match the filter.
+    public static func filteredDictionary(_ metadata: ImageMetadata, filter: TagFilter) -> [String: Any] {
+        filter.apply(to: buildDictionary(metadata))
     }
 
     // MARK: - EXIF Fields
@@ -276,6 +288,8 @@ public struct MetadataExporter: Sendable {
         case .avif: return "AVIF"
         case .heif: return "HEIF"
         case .webp: return "WebP"
+        case .pdf: return "PDF"
+        case .psd: return "PSD"
         }
     }
 

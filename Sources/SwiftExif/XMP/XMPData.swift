@@ -15,9 +15,13 @@ public struct XMPData: Equatable, Sendable {
     /// Parsed property values keyed by "namespace:property".
     private var properties: [String: XMPValue]
 
-    public init(xmlString: String = "", properties: [String: XMPValue] = [:]) {
+    /// Face/object regions (MWG Regions specification).
+    public var regions: XMPRegionList?
+
+    public init(xmlString: String = "", properties: [String: XMPValue] = [:], regions: XMPRegionList? = nil) {
         self.xmlString = xmlString
         self.properties = properties
+        self.regions = regions
     }
 
     // MARK: - Property Access

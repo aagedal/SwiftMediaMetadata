@@ -45,6 +45,20 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     private var currentArrayNamespace = ""
     private var parseError: Error?
 
+    // MWG Region parsing state
+    private var inRegions = false
+    private var inRegionList = false
+    private var inRegionItem = false
+    private var regionListRegions: [XMPRegion] = []
+    private var currentRegionName: String?
+    private var currentRegionType: String?
+    private var currentRegionArea: XMPRegionArea?
+    private var currentRegionDescription: String?
+    private var appliedDimW: Int?
+    private var appliedDimH: Int?
+    private var appliedDimUnit: String?
+    private var regionList: XMPRegionList?
+
     init(xmlString: String) {
         self.xmlString = xmlString
     }
@@ -63,13 +77,91 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             throw error
         }
 
-        return XMPData(xmlString: xmlString, properties: properties)
+        return XMPData(xmlString: xmlString, properties: properties, regions: regionList)
     }
 
     // MARK: - XMLParserDelegate
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String]) {
         currentText = ""
+
+        // MWG Region handling
+        if namespaceURI == XMPNamespace.mwgRegions && elementName == "Regions" {
+            inRegions = true
+            return
+        }
+        if inRegions && namespaceURI == XMPNamespace.mwgRegions && elementName == "RegionList" {
+            inRegionList = true
+            regionListRegions = []
+            return
+        }
+        if inRegions && namespaceURI == XMPNamespace.mwgRegions && elementName == "AppliedToDimensions" {
+            // Dimensions stored as attributes: stDim:w, stDim:h, stDim:unit
+            for (key, value) in attributeDict {
+                let parts = key.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    let prop = String(parts[1])
+                    switch prop {
+                    case "w": appliedDimW = Int(value)
+                    case "h": appliedDimH = Int(value)
+                    case "unit": appliedDimUnit = value
+                    default: break
+                    }
+                }
+            }
+            return
+        }
+        if inRegionList && elementName == "li" {
+            inRegionItem = true
+            currentRegionName = nil
+            currentRegionType = nil
+            currentRegionArea = nil
+            currentRegionDescription = nil
+            return
+        }
+        if inRegionItem && elementName == "Description" {
+            // Region properties may be attributes on rdf:Description
+            for (key, value) in attributeDict {
+                let parts = key.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    let prefix = String(parts[0])
+                    let prop = String(parts[1])
+                    if prefix == "mwg-rs" {
+                        switch prop {
+                        case "Name": currentRegionName = value
+                        case "Type": currentRegionType = value
+                        case "Description": currentRegionDescription = value
+                        default: break
+                        }
+                    }
+                }
+            }
+            return
+        }
+        if inRegionItem && namespaceURI == XMPNamespace.mwgRegions && elementName == "Area" {
+            // Area properties as stArea: attributes
+            var x: Double = 0, y: Double = 0, w: Double = 0, h: Double = 0
+            var unit = "normalized"
+            for (key, value) in attributeDict {
+                let parts = key.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    let prop = String(parts[1])
+                    switch prop {
+                    case "x": x = Double(value) ?? 0
+                    case "y": y = Double(value) ?? 0
+                    case "w": w = Double(value) ?? 0
+                    case "h": h = Double(value) ?? 0
+                    case "unit": unit = value
+                    default: break
+                    }
+                }
+            }
+            currentRegionArea = XMPRegionArea(x: x, y: y, w: w, h: h, unit: unit)
+            return
+        }
+
+        // Standard XMP handling (skip when inside regions)
+        if inRegions { return }
 
         if elementName == "Description" {
             inDescription = true
@@ -112,6 +204,51 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        // MWG Region end handling
+        if namespaceURI == XMPNamespace.mwgRegions && elementName == "Regions" {
+            inRegions = false
+            if !regionListRegions.isEmpty || appliedDimW != nil {
+                regionList = XMPRegionList(
+                    regions: regionListRegions,
+                    appliedToDimensionsW: appliedDimW,
+                    appliedToDimensionsH: appliedDimH,
+                    appliedToDimensionsUnit: appliedDimUnit
+                )
+            }
+            return
+        }
+        if inRegionList && namespaceURI == XMPNamespace.mwgRegions && elementName == "RegionList" {
+            inRegionList = false
+            return
+        }
+        if inRegionItem && elementName == "li" {
+            if let area = currentRegionArea {
+                regionListRegions.append(XMPRegion(
+                    name: currentRegionName,
+                    type: currentRegionType.flatMap { XMPRegionType(rawValue: $0) },
+                    area: area,
+                    description: currentRegionDescription
+                ))
+            }
+            inRegionItem = false
+            return
+        }
+        if inRegionItem {
+            // Handle region properties as child elements (not just attributes)
+            let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && namespaceURI == XMPNamespace.mwgRegions {
+                switch elementName {
+                case "Name": currentRegionName = trimmed
+                case "Type": currentRegionType = trimmed
+                case "Description": currentRegionDescription = trimmed
+                default: break
+                }
+            }
+            return
+        }
+        if inRegions { return }
+
+        // Standard XMP handling
         if elementName == "Description" {
             inDescription = false
         } else if elementName == "li" {
@@ -158,6 +295,9 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         case "Iptc4xmpExt": return XMPNamespace.iptcExt
         case "xmp": return XMPNamespace.xmp
         case "xmpRights": return XMPNamespace.xmpRights
+        case "mwg-rs": return XMPNamespace.mwgRegions
+        case "stArea": return XMPNamespace.stArea
+        case "stDim": return XMPNamespace.stDim
         default: return nil
         }
     }

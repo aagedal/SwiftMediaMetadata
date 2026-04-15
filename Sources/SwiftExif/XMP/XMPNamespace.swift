@@ -11,6 +11,9 @@ public enum XMPNamespace: Sendable {
     public static let xmp       = "http://ns.adobe.com/xap/1.0/"
     public static let xmpRights = "http://ns.adobe.com/xap/1.0/rights/"
     public static let rdf       = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    public static let mwgRegions = "http://www.metadataworkinggroup.com/schemas/regions/"
+    public static let stArea    = "http://ns.adobe.com/xmp/sType/Area#"
+    public static let stDim     = "http://ns.adobe.com/xmp/sType/Dimensions#"
 
     /// Mapping from IPTC IIM tags to XMP namespace + property.
     public static let iimToXMP: [IPTCTag: (namespace: String, property: String)] = [
@@ -48,5 +51,8 @@ public enum XMPNamespace: Sendable {
         xmp: "xmp",
         xmpRights: "xmpRights",
         rdf: "rdf",
+        mwgRegions: "mwg-rs",
+        stArea: "stArea",
+        stDim: "stDim",
     ]
 }

@@ -74,6 +74,10 @@ public struct ImageMetadata: Sendable {
             return try readHEIF(from: data)
         case .webp:
             return try readWebP(from: data)
+        case .pdf:
+            return try readPDF(from: data)
+        case .psd:
+            return try readPSD(from: data)
         }
     }
 
@@ -127,6 +131,10 @@ public struct ImageMetadata: Sendable {
             return try writeWebP(file)
         case .cr3(let file):
             return try writeCR3(file)
+        case .pdf(let file):
+            return try writePDF(file)
+        case .psd(let file):
+            return try writePSD(file)
         }
     }
 
@@ -487,6 +495,47 @@ public struct ImageMetadata: Sendable {
         if groups.contains(.iccProfile) { iccProfile = source.iccProfile }
     }
 
+    /// Copy metadata from source, filtered to only matching tags.
+    public mutating func copyMetadata(from source: ImageMetadata, filter: TagFilter) {
+        let sourceDict = MetadataExporter.buildDictionary(source)
+        for (key, _) in sourceDict where filter.matches(key: key) {
+            // Copy IPTC fields
+            if key.hasPrefix("IPTC:") {
+                let tagName = String(key.dropFirst(5))
+                if let tag = IPTCTag.byName(tagName) {
+                    let values = source.iptc.values(for: tag)
+                    if !values.isEmpty {
+                        try? iptc.setValues(values, for: tag)
+                    }
+                }
+            }
+            // Copy XMP fields
+            else if key.hasPrefix("XMP-") {
+                let rest = key.dropFirst(4)
+                if let colonIdx = rest.firstIndex(of: ":") {
+                    let prefix = String(rest[rest.startIndex..<colonIdx])
+                    let property = String(rest[rest.index(after: colonIdx)...])
+                    if let namespace = XMPNamespace.namespace(for: prefix),
+                       let value = source.xmp?.value(namespace: namespace, property: property) {
+                        if xmp == nil { xmp = XMPData() }
+                        xmp?.setValue(value, namespace: namespace, property: property)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Remove all tags whose keys match the filter pattern. Returns the number of tags removed.
+    @discardableResult
+    public mutating func removeMatchingTags(_ filter: TagFilter) -> Int {
+        let dict = MetadataExporter.buildDictionary(self)
+        var removed = 0
+        for key in dict.keys where filter.matches(key: key) {
+            if removeTag(key) { removed += 1 }
+        }
+        return removed
+    }
+
     // MARK: - Metadata Diff
 
     /// A single difference between two metadata values.
@@ -645,6 +694,12 @@ public struct ImageMetadata: Sendable {
         case .cr3(let file):
             // CR3 thumbnails are in THMB box (already extracted during parsing)
             return file.thumbnailData
+
+        case .pdf:
+            return nil // PDFs don't have EXIF thumbnails
+
+        case .psd:
+            return nil // PSD thumbnails are in IRB resource 0x0409, not EXIF
         }
     }
 
@@ -721,6 +776,174 @@ public struct ImageMetadata: Sendable {
     public func writeSidecar(for imageURL: URL) throws {
         let sidecarURL = XMPSidecar.sidecarURL(for: imageURL)
         try writeSidecar(to: sidecarURL)
+    }
+
+    // MARK: - XMP Sidecar Sync
+
+    /// Direction for sidecar synchronization.
+    public enum SyncDirection: Sendable {
+        case sidecarToImage
+        case imageToSidecar
+    }
+
+    /// Result of comparing sidecar vs embedded XMP.
+    public struct SidecarSyncReport: Sendable {
+        public let sidecarOnly: [String]
+        public let embeddedOnly: [String]
+        public let conflicts: [(key: String, sidecarValue: String, embeddedValue: String)]
+        public let matching: Int
+        public var hasDifferences: Bool { !sidecarOnly.isEmpty || !embeddedOnly.isEmpty || !conflicts.isEmpty }
+    }
+
+    /// Embed XMP from a sidecar file into this image's embedded XMP.
+    /// Sidecar values overwrite embedded values on conflict.
+    public mutating func embedSidecar(from sidecarURL: URL) throws {
+        let sidecarXMP = try XMPSidecar.read(from: sidecarURL)
+        if xmp == nil { xmp = XMPData() }
+
+        for key in sidecarXMP.allKeys {
+            // Parse namespace and property from the full key
+            for (ns, _) in XMPNamespace.prefixes.sorted(by: { $0.key.count > $1.key.count }) {
+                if key.hasPrefix(ns) {
+                    let property = String(key.dropFirst(ns.count))
+                    if let value = sidecarXMP.value(namespace: ns, property: property) {
+                        xmp?.setValue(value, namespace: ns, property: property)
+                    }
+                    break
+                }
+            }
+        }
+
+        // Copy regions if present
+        if let regions = sidecarXMP.regions {
+            xmp?.regions = regions
+        }
+    }
+
+    /// Compare sidecar XMP vs embedded XMP and report differences.
+    public func compareSidecar(at sidecarURL: URL) throws -> SidecarSyncReport {
+        let sidecarXMP = try XMPSidecar.read(from: sidecarURL)
+        let embeddedXMP = xmp ?? XMPData()
+
+        let sidecarKeys = Set(sidecarXMP.allKeys)
+        let embeddedKeys = Set(embeddedXMP.allKeys)
+
+        let sidecarOnly = sidecarKeys.subtracting(embeddedKeys).sorted()
+        let embeddedOnly = embeddedKeys.subtracting(sidecarKeys).sorted()
+
+        var conflicts: [(key: String, sidecarValue: String, embeddedValue: String)] = []
+        var matching = 0
+
+        for key in sidecarKeys.intersection(embeddedKeys).sorted() {
+            let sVal = xmpValueString(sidecarXMP, key: key)
+            let eVal = xmpValueString(embeddedXMP, key: key)
+            if sVal == eVal {
+                matching += 1
+            } else {
+                conflicts.append((key: key, sidecarValue: sVal, embeddedValue: eVal))
+            }
+        }
+
+        return SidecarSyncReport(
+            sidecarOnly: sidecarOnly,
+            embeddedOnly: embeddedOnly,
+            conflicts: conflicts,
+            matching: matching
+        )
+    }
+
+    /// Synchronize sidecar and embedded XMP in the chosen direction.
+    public mutating func syncWithSidecar(at sidecarURL: URL, direction: SyncDirection) throws {
+        switch direction {
+        case .sidecarToImage:
+            try embedSidecar(from: sidecarURL)
+        case .imageToSidecar:
+            try writeSidecar(to: sidecarURL)
+        }
+    }
+
+    private func xmpValueString(_ xmp: XMPData, key: String) -> String {
+        for (ns, _) in XMPNamespace.prefixes.sorted(by: { $0.key.count > $1.key.count }) {
+            if key.hasPrefix(ns) {
+                let property = String(key.dropFirst(ns.count))
+                if let value = xmp.value(namespace: ns, property: property) {
+                    switch value {
+                    case .simple(let s): return s
+                    case .array(let arr): return arr.joined(separator: "; ")
+                    case .langAlternative(let s): return s
+                    }
+                }
+                break
+            }
+        }
+        return ""
+    }
+
+    // MARK: - Lossless Orientation Operations
+
+    /// Set the EXIF orientation tag directly.
+    /// - Parameter value: EXIF orientation value (1-8).
+    public mutating func setOrientation(_ value: UInt16) {
+        guard value >= 1 && value <= 8 else { return }
+        let byteOrder = exif?.byteOrder ?? .bigEndian
+        if exif == nil { exif = ExifData(byteOrder: byteOrder) }
+
+        let entry = buildOrientationEntry(value, endian: byteOrder)
+
+        // Update IFD0
+        let ifd0Offset = exif?.ifd0?.nextIFDOffset ?? 0
+        var entries = (exif?.ifd0?.entries ?? []).filter { $0.tag != ExifTag.orientation }
+        entries.append(entry)
+        exif?.ifd0 = IFD(entries: entries, nextIFDOffset: ifd0Offset)
+
+        // Update IFD1 (thumbnail) if present
+        if let ifd1 = exif?.ifd1 {
+            var thumbEntries = ifd1.entries.filter { $0.tag != ExifTag.orientation }
+            thumbEntries.append(entry)
+            exif?.ifd1 = IFD(entries: thumbEntries, nextIFDOffset: ifd1.nextIFDOffset)
+        }
+    }
+
+    /// Reset orientation to normal (1 = Horizontal).
+    public mutating func resetOrientation() {
+        setOrientation(1)
+    }
+
+    /// Rotate the image 90° clockwise by updating the orientation tag.
+    public mutating func rotateClockwise() {
+        let current = exif?.orientation ?? 1
+        setOrientation(OrientationTransform.compose(current: current, operation: .rotateClockwise))
+    }
+
+    /// Rotate the image 90° counter-clockwise by updating the orientation tag.
+    public mutating func rotateCounterClockwise() {
+        let current = exif?.orientation ?? 1
+        setOrientation(OrientationTransform.compose(current: current, operation: .rotateCounterClockwise))
+    }
+
+    /// Flip the image horizontally by updating the orientation tag.
+    public mutating func flipHorizontal() {
+        let current = exif?.orientation ?? 1
+        setOrientation(OrientationTransform.compose(current: current, operation: .flipHorizontal))
+    }
+
+    /// Flip the image vertically by updating the orientation tag.
+    public mutating func flipVertical() {
+        let current = exif?.orientation ?? 1
+        setOrientation(OrientationTransform.compose(current: current, operation: .flipVertical))
+    }
+
+    private func buildOrientationEntry(_ value: UInt16, endian: ByteOrder) -> IFDEntry {
+        var writer = BinaryWriter(capacity: 2)
+        writer.writeUInt16(value, endian: endian)
+        return IFDEntry(tag: ExifTag.orientation, type: .short, count: 1, valueData: writer.data)
+    }
+
+    // MARK: - MakerNote Writing
+
+    /// Set a MakerNote tag value.
+    public mutating func setMakerNoteTag(_ key: String, value: MakerNoteValue) {
+        exif?.makerNote?.setTag(key, value: value)
     }
 
     // MARK: - Direct GPS Writing
@@ -1174,5 +1397,57 @@ public struct ImageMetadata: Sendable {
         let iccProfile = WebPParser.extractICCProfile(from: webpFile)
 
         return ImageMetadata(container: .webp(webpFile), format: .webp, iptc: IPTCData(), exif: exif, xmp: xmp, iccProfile: iccProfile)
+    }
+
+    // MARK: - PDF
+
+    private static func readPDF(from data: Data) throws -> ImageMetadata {
+        let pdfFile = try PDFParser.parse(data)
+
+        // Extract XMP from XMP stream if available
+        var xmp: XMPData? = nil
+        if let xmpStreamData = pdfFile.xmpStreamData {
+            xmp = try? XMPReader.readFromXML(xmpStreamData)
+        }
+
+        return ImageMetadata(container: .pdf(pdfFile), format: .pdf, iptc: IPTCData(), xmp: xmp)
+    }
+
+    // MARK: - PSD
+
+    private static func readPSD(from data: Data) throws -> ImageMetadata {
+        let psdFile = try PSDParser.parse(data)
+
+        let exif = PSDParser.extractExif(from: psdFile)
+        let xmp = try? PSDParser.extractXMP(from: psdFile)
+        let iccProfile = PSDParser.extractICCProfile(from: psdFile)
+
+        // Extract IPTC from IRB
+        var iptc = IPTCData()
+        if let iptcBlock = psdFile.irbBlocks.first(where: { $0.resourceID == PSDFile.iptcResourceID }) {
+            iptc = (try? IPTCReader.read(from: iptcBlock.data)) ?? IPTCData()
+        }
+
+        return ImageMetadata(container: .psd(psdFile), format: .psd, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)
+    }
+
+    private func writePSD(_ file: PSDFile) throws -> Data {
+        try PSDWriter.write(file, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)
+    }
+
+    private func writePDF(_ file: PDFFile) throws -> Data {
+        // Build updated Info dict from the file's info dict
+        var infoDict = file.infoDict
+
+        // Sync XMP title/author to Info dict if available
+        if let xmp {
+            if let title = xmp.title { infoDict["Title"] = title }
+            if let desc = xmp.description { infoDict["Subject"] = desc }
+            if !xmp.creator.isEmpty { infoDict["Author"] = xmp.creator.joined(separator: ", ") }
+        }
+
+        let xmpData: Data? = xmp.map { Data(XMPWriter.generateXML($0).utf8) }
+
+        return try PDFWriter.write(file, infoDict: infoDict, xmpData: xmpData)
     }
 }
