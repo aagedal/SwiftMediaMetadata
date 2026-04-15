@@ -5,8 +5,8 @@ import SwiftExif
 struct SidecarCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sidecar",
-        abstract: "Read or write XMP sidecar files.",
-        subcommands: [SidecarRead.self, SidecarWrite.self]
+        abstract: "Read, write, sync, and manage XMP sidecar files.",
+        subcommands: [SidecarRead.self, SidecarWrite.self, SidecarEmbed.self, SidecarSync.self, SidecarCleanup.self]
     )
 }
 
@@ -100,6 +100,134 @@ struct SidecarWrite: ParsableCommand {
             try metadata.writeSidecar(for: url)
             let sidecarName = url.deletingPathExtension().lastPathComponent + ".xmp"
             print("Sidecar written: \(sidecarName)")
+        }
+    }
+}
+
+struct SidecarEmbed: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "embed",
+        abstract: "Embed XMP from sidecar files into images."
+    )
+
+    @Argument(help: "Image files whose sidecars should be embedded.")
+    var files: [String]
+
+    func run() throws {
+        let urls = try resolveFiles(files)
+        var succeeded = 0
+        var failed = 0
+
+        for url in urls {
+            do {
+                let sidecarURL = XMPSidecar.sidecarURL(for: url)
+                guard FileManager.default.fileExists(atPath: sidecarURL.path) else {
+                    printError("No sidecar found for \(url.lastPathComponent)")
+                    failed += 1
+                    continue
+                }
+                var metadata = try ImageMetadata.read(from: url)
+                try metadata.embedSidecar(from: sidecarURL)
+                try metadata.write(to: url)
+                succeeded += 1
+            } catch {
+                printError("Error embedding \(url.lastPathComponent): \(error)")
+                failed += 1
+            }
+        }
+
+        printSummary(succeeded: succeeded, failed: failed, verb: "Embedded")
+    }
+}
+
+struct SidecarSync: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "sync",
+        abstract: "Compare and synchronize sidecar vs embedded XMP."
+    )
+
+    @Argument(help: "Image files to sync.")
+    var files: [String]
+
+    @Option(name: .long, help: "Sync direction: sidecar (sidecar wins) or image (embedded wins). Omit to just compare.")
+    var direction: String?
+
+    func run() throws {
+        let urls = try resolveFiles(files)
+
+        for url in urls {
+            let sidecarURL = XMPSidecar.sidecarURL(for: url)
+            guard FileManager.default.fileExists(atPath: sidecarURL.path) else {
+                printError("No sidecar for \(url.lastPathComponent)")
+                continue
+            }
+
+            var metadata = try ImageMetadata.read(from: url)
+            let report = try metadata.compareSidecar(at: sidecarURL)
+
+            print("=== \(url.lastPathComponent) ===")
+            if !report.hasDifferences {
+                print("  In sync (\(report.matching) matching properties)")
+                continue
+            }
+
+            if !report.sidecarOnly.isEmpty {
+                print("  Sidecar only: \(report.sidecarOnly.joined(separator: ", "))")
+            }
+            if !report.embeddedOnly.isEmpty {
+                print("  Embedded only: \(report.embeddedOnly.joined(separator: ", "))")
+            }
+            for conflict in report.conflicts {
+                print("  Conflict: \(conflict.key)")
+                print("    Sidecar:  \(conflict.sidecarValue)")
+                print("    Embedded: \(conflict.embeddedValue)")
+            }
+
+            if let dir = direction {
+                let syncDir: ImageMetadata.SyncDirection = dir == "sidecar" ? .sidecarToImage : .imageToSidecar
+                try metadata.syncWithSidecar(at: sidecarURL, direction: syncDir)
+                if syncDir == .sidecarToImage {
+                    try metadata.write(to: url)
+                }
+                print("  Synced (\(dir) wins)")
+            }
+        }
+    }
+}
+
+struct SidecarCleanup: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "cleanup",
+        abstract: "Find and remove orphan .xmp sidecar files."
+    )
+
+    @Argument(help: "Directory to scan.")
+    var directory: String
+
+    @Flag(name: .long, help: "Recursively scan subdirectories.")
+    var recursive = false
+
+    @Flag(name: .long, help: "Actually delete orphan files (default is dry run).")
+    var delete = false
+
+    func run() throws {
+        let dirURL = URL(fileURLWithPath: directory)
+        let orphans = try XMPSidecarSync.findOrphans(in: dirURL, recursive: recursive)
+
+        if orphans.isEmpty {
+            print("No orphan sidecar files found.")
+            return
+        }
+
+        for url in orphans {
+            print("Orphan: \(url.lastPathComponent)")
+        }
+
+        if delete {
+            let removed = try XMPSidecarSync.cleanupOrphans(in: dirURL, recursive: recursive, dryRun: false)
+            print("Removed \(removed.count) orphan sidecar file(s).")
+        } else {
+            print("\(orphans.count) orphan(s) found. Use --delete to remove.")
         }
     }
 }

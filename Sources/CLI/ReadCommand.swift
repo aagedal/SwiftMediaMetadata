@@ -26,11 +26,19 @@ struct ReadCommand: ParsableCommand {
     @Option(name: .long, help: "Filter condition (e.g. 'Make=Canon', 'ISO>800').")
     var `if`: [String] = []
 
+    @Option(name: .long, help: "Include only tags matching glob pattern (e.g. 'IPTC:*').")
+    var tags: [String] = []
+
+    @Option(name: .long, help: "Exclude tags matching glob pattern (e.g. 'MakerNote:*').")
+    var excludeTags: [String] = []
+
     func run() throws {
         let urls = try resolveFiles(files)
         let condition = try parseConditions(self.if)
         let fieldList = fields?.split(separator: ",").map(String.init)
         let groups = Set(group)
+        let tagFilter = (!tags.isEmpty || !excludeTags.isEmpty)
+            ? TagFilter(tags: tags, excludeTags: excludeTags) : nil
 
         let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
 
@@ -59,7 +67,9 @@ struct ReadCommand: ParsableCommand {
                 } else {
                     dict = PrintConverter.buildReadableDictionary(metadata)
                 }
-                imageDicts.append(filterByGroups(dict, groups: groups, fields: fieldList))
+                var filtered = filterByGroups(dict, groups: groups, fields: fieldList)
+                if let tagFilter { filtered = tagFilter.apply(to: filtered).mapValues { String(describing: $0) } }
+                imageDicts.append(filtered)
                 imageNames.append(url.lastPathComponent)
             }
         }

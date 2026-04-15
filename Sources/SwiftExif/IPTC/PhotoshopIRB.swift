@@ -75,6 +75,74 @@ public struct PhotoshopIRB: Sendable {
         return blocks
     }
 
+    /// Parse raw 8BIM blocks without the "Photoshop 3.0\0" header prefix.
+    /// Used for PSD image resources sections which start directly with 8BIM blocks.
+    public static func parseRaw(_ data: Data) throws -> [IRBBlock] {
+        var reader = BinaryReader(data: data)
+        var blocks: [IRBBlock] = []
+
+        while reader.remainingCount >= 12 {
+            guard reader.hasPrefix(signature8BIM) else { break }
+            try reader.skip(4)
+
+            let resourceID = try reader.readUInt16BigEndian()
+
+            let nameLength = Int(try reader.readUInt8())
+            let nameData: Data
+            if nameLength > 0 {
+                nameData = try reader.readBytes(nameLength)
+            } else {
+                nameData = Data()
+            }
+            let pascalTotal = 1 + nameLength
+            if pascalTotal % 2 != 0 {
+                try reader.skip(1)
+            }
+
+            let dataSize = try reader.readUInt32BigEndian()
+            let blockData = try reader.readBytes(Int(dataSize))
+
+            if dataSize % 2 != 0 && reader.remainingCount > 0 {
+                try reader.skip(1)
+            }
+
+            let name = String(data: nameData, encoding: .ascii) ?? ""
+            blocks.append(IRBBlock(resourceID: resourceID, name: name, data: blockData))
+        }
+
+        return blocks
+    }
+
+    /// Reconstruct raw 8BIM blocks without the "Photoshop 3.0\0" header.
+    /// Used for PSD image resources sections.
+    public static func writeRaw(blocks: [IRBBlock]) -> Data {
+        var writer = BinaryWriter(capacity: 1024)
+
+        for block in blocks {
+            writer.writeBytes(signature8BIM)
+            writer.writeUInt16BigEndian(block.resourceID)
+
+            let nameBytes = Data(block.name.utf8)
+            writer.writeUInt8(UInt8(nameBytes.count))
+            if !nameBytes.isEmpty {
+                writer.writeBytes(nameBytes)
+            }
+            let pascalTotal = 1 + nameBytes.count
+            if pascalTotal % 2 != 0 {
+                writer.writeUInt8(0x00)
+            }
+
+            writer.writeUInt32BigEndian(UInt32(block.data.count))
+            writer.writeBytes(block.data)
+
+            if block.data.count % 2 != 0 {
+                writer.writeUInt8(0x00)
+            }
+        }
+
+        return writer.data
+    }
+
     /// Extract just the IPTC data block (resource 0x0404) from APP13 data.
     public static func extractIPTCData(_ app13Data: Data) throws -> Data? {
         let blocks = try parse(app13Data)

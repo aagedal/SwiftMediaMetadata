@@ -35,9 +35,12 @@ struct StripCommand: ParsableCommand {
     @Option(name: .long, help: "Filter condition.")
     var `if`: [String] = []
 
+    @Option(name: .long, help: "Strip tags matching glob pattern (e.g. 'MakerNote:*').")
+    var tags: [String] = []
+
     func validate() throws {
-        guard all || exif || iptc || xmp || gps || c2pa || icc else {
-            throw ValidationError("Specify at least one of: --all, --exif, --iptc, --xmp, --gps, --c2pa, --icc")
+        guard all || exif || iptc || xmp || gps || c2pa || icc || !tags.isEmpty else {
+            throw ValidationError("Specify at least one of: --all, --exif, --iptc, --xmp, --gps, --c2pa, --icc, --tags")
         }
     }
 
@@ -62,6 +65,11 @@ struct StripCommand: ParsableCommand {
                     if gps { metadata.stripGPS() }
                     if c2pa { metadata.stripC2PA() }
                     if icc { metadata.stripICCProfile() }
+                }
+
+                if !tags.isEmpty {
+                    let filter = TagFilter(tags: tags, excludeTags: [])
+                    metadata.removeMatchingTags(filter)
                 }
 
                 try metadata.write(to: url)

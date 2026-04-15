@@ -45,6 +45,27 @@ public struct CSVExporter: Sendable {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Export metadata as CSV, filtered to matching tags only.
+    public static func toCSV(_ items: [ImageMetadata], filter: TagFilter) -> String {
+        guard !items.isEmpty else { return "" }
+        let dicts = items.map { filter.apply(to: MetadataExporter.buildDictionary($0)) }
+        var allKeys = Set<String>()
+        for dict in dicts { allKeys.formUnion(dict.keys) }
+        let columns = allKeys.sorted()
+        guard !columns.isEmpty else { return "" }
+
+        var lines: [String] = []
+        lines.append(columns.map { escapeCSVField($0) }.joined(separator: ","))
+        for dict in dicts {
+            let row = columns.map { key -> String in
+                guard let value = dict[key] else { return "" }
+                return escapeCSVField(stringifyValue(value))
+            }
+            lines.append(row.joined(separator: ","))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     // MARK: - Private
 
     private static func stringifyValue(_ value: Any) -> String {

@@ -17,6 +17,12 @@ struct CopyCommand: ParsableCommand {
     @Option(name: .long, help: "Metadata groups to copy (comma-separated): exif, iptc, xmp, c2pa, icc. Default: all.")
     var groups: String?
 
+    @Option(name: .long, help: "Only copy tags matching glob pattern (e.g. 'IPTC:*').")
+    var tags: [String] = []
+
+    @Option(name: .long, help: "Exclude tags matching glob pattern.")
+    var excludeTags: [String] = []
+
     func run() throws {
         let sourceURL = URL(fileURLWithPath: from)
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
@@ -50,7 +56,10 @@ struct CopyCommand: ParsableCommand {
         for url in destURLs {
             do {
                 var dest = try ImageMetadata.read(from: url)
-                if let groupSet {
+                if !tags.isEmpty || !excludeTags.isEmpty {
+                    let filter = TagFilter(tags: tags, excludeTags: excludeTags)
+                    dest.copyMetadata(from: source, filter: filter)
+                } else if let groupSet {
                     dest.copyMetadata(from: source, groups: groupSet)
                 } else {
                     dest.copyMetadata(from: source)
