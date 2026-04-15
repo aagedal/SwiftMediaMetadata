@@ -33,7 +33,7 @@ func resolveFiles(_ paths: [String]) throws -> [URL] {
 func isSupportedFile(_ url: URL) -> Bool {
     let ext = url.pathExtension.lowercased()
     let supported: Set<String> = [
-        "jpg", "jpeg", "tif", "tiff", "dng", "cr2", "nef", "arw",
+        "jpg", "jpeg", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw",
         "jxl", "png", "avif", "heic", "heif", "webp",
         "mp4", "mov", "m4v",
     ]

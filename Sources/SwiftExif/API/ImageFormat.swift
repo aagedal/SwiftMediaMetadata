@@ -11,8 +11,8 @@ public enum ImageFormat: Sendable, Equatable {
     case heif
     case webp
 
-    /// RAW camera formats (all TIFF-based for metadata purposes).
+    /// RAW camera formats. Most are TIFF-based; CR3 is ISOBMFF-based.
     public enum RawFormat: String, Sendable, CaseIterable, Equatable {
-        case dng, cr2, nef, arw
+        case dng, cr2, cr3, nef, arw
     }
 }

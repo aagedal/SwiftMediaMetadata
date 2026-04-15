@@ -58,6 +58,8 @@ public struct ImageMetadata: Sendable {
         switch format {
         case .jpeg:
             return try readJPEG(from: data)
+        case .raw(.cr3):
+            return try readCR3(from: data)
         case .tiff, .raw:
             return try readTIFF(from: data, format: format)
         case .jpegXL:
@@ -121,6 +123,8 @@ public struct ImageMetadata: Sendable {
             return try writeHEIF(file)
         case .webp(let file):
             return try writeWebP(file)
+        case .cr3(let file):
+            return try writeCR3(file)
         }
     }
 
@@ -548,6 +552,21 @@ public struct ImageMetadata: Sendable {
         return String(describing: value)
     }
 
+    // MARK: - Preview Extraction
+
+    /// Extract the embedded JPEG preview image (larger than thumbnail).
+    /// For CR3 files, this returns the PRVW image (typically 1620x1080).
+    /// Falls back to `extractThumbnail()` if no dedicated preview is found.
+    public func extractPreview() -> Data? {
+        switch container {
+        case .cr3(let file):
+            return file.previewData ?? file.thumbnailData
+        default:
+            // For other formats, fall back to thumbnail (future: SubIFD preview for TIFF-based RAW)
+            return extractThumbnail()
+        }
+    }
+
     // MARK: - Thumbnail Extraction
 
     /// Extract the embedded JPEG thumbnail from Exif IFD1, if present.
@@ -620,6 +639,10 @@ public struct ImageMetadata: Sendable {
             guard let chunk = file.findChunk("EXIF") else { return nil }
             guard offset >= 0, offset + length <= chunk.data.count else { return nil }
             return chunk.data[chunk.data.startIndex + offset ..< chunk.data.startIndex + offset + length]
+
+        case .cr3(let file):
+            // CR3 thumbnails are in THMB box (already extracted during parsing)
+            return file.thumbnailData
         }
     }
 
@@ -915,6 +938,13 @@ public struct ImageMetadata: Sendable {
         return try WebPWriter.write(file, exif: exif, xmp: xmp, iccProfile: iccProfile)
     }
 
+    private func writeCR3(_ file: CR3File) throws -> Data {
+        guard let originalData = file.originalData else {
+            throw MetadataError.invalidCR3("Cannot write CR3 without original data")
+        }
+        return try CR3Writer.write(file, exif: exif, xmp: xmp, originalData: originalData)
+    }
+
     private func writeTIFFFile(_ file: TIFFFile) throws -> Data {
         return try TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp, iccProfile: iccProfile)
     }
@@ -1109,6 +1139,11 @@ public struct ImageMetadata: Sendable {
         let iccProfile = ISOBMFFMetadata.extractICCProfile(from: heifFile.boxes)
 
         return ImageMetadata(container: .heif(heifFile), format: .heif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
+    }
+
+    private static func readCR3(from data: Data) throws -> ImageMetadata {
+        let (file, exif, xmp, iptc) = try CR3Parser.parse(data)
+        return ImageMetadata(container: .cr3(file), format: .raw(.cr3), iptc: iptc, exif: exif, xmp: xmp)
     }
 
     private static func readWebP(from data: Data) throws -> ImageMetadata {

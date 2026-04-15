@@ -6,6 +6,7 @@ public struct ExifData: Equatable, Sendable {
     public var ifd1: IFD?       // Thumbnail IFD
     public var exifIFD: IFD?
     public var gpsIFD: IFD?
+    public var makerNoteIFD: IFD?  // CR3: standalone MakerNote IFD from CMT3
     public var byteOrder: ByteOrder
 
     public init(byteOrder: ByteOrder = .bigEndian) {

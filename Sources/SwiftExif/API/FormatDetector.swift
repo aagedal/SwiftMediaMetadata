@@ -49,6 +49,9 @@ public struct FormatDetector: Sendable {
                 if brand == "heic" || brand == "heix" || brand == "hevc" || brand == "hevx" || brand == "mif1" {
                     return .heif
                 }
+                if brand == "crx " {
+                    return .raw(.cr3)
+                }
             }
         }
 
@@ -75,6 +78,8 @@ public struct FormatDetector: Sendable {
             return .raw(.nef)
         case "arw":
             return .raw(.arw)
+        case "cr3":
+            return .raw(.cr3)
         case "jxl":
             return .jpegXL
         case "png":

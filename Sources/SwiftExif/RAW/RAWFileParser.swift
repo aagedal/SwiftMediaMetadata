@@ -50,6 +50,9 @@ public struct RAWFileParser: Sendable {
         case .dng, .nef, .arw:
             // These parse identically to TIFF
             break
+        case .cr3:
+            // CR3 is ISOBMFF-based, not TIFF — should not reach here
+            throw MetadataError.invalidRAW("CR3 files should not be parsed as TIFF")
         }
 
         return tiff

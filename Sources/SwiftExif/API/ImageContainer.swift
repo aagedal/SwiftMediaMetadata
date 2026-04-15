@@ -9,4 +9,5 @@ public enum ImageContainer: Sendable {
     case avif(AVIFFile)
     case heif(HEIFFile)
     case webp(WebPFile)
+    case cr3(CR3File)
 }

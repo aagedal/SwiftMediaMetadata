@@ -176,6 +176,7 @@ public struct BatchProcessor: Sendable {
         "avif",
         "heic", "heif",
         "webp",
+        "cr3",
     ]
 
     static func isSupportedFormat(_ url: URL) -> Bool {

@@ -32,6 +32,7 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
     case invalidGPX(String)
     case invalidMakerNote(String)
     case invalidWebP(String)
+    case invalidCR3(String)
     case invalidVideo(String)
 
     public var description: String {
@@ -98,6 +99,8 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid MakerNote: \(detail)"
         case .invalidWebP(let detail):
             return "Invalid WebP file: \(detail)"
+        case .invalidCR3(let detail):
+            return "Invalid CR3 file: \(detail)"
         case .invalidVideo(let detail):
             return "Invalid video file: \(detail)"
         }
