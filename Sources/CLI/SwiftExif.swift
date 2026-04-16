@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 
 @main
 struct SwiftExifCLI: ParsableCommand {
@@ -26,4 +27,28 @@ struct SwiftExifCLI: ParsableCommand {
         ],
         defaultSubcommand: ReadCommand.self
     )
+
+    static func main() {
+        let rawArgs = Array(CommandLine.arguments.dropFirst())
+
+        // Check for -stay_open batch mode before ArgumentParser takes over.
+        if let stayOpenIndex = rawArgs.firstIndex(of: "-stay_open"),
+           stayOpenIndex + 1 < rawArgs.count
+        {
+            let value = rawArgs[stayOpenIndex + 1].lowercased()
+            if value == "true" || value == "1" {
+                var server = StayOpenServer()
+                server.run()
+                return
+            }
+        }
+
+        do {
+            let expandedArgs = try expandArgfiles(rawArgs)
+            Self.main(expandedArgs)
+        } catch {
+            printError("\(error)")
+            _exit(1)
+        }
+    }
 }
