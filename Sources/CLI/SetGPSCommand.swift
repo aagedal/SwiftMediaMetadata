@@ -23,6 +23,12 @@ struct SetGPSCommand: ParsableCommand {
     @Argument(help: "Image files to set GPS on.")
     var files: [String]
 
+    @Flag(name: .long, help: "Create backup of original file before writing.")
+    var backup = false
+
+    @Flag(name: .long, help: "Overwrite original without backup (default behavior, for ExifTool compatibility).")
+    var overwriteOriginal = false
+
     func validate() throws {
         guard lat >= -90 && lat <= 90 else {
             throw ValidationError("Latitude must be between -90 and 90.")
@@ -34,6 +40,7 @@ struct SetGPSCommand: ParsableCommand {
 
     func run() throws {
         let urls = try resolveFiles(files)
+        let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
         var succeeded = 0
         var failed = 0
 
@@ -52,7 +59,7 @@ struct SetGPSCommand: ParsableCommand {
                     print("  \(url.lastPathComponent): \(String(format: "%.6f", lat)), \(String(format: "%.6f", lon))")
                 }
 
-                try metadata.write(to: url)
+                try metadata.write(to: url, options: options)
                 succeeded += 1
             } catch {
                 printError("Error: \(url.lastPathComponent): \(error.localizedDescription)")

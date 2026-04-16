@@ -78,6 +78,17 @@ public struct FormatDetector: Sendable {
             return detectTIFFVariant(data)
         }
 
+        // GIF: GIF87a or GIF89a
+        if bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38 &&
+           (bytes[4] == 0x37 || bytes[4] == 0x39) && bytes[5] == 0x61 {
+            return .gif
+        }
+
+        // BMP: BM (0x42, 0x4D)
+        if bytes[0] == 0x42 && bytes[1] == 0x4D {
+            return .bmp
+        }
+
         // RW2 (Panasonic): TIFF-like but uses version 0x0055 instead of 0x002A
         if data.count >= 4 {
             let isRW2LE = bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x55 && bytes[3] == 0x00
@@ -128,6 +139,12 @@ public struct FormatDetector: Sendable {
             return .pdf
         case "psd", "psb":
             return .psd
+        case "gif":
+            return .gif
+        case "bmp", "dib":
+            return .bmp
+        case "svg", "svgz":
+            return .svg
         default:
             return nil
         }

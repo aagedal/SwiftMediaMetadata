@@ -36,6 +36,7 @@ func isSupportedFile(_ url: URL) -> Bool {
         "jpg", "jpeg", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw",
         "raf", "rw2", "orf", "pef",
         "jxl", "png", "avif", "heic", "heif", "webp",
+        "gif", "bmp", "dib", "svg",
         "mp4", "mov", "m4v",
     ]
     return supported.contains(ext)

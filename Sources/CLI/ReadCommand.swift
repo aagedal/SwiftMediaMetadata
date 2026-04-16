@@ -14,7 +14,7 @@ struct ReadCommand: ParsableCommand {
     @Option(name: .long, help: "Output format: table (default), json, csv, xml.")
     var format: OutputFormat = .table
 
-    @Option(name: .long, help: "Filter by metadata group: exif, iptc, xmp, c2pa, icc, makernote, composite.")
+    @Option(name: .long, help: "Filter by metadata group: exif, iptc, xmp, c2pa, icc, makernote, composite, file.")
     var group: [String] = []
 
     @Flag(name: .shortAndLong, help: "Show raw numeric values (skip print conversion).")
@@ -59,13 +59,13 @@ struct ReadCommand: ParsableCommand {
 
                 let dict: [String: String]
                 if numeric {
-                    let raw = MetadataExporter.buildDictionary(metadata)
+                    let raw = MetadataExporter.buildDictionary(metadata, fileURL: url)
                     dict = raw.mapValues { value in
                         if let arr = value as? [String] { return arr.joined(separator: ", ") }
                         return String(describing: value)
                     }
                 } else {
-                    dict = PrintConverter.buildReadableDictionary(metadata)
+                    dict = PrintConverter.buildReadableDictionary(metadata, fileURL: url)
                 }
                 var filtered = filterByGroups(dict, groups: groups, fields: fieldList)
                 if let tagFilter { filtered = tagFilter.apply(to: filtered).mapValues { String(describing: $0) } }
@@ -175,6 +175,7 @@ struct ReadCommand: ParsableCommand {
                 case "makernote": if key.hasPrefix("MakerNote:") { return true }
                 case "composite": if key.hasPrefix("Composite:") { return true }
                 case "c2pa": if key.hasPrefix("C2PA:") { return true }
+                case "file": if key.hasPrefix("File:") { return true }
                 default: break
                 }
             }

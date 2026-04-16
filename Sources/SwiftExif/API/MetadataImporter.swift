@@ -90,7 +90,8 @@ public struct MetadataImporter: Sendable {
         records: [[String: String]],
         files: [URL],
         matching: FileMatching,
-        filter: TagFilter? = nil
+        filter: TagFilter? = nil,
+        writeOptions: ImageMetadata.WriteOptions = .default
     ) throws -> (succeeded: Int, failed: Int) {
         var succeeded = 0
         var failed = 0
@@ -110,7 +111,7 @@ public struct MetadataImporter: Sendable {
                 do {
                     var metadata = try ImageMetadata.read(from: url)
                     apply(record, to: &metadata, filter: filter)
-                    try metadata.write(to: url)
+                    try metadata.write(to: url, options: writeOptions)
                     succeeded += 1
                 } catch {
                     failed += 1
@@ -122,7 +123,7 @@ public struct MetadataImporter: Sendable {
                 do {
                     var metadata = try ImageMetadata.read(from: url)
                     apply(records[i], to: &metadata, filter: filter)
-                    try metadata.write(to: url)
+                    try metadata.write(to: url, options: writeOptions)
                     succeeded += 1
                 } catch {
                     failed += 1

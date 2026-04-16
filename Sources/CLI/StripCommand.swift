@@ -38,6 +38,12 @@ struct StripCommand: ParsableCommand {
     @Option(name: .long, help: "Strip tags matching glob pattern (e.g. 'MakerNote:*').")
     var tags: [String] = []
 
+    @Flag(name: .long, help: "Create backup of original file before stripping.")
+    var backup = false
+
+    @Flag(name: .long, help: "Overwrite original without backup (default behavior, for ExifTool compatibility).")
+    var overwriteOriginal = false
+
     func validate() throws {
         guard all || exif || iptc || xmp || gps || c2pa || icc || !tags.isEmpty else {
             throw ValidationError("Specify at least one of: --all, --exif, --iptc, --xmp, --gps, --c2pa, --icc, --tags")
@@ -47,6 +53,7 @@ struct StripCommand: ParsableCommand {
     func run() throws {
         let urls = try resolveFiles(files)
         let condition = try parseConditions(self.if)
+        let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
 
         var succeeded = 0
         var failed = 0
@@ -72,7 +79,7 @@ struct StripCommand: ParsableCommand {
                     metadata.removeMatchingTags(filter)
                 }
 
-                try metadata.write(to: url)
+                try metadata.write(to: url, options: options)
                 succeeded += 1
             } catch {
                 printError("Error stripping \(url.lastPathComponent): \(error.localizedDescription)")

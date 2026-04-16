@@ -78,6 +78,12 @@ public struct ImageMetadata: Sendable {
             return try readPDF(from: data)
         case .psd:
             return try readPSD(from: data)
+        case .gif:
+            return try readGIF(from: data)
+        case .bmp:
+            return try readBMP(from: data)
+        case .svg:
+            return try readSVG(from: data)
         }
     }
 
@@ -135,6 +141,12 @@ public struct ImageMetadata: Sendable {
             return try writePDF(file)
         case .psd(let file):
             return try writePSD(file)
+        case .gif(let file):
+            return writeGIF(file)
+        case .bmp(let file):
+            return writeBMP(file)
+        case .svg(let file):
+            return writeSVG(file)
         }
     }
 
@@ -700,6 +712,13 @@ public struct ImageMetadata: Sendable {
 
         case .psd:
             return nil // PSD thumbnails are in IRB resource 0x0409, not EXIF
+
+        case .gif:
+            return nil // GIF doesn't have standard Exif embedding
+        case .bmp:
+            return nil // BMP doesn't support embedded thumbnails
+        case .svg:
+            return nil // SVG doesn't support embedded thumbnails
         }
     }
 
@@ -1433,6 +1452,36 @@ public struct ImageMetadata: Sendable {
 
     private func writePSD(_ file: PSDFile) throws -> Data {
         try PSDWriter.write(file, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)
+    }
+
+    private static func readGIF(from data: Data) throws -> ImageMetadata {
+        let gifFile = try GIFParser.parse(data)
+        let xmp = try? GIFParser.extractXMP(from: gifFile)
+        return ImageMetadata(container: .gif(gifFile), format: .gif, xmp: xmp)
+    }
+
+    private func writeGIF(_ file: GIFFile) -> Data {
+        GIFWriter.write(file, xmp: xmp)
+    }
+
+    private static func readBMP(from data: Data) throws -> ImageMetadata {
+        let bmpFile = try BMPParser.parse(data)
+        return ImageMetadata(container: .bmp(bmpFile), format: .bmp)
+    }
+
+    private func writeBMP(_ file: BMPFile) -> Data {
+        // BMP is read-only for metadata — return raw data unchanged
+        file.rawData
+    }
+
+    private static func readSVG(from data: Data) throws -> ImageMetadata {
+        let svgFile = try SVGParser.parse(data)
+        let xmp = try? SVGParser.extractXMP(from: svgFile)
+        return ImageMetadata(container: .svg(svgFile), format: .svg, xmp: xmp)
+    }
+
+    private func writeSVG(_ file: SVGFile) -> Data {
+        SVGWriter.write(file, xmp: xmp)
     }
 
     private func writePDF(_ file: PDFFile) throws -> Data {

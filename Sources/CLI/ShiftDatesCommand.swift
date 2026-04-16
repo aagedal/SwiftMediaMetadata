@@ -20,6 +20,12 @@ struct ShiftDatesCommand: ParsableCommand {
     @Option(name: .long, help: "Filter condition.")
     var `if`: [String] = []
 
+    @Flag(name: .long, help: "Create backup of original file before writing.")
+    var backup = false
+
+    @Flag(name: .long, help: "Overwrite original without backup (default behavior, for ExifTool compatibility).")
+    var overwriteOriginal = false
+
     func validate() throws {
         guard by != nil || hours != nil else {
             throw ValidationError("Specify either --by (seconds) or --hours.")
@@ -40,7 +46,8 @@ struct ShiftDatesCommand: ParsableCommand {
                 if let condition, !condition.matches(metadata) { continue }
 
                 metadata.shiftDates(by: offset)
-                try metadata.write(to: url)
+                let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
+                try metadata.write(to: url, options: options)
                 succeeded += 1
             } catch {
                 printError("Error processing \(url.lastPathComponent): \(error.localizedDescription)")

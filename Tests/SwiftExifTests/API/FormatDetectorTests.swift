@@ -55,7 +55,10 @@ final class FormatDetectorTests: XCTestCase {
         XCTAssertEqual(FormatDetector.detectFromExtension("jxl"), .jpegXL)
         XCTAssertEqual(FormatDetector.detectFromExtension("png"), .png)
         XCTAssertEqual(FormatDetector.detectFromExtension("avif"), .avif)
-        XCTAssertNil(FormatDetector.detectFromExtension("bmp"))
+        XCTAssertEqual(FormatDetector.detectFromExtension("bmp"), .bmp)
+        XCTAssertEqual(FormatDetector.detectFromExtension("gif"), .gif)
+        XCTAssertEqual(FormatDetector.detectFromExtension("svg"), .svg)
+        XCTAssertNil(FormatDetector.detectFromExtension("xyz"))
     }
 
     func testDetectTooSmall() {

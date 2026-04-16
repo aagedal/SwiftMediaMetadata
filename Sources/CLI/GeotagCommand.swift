@@ -23,6 +23,12 @@ struct GeotagCommand: ParsableCommand {
     @Flag(name: .long, help: "Auto-fill IPTC location fields via reverse geocoding after geotagging.")
     var fillLocation = false
 
+    @Flag(name: .long, help: "Create backup of original file before writing.")
+    var backup = false
+
+    @Flag(name: .long, help: "Overwrite original without backup (default behavior, for ExifTool compatibility).")
+    var overwriteOriginal = false
+
     func run() throws {
         let gpxURL = URL(fileURLWithPath: gpx)
         let track = try GPXParser.parse(from: gpxURL)
@@ -44,11 +50,12 @@ struct GeotagCommand: ParsableCommand {
                 var metadata = try ImageMetadata.read(from: url)
                 let applied = metadata.applyGPX(track, maxOffset: maxOffset, timeZoneOffset: tzOffset * 3600)
 
+                let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
                 if applied {
                     if fillLocation {
                         metadata.fillLocationFromGPS(overwrite: true)
                     }
-                    try metadata.write(to: url)
+                    try metadata.write(to: url, options: options)
                     if let lat = metadata.exif?.gpsLatitude, let lon = metadata.exif?.gpsLongitude {
                         var line = "  \(url.lastPathComponent): \(String(format: "%.6f", lat)), \(String(format: "%.6f", lon))"
                         if fillLocation, let city = metadata.iptc.city, let country = metadata.iptc.countryName {

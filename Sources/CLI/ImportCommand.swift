@@ -26,6 +26,12 @@ struct ImportCommand: ParsableCommand {
     @Option(name: .long, help: "Exclude tags matching glob pattern.")
     var excludeTags: [String] = []
 
+    @Flag(name: .long, help: "Create backup of original file before writing.")
+    var backup = false
+
+    @Flag(name: .long, help: "Overwrite original without backup (default behavior, for ExifTool compatibility).")
+    var overwriteOriginal = false
+
     func run() throws {
         let sourceURL = URL(fileURLWithPath: source)
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
@@ -56,8 +62,9 @@ struct ImportCommand: ParsableCommand {
         let filter: TagFilter? = (!tags.isEmpty || !excludeTags.isEmpty)
             ? TagFilter(tags: tags, excludeTags: excludeTags) : nil
 
+        let writeOpts = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
         let result = try MetadataImporter.importToFiles(
-            records: records, files: destURLs, matching: matching, filter: filter
+            records: records, files: destURLs, matching: matching, filter: filter, writeOptions: writeOpts
         )
 
         printSummary(succeeded: result.succeeded, failed: result.failed, verb: "Imported")

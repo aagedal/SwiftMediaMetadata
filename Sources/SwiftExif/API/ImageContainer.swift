@@ -12,4 +12,7 @@ public enum ImageContainer: Sendable {
     case cr3(CR3File)
     case pdf(PDFFile)
     case psd(PSDFile)
+    case gif(GIFFile)
+    case bmp(BMPFile)
+    case svg(SVGFile)
 }

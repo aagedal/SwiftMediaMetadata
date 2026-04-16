@@ -23,6 +23,12 @@ struct CopyCommand: ParsableCommand {
     @Option(name: .long, help: "Exclude tags matching glob pattern.")
     var excludeTags: [String] = []
 
+    @Flag(name: .long, help: "Create backup of original file before writing.")
+    var backup = false
+
+    @Flag(name: .long, help: "Overwrite original without backup (default behavior, for ExifTool compatibility).")
+    var overwriteOriginal = false
+
     func run() throws {
         let sourceURL = URL(fileURLWithPath: from)
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
@@ -50,6 +56,7 @@ struct CopyCommand: ParsableCommand {
             groupSet = nil
         }
 
+        let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
         var succeeded = 0
         var failed = 0
 
@@ -64,7 +71,7 @@ struct CopyCommand: ParsableCommand {
                 } else {
                     dest.copyMetadata(from: source)
                 }
-                try dest.write(to: url)
+                try dest.write(to: url, options: options)
                 succeeded += 1
             } catch {
                 printError("Error copying to \(url.lastPathComponent): \(error.localizedDescription)")

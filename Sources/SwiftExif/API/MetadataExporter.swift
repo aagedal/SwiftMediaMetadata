@@ -53,11 +53,21 @@ public struct MetadataExporter: Sendable {
 
     // MARK: - Dictionary Building
 
-    /// Build a flat dictionary of all metadata fields.
-    public static func buildDictionary(_ metadata: ImageMetadata) -> [String: Any] {
+    /// Build a flat dictionary of all metadata fields, including file-level tags if URL is provided.
+    public static func buildDictionary(_ metadata: ImageMetadata, fileURL: URL? = nil) -> [String: Any] {
         var dict: [String: Any] = [:]
 
         dict["FileFormat"] = formatName(metadata.format)
+
+        // File-level tags (size, hashes) when URL is available
+        if let url = fileURL, let data = try? Data(contentsOf: url) {
+            dict["File:FileSize"] = Int(data.count)
+            let hashes = FileHasher.allHashes(data)
+            dict["File:MD5"] = hashes.md5
+            dict["File:SHA256"] = hashes.sha256
+            dict["File:FileName"] = url.lastPathComponent
+            dict["File:Directory"] = url.deletingLastPathComponent().path
+        }
 
         // EXIF
         if let exif = metadata.exif {
@@ -99,6 +109,34 @@ public struct MetadataExporter: Sendable {
             for (key, value) in pdfFile.infoDict {
                 dict["PDF:\(key)"] = value
             }
+        }
+
+        // BMP header info
+        if case .bmp(let bmpFile) = metadata.container {
+            dict["BMP:ImageWidth"] = Int(bmpFile.width)
+            dict["BMP:ImageHeight"] = Int(bmpFile.absoluteHeight)
+            dict["BMP:BitsPerPixel"] = Int(bmpFile.bitsPerPixel)
+            dict["BMP:Compression"] = bmpFile.compressionName
+            dict["BMP:Version"] = bmpFile.bmpVersion
+            if bmpFile.xPixelsPerMeter != 0 {
+                dict["BMP:XResolution"] = Int(round(bmpFile.xDPI))
+                dict["BMP:YResolution"] = Int(round(bmpFile.yDPI))
+            }
+        }
+
+        // GIF dimensions
+        if case .gif(let gifFile) = metadata.container {
+            dict["GIF:ImageWidth"] = Int(gifFile.width)
+            dict["GIF:ImageHeight"] = Int(gifFile.height)
+            let comments = gifFile.comments
+            if !comments.isEmpty { dict["GIF:Comment"] = comments.joined(separator: "; ") }
+        }
+
+        // SVG dimensions
+        if case .svg(let svgFile) = metadata.container {
+            if let w = svgFile.width { dict["SVG:Width"] = w }
+            if let h = svgFile.height { dict["SVG:Height"] = h }
+            if let vb = svgFile.viewBox { dict["SVG:ViewBox"] = vb }
         }
 
         // ICC Profile
@@ -290,6 +328,9 @@ public struct MetadataExporter: Sendable {
         case .webp: return "WebP"
         case .pdf: return "PDF"
         case .psd: return "PSD"
+        case .gif: return "GIF"
+        case .bmp: return "BMP"
+        case .svg: return "SVG"
         }
     }
 
