@@ -14,6 +14,8 @@ struct GeotagCommand: ParsableCommand {
     @Argument(help: "Image files to geotag.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Maximum time offset in seconds for matching (default: 60).")
     var maxOffset: Double = 60
 
@@ -32,7 +34,7 @@ struct GeotagCommand: ParsableCommand {
     func run() throws {
         let gpxURL = URL(fileURLWithPath: gpx)
         let track = try GPXParser.parse(from: gpxURL)
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
 
         print("Loaded GPX track: \(track.trackpoints.count) trackpoints")
         if let range = track.timeRange {

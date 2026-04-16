@@ -14,6 +14,8 @@ struct ImportCommand: ParsableCommand {
     @Argument(help: "Image files to apply metadata to.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Match mode: filename (default) or sequential.")
     var match: String = "filename"
 
@@ -38,7 +40,7 @@ struct ImportCommand: ParsableCommand {
             throw ValidationError("Source file not found: \(source)")
         }
 
-        let destURLs = try resolveFiles(files)
+        let destURLs = try resolveFiles(files, filter: fileFilter)
         let ext = sourceURL.pathExtension.lowercased()
 
         let records: [[String: String]]

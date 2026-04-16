@@ -46,6 +46,8 @@ struct SidecarRead: ParsableCommand {
             case .simple(let s): display = s
             case .array(let items): display = items.joined(separator: "; ")
             case .langAlternative(let s): display = s
+            case .structure(let fields): display = fields.values.sorted().joined(separator: "; ")
+            case .structuredArray(let items): display = items.map { $0.values.sorted().joined(separator: ", ") }.joined(separator: "; ")
             }
             let shortKey = shortenXMPKey(key)
             print("\(shortKey.padding(toLength: maxKey + 2, withPad: " ", startingAt: 0)): \(display)")
@@ -113,8 +115,10 @@ struct SidecarEmbed: ParsableCommand {
     @Argument(help: "Image files whose sidecars should be embedded.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         var succeeded = 0
         var failed = 0
 
@@ -149,11 +153,13 @@ struct SidecarSync: ParsableCommand {
     @Argument(help: "Image files to sync.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Sync direction: sidecar (sidecar wins) or image (embedded wins). Omit to just compare.")
     var direction: String?
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
 
         for url in urls {
             let sidecarURL = XMPSidecar.sidecarURL(for: url)

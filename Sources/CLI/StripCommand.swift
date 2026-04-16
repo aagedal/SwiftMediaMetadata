@@ -11,6 +11,8 @@ struct StripCommand: ParsableCommand {
     @Argument(help: "Image files to strip metadata from.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Flag(name: .long, help: "Strip all metadata.")
     var all = false
 
@@ -51,7 +53,7 @@ struct StripCommand: ParsableCommand {
     }
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
         let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
 

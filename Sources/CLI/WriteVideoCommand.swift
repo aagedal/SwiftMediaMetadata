@@ -11,6 +11,8 @@ struct WriteVideoCommand: ParsableCommand {
     @Argument(help: "Video files to modify.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Set the title.")
     var title: String?
 
@@ -49,7 +51,7 @@ struct WriteVideoCommand: ParsableCommand {
     }
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
         var succeeded = 0
         var failed = 0

@@ -20,6 +20,8 @@ struct GeocodeCommand: ParsableCommand {
     @Argument(help: "Image files to read GPS from (if --lat/--lon not given).")
     var files: [String] = []
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     func validate() throws {
         if lat != nil || lon != nil {
             guard lat != nil && lon != nil else {
@@ -45,7 +47,7 @@ struct GeocodeCommand: ParsableCommand {
             }
         } else {
             // Read GPS from image files
-            let urls = try resolveFiles(files)
+            let urls = try resolveFiles(files, filter: fileFilter)
             for url in urls {
                 do {
                     let metadata = try ImageMetadata.read(from: url)

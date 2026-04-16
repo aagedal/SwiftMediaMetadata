@@ -11,8 +11,7 @@ struct DeleteOriginalCommand: ParsableCommand {
     @Argument(help: "Files or directories to clean up backup files for.")
     var files: [String]
 
-    @Flag(name: .shortAndLong, help: "Recurse into subdirectories.")
-    var recursive = false
+    @OptionGroup var fileFilter: FileFilterOptions
 
     @Flag(name: .long, help: "Preview which files would be deleted without actually deleting.")
     var dryRun = false
@@ -22,7 +21,7 @@ struct DeleteOriginalCommand: ParsableCommand {
         var deleted = 0
         var totalSize: UInt64 = 0
 
-        let urls = try resolveFilesForCleanup(files, recursive: recursive)
+        let urls = try resolveFiles(files, filter: fileFilter)
 
         for url in urls {
             let backupURL = ImageMetadata.backupURL(for: url)
@@ -54,33 +53,4 @@ struct DeleteOriginalCommand: ParsableCommand {
             print("\(deleted) backup file(s) deleted (\(sizeStr))")
         }
     }
-}
-
-/// Resolve paths for cleanup, finding image files (with possible _original backups).
-private func resolveFilesForCleanup(_ paths: [String], recursive: Bool) throws -> [URL] {
-    var urls: [URL] = []
-    let fm = FileManager.default
-
-    for path in paths {
-        let url = URL(fileURLWithPath: path)
-        var isDir: ObjCBool = false
-
-        if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
-            if isDir.boolValue {
-                if recursive {
-                    if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
-                        for case let fileURL as URL in enumerator where isSupportedFile(fileURL) {
-                            urls.append(fileURL)
-                        }
-                    }
-                } else if let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
-                    urls.append(contentsOf: contents.filter { isSupportedFile($0) })
-                }
-            } else {
-                urls.append(url)
-            }
-        }
-    }
-
-    return urls
 }

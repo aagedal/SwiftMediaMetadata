@@ -11,6 +11,8 @@ struct ShiftDatesCommand: ParsableCommand {
     @Argument(help: "Image files to adjust.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Time offset in seconds (positive = forward, negative = backward).")
     var by: Double?
 
@@ -33,7 +35,7 @@ struct ShiftDatesCommand: ParsableCommand {
     }
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
         let offset = by ?? (hours! * 3600)
 

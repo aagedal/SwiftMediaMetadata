@@ -22,6 +22,8 @@ struct RenameCommand: ParsableCommand {
     @Argument(help: "Image files to rename.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Flag(name: .long, help: "Preview renames without moving files.")
     var dryRun = false
 
@@ -29,7 +31,7 @@ struct RenameCommand: ParsableCommand {
     var counterDigits: Int = 3
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         let renamer = MetadataRenamer(template: template, counterDigits: counterDigits)
 
         if dryRun {

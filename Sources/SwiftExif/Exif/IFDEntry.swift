@@ -87,6 +87,12 @@ public struct IFDEntry: Equatable, Sendable {
         return (num, den)
     }
 
+    public func floatValue(endian: ByteOrder) -> Float? {
+        guard type == .float, valueData.count >= 4 else { return nil }
+        var reader = BinaryReader(data: valueData)
+        return try? reader.readFloat32(endian: endian)
+    }
+
     public func uint16Values(endian: ByteOrder) -> [UInt16] {
         guard type == .short else { return [] }
         var reader = BinaryReader(data: valueData)

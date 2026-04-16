@@ -22,6 +22,10 @@ public struct MakerNoteWriter: Sendable {
             return writeOlympus(makerNote, byteOrder: byteOrder)
         case .panasonic:
             return writePanasonic(makerNote, byteOrder: byteOrder)
+        case .dji:
+            return writeDJI(makerNote, byteOrder: byteOrder)
+        case .samsung:
+            return writeSamsung(makerNote, byteOrder: byteOrder)
         case .unknown:
             return makerNote.rawData
         }
@@ -186,6 +190,28 @@ public struct MakerNoteWriter: Sendable {
         return serializeIFD(entries: updated, endian: byteOrder, headerData: header, tiffStart: 0)
     }
 
+    // MARK: - DJI
+
+    /// DJI: Direct IFD at offset 0, parent byte order (same as Canon).
+    private static func writeDJI(_ makerNote: MakerNoteData, byteOrder: ByteOrder) -> Data {
+        guard let entries = reparse(makerNote.rawData, tiffStart: 0, ifdOffset: 0, endian: byteOrder) else {
+            return makerNote.rawData
+        }
+        let updated = applyTagChanges(entries: entries, tags: makerNote.tags, endian: byteOrder, tagMap: djiTagMap)
+        return serializeIFD(entries: updated, endian: byteOrder, headerData: Data(), tiffStart: 0)
+    }
+
+    // MARK: - Samsung
+
+    /// Samsung: Direct IFD at offset 0, parent byte order (same as Canon).
+    private static func writeSamsung(_ makerNote: MakerNoteData, byteOrder: ByteOrder) -> Data {
+        guard let entries = reparse(makerNote.rawData, tiffStart: 0, ifdOffset: 0, endian: byteOrder) else {
+            return makerNote.rawData
+        }
+        let updated = applyTagChanges(entries: entries, tags: makerNote.tags, endian: byteOrder, tagMap: samsungTagMap)
+        return serializeIFD(entries: updated, endian: byteOrder, headerData: Data(), tiffStart: 0)
+    }
+
     // MARK: - Shared Helpers
 
     /// Re-parse the raw MakerNote data to recover the full IFD entries.
@@ -246,9 +272,10 @@ public struct MakerNoteWriter: Sendable {
                 w.writeUInt32(UInt32(u), endian: endian)
                 return (w.data, .long, 1)
             }
-        case .double:
-            // Store as string representation
-            return encodeValue(.string(String(format: "%.6f", 0)), endian: endian)
+        case .double(let d):
+            var w = BinaryWriter(capacity: 4)
+            w.writeFloat32(Float(d), endian: endian)
+            return (w.data, .float, 1)
         case .data(let d):
             return (d, .undefined, UInt32(d.count))
         case .intArray(let arr):
@@ -314,5 +341,33 @@ public struct MakerNoteWriter: Sendable {
         "InternalSerialNumber": 0x0025,
         "LensSerialNumber": 0x0052,
         "LensType": 0x0051,
+    ]
+
+    private static let djiTagMap: [String: UInt16] = [
+        "Make": 0x0001,
+        "SpeedX": 0x0003,
+        "SpeedY": 0x0004,
+        "SpeedZ": 0x0005,
+        "Pitch": 0x0006,
+        "Yaw": 0x0007,
+        "Roll": 0x0008,
+        "CameraPitch": 0x0009,
+        "CameraYaw": 0x000a,
+        "CameraRoll": 0x000b,
+        "AircraftModel": 0x000d,
+    ]
+
+    private static let samsungTagMap: [String: UInt16] = [
+        "MakerNoteVersion": 0x0001,
+        "DeviceType": 0x0002,
+        "ModelID": 0x0003,
+        "SmartAlbumColor": 0x000c,
+        "EncryptionKey": 0x0010,
+        "ColorTemperature": 0x0035,
+        "ImageEditor": 0x0040,
+        "FirmwareName": 0x0043,
+        "FaceDetect": 0x0050,
+        "FaceRecognition": 0x0100,
+        "FocalLengthIn35mmFormat": 0xa001,
     ]
 }

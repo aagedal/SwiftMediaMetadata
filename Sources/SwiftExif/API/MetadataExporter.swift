@@ -309,6 +309,22 @@ public struct MetadataExporter: Sendable {
                     dict[exportKey] = items
                 case .langAlternative(let s):
                     dict[exportKey] = s
+                case .structure(let fields):
+                    var nested: [String: String] = [:]
+                    for (k, v) in fields {
+                        if let (p, ln) = resolveXMPKey(k) { nested["\(p):\(ln)"] = v }
+                        else { nested[k] = v }
+                    }
+                    dict[exportKey] = nested
+                case .structuredArray(let items):
+                    dict[exportKey] = items.map { item in
+                        var nested: [String: String] = [:]
+                        for (k, v) in item {
+                            if let (p, ln) = resolveXMPKey(k) { nested["\(p):\(ln)"] = v }
+                            else { nested[k] = v }
+                        }
+                        return nested
+                    }
                 }
             }
         }

@@ -36,6 +36,10 @@ public struct MakerNoteReader: Sendable {
             tags = OlympusMakerNote.parse(data: rawData, byteOrder: byteOrder)
         case .panasonic:
             tags = PanasonicMakerNote.parse(data: rawData, byteOrder: byteOrder)
+        case .dji:
+            tags = DJIMakerNote.parse(data: rawData, byteOrder: byteOrder)
+        case .samsung:
+            tags = SamsungMakerNote.parse(data: rawData, byteOrder: byteOrder)
         case .unknown:
             return nil
         }
@@ -53,6 +57,8 @@ public struct MakerNoteReader: Sendable {
         if make.hasPrefix("fujifilm") || make.hasPrefix("fuji") { return .fujifilm }
         if make.hasPrefix("olympus") || make.hasPrefix("om ") { return .olympus }
         if make.hasPrefix("panasonic") { return .panasonic }
+        if make.hasPrefix("dji") { return .dji }
+        if make.hasPrefix("samsung") { return .samsung }
         return .unknown
     }
 }

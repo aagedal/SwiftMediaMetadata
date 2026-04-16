@@ -23,6 +23,8 @@ struct SetGPSCommand: ParsableCommand {
     @Argument(help: "Image files to set GPS on.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Flag(name: .long, help: "Create backup of original file before writing.")
     var backup = false
 
@@ -39,7 +41,7 @@ struct SetGPSCommand: ParsableCommand {
     }
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
         var succeeded = 0
         var failed = 0

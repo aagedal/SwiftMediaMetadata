@@ -124,6 +124,11 @@ public struct BinaryReader: Sendable {
         return Int32(bitPattern: unsigned)
     }
 
+    public mutating func readFloat32(endian: ByteOrder) throws -> Float {
+        let bits = try readUInt32(endian: endian)
+        return Float(bitPattern: bits)
+    }
+
     public mutating func readUInt64BigEndian() throws -> UInt64 {
         guard offset + 8 <= data.count else {
             throw MetadataError.unexpectedEndOfData

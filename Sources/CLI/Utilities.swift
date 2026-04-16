@@ -2,10 +2,12 @@ import ArgumentParser
 import Foundation
 import SwiftExif
 
-/// Resolve file arguments to URLs, expanding directories and glob patterns.
-func resolveFiles(_ paths: [String]) throws -> [URL] {
+/// Resolve file arguments to URLs, expanding directories and applying filters.
+func resolveFiles(_ paths: [String], filter: FileFilterOptions = FileFilterOptions()) throws -> [URL] {
     var urls: [URL] = []
     let fm = FileManager.default
+    let extFilter = Set(filter.ext.map { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) })
+    let ignoreDirs = Set(filter.ignore)
 
     for path in paths {
         let url = URL(fileURLWithPath: path)
@@ -13,20 +15,41 @@ func resolveFiles(_ paths: [String]) throws -> [URL] {
 
         if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
             if isDir.boolValue {
-                // Expand directory to supported files
-                if let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
-                    urls.append(contentsOf: contents.filter { isSupportedFile($0) })
+                if filter.recursive {
+                    if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.isDirectoryKey]) {
+                        for case let fileURL as URL in enumerator {
+                            if let isSubDir = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory, isSubDir {
+                                if ignoreDirs.contains(fileURL.lastPathComponent) {
+                                    enumerator.skipDescendants()
+                                }
+                                continue
+                            }
+                            if isMatchingFile(fileURL, extFilter: extFilter) {
+                                urls.append(fileURL)
+                            }
+                        }
+                    }
+                } else {
+                    if let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                        urls.append(contentsOf: contents.filter { isMatchingFile($0, extFilter: extFilter) })
+                    }
                 }
             } else {
                 urls.append(url)
             }
         } else {
-            // May be a glob expanded by the shell — if it doesn't exist, report it
             printError("File not found: \(path)")
         }
     }
 
     return urls
+}
+
+/// Check if a file matches the extension filter (or all supported if no filter).
+private func isMatchingFile(_ url: URL, extFilter: Set<String>) -> Bool {
+    guard isSupportedFile(url) else { return false }
+    if extFilter.isEmpty { return true }
+    return extFilter.contains(url.pathExtension.lowercased())
 }
 
 /// Check if a URL has a supported image or video extension.
@@ -38,6 +61,7 @@ func isSupportedFile(_ url: URL) -> Bool {
         "jxl", "png", "avif", "heic", "heif", "webp",
         "gif", "bmp", "dib", "svg",
         "mp4", "mov", "m4v",
+        "mp3", "flac", "m4a",
     ]
     return supported.contains(ext)
 }

@@ -890,6 +890,8 @@ public struct ImageMetadata: Sendable {
                     case .simple(let s): return s
                     case .array(let arr): return arr.joined(separator: "; ")
                     case .langAlternative(let s): return s
+                    case .structure(let fields): return fields.values.sorted().joined(separator: "; ")
+                    case .structuredArray(let items): return items.map { $0.values.sorted().joined(separator: ", ") }.joined(separator: "; ")
                     }
                 }
                 break

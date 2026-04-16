@@ -290,4 +290,49 @@ public struct FormatDetector: Sendable {
         default:     return nil
         }
     }
+
+    // MARK: - Audio Detection
+
+    /// Detect audio format from the first bytes of data.
+    public static func detectAudio(_ data: Data) -> AudioFormat? {
+        guard data.count >= 4 else { return nil }
+        let bytes = [UInt8](data.prefix(4))
+
+        // MP3 with ID3v2 tag: "ID3" (0x49, 0x44, 0x33)
+        if bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33 {
+            return .mp3
+        }
+
+        // MP3 MPEG frame sync: 0xFF followed by 0xE0+ (11 sync bits set)
+        if bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0 {
+            return .mp3
+        }
+
+        // FLAC: "fLaC" (0x66, 0x4C, 0x61, 0x43)
+        if bytes[0] == 0x66 && bytes[1] == 0x4C && bytes[2] == 0x61 && bytes[3] == 0x43 {
+            return .flac
+        }
+
+        // M4A: ISOBMFF with "M4A " brand (check via existing infrastructure)
+        if data.count >= 12 {
+            let b = [UInt8](data.prefix(12))
+            if b[4] == 0x66 && b[5] == 0x74 && b[6] == 0x79 && b[7] == 0x70 {
+                if let brand = detectISOBMFFBrand(data), brand == "M4A " {
+                    return .m4a
+                }
+            }
+        }
+
+        return nil
+    }
+
+    /// Detect audio format from file extension.
+    public static func detectAudioFromExtension(_ pathExtension: String) -> AudioFormat? {
+        switch pathExtension.lowercased() {
+        case "mp3": return .mp3
+        case "flac": return .flac
+        case "m4a": return .m4a
+        default: return nil
+        }
+    }
 }

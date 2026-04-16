@@ -59,6 +59,18 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     private var appliedDimUnit: String?
     private var regionList: XMPRegionList?
 
+    // Structure parsing state
+    private var inStructuredItem = false
+    private var currentStructureFields: [String: String] = [:]
+    private var currentStructuredArrayItems: [[String: String]] = []
+    private var isStructuredBag = false
+    private var inPropertyStructure = false
+    private var propertyStructureFields: [String: String] = [:]
+    private var propertyStructureProperty = ""
+    private var propertyStructureNamespace = ""
+    private var structureChildElement = ""
+    private var structureChildNamespace = ""
+
     init(xmlString: String) {
         self.xmlString = xmlString
     }
@@ -163,6 +175,38 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         // Standard XMP handling (skip when inside regions)
         if inRegions { return }
 
+        // Handle structure child elements (rdf:parseType="Resource" style)
+        if inPropertyStructure {
+            structureChildElement = elementName
+            structureChildNamespace = namespaceURI ?? ""
+            currentText = ""
+            return
+        }
+
+        // Handle structured items inside Bag/Seq (Description inside li)
+        if inStructuredItem && elementName == "Description" {
+            // Parse attributes as structure fields
+            for (key, value) in attributeDict {
+                if key.hasPrefix("xmlns") || key == "about" || key == "parseType" { continue }
+                let parts = key.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    let prefix = String(parts[0])
+                    let prop = String(parts[1])
+                    if let ns = resolvePrefix(prefix) {
+                        currentStructureFields["\(ns)\(prop)"] = value
+                    }
+                }
+            }
+            return
+        }
+        if inStructuredItem {
+            // Child element inside a structured item (element form)
+            structureChildElement = elementName
+            structureChildNamespace = namespaceURI ?? ""
+            currentText = ""
+            return
+        }
+
         if elementName == "Description" {
             inDescription = true
             // Some simple properties are stored as attributes on rdf:Description
@@ -182,6 +226,8 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         } else if elementName == "Bag" {
             inBag = true
             currentArrayItems = []
+            isStructuredBag = false
+            currentStructuredArrayItems = []
         } else if elementName == "Seq" {
             inSeq = true
             currentArrayItems = []
@@ -190,12 +236,46 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             currentArrayItems = []
         } else if elementName == "li" {
             currentText = ""
+            // If inside a Bag, prepare for potential structured item
+            if inBag {
+                inStructuredItem = true
+                currentStructureFields = [:]
+            }
         } else if inDescription && !inBag && !inSeq && !inAlt {
             // This is a property element — remember it for potential child arrays
             currentElement = elementName
             currentNamespace = namespaceURI ?? ""
             currentArrayProperty = elementName
             currentArrayNamespace = namespaceURI ?? ""
+
+            // Check for rdf:parseType="Resource" indicating a single structure
+            if attributeDict["rdf:parseType"] == "Resource" || attributeDict["parseType"] == "Resource" {
+                inPropertyStructure = true
+                propertyStructureFields = [:]
+                propertyStructureProperty = elementName
+                propertyStructureNamespace = namespaceURI ?? ""
+            } else {
+                // Check for structure attributes directly on the property element (compact form)
+                var structAttrs: [String: String] = [:]
+                for (key, value) in attributeDict {
+                    if key.hasPrefix("xmlns") || key == "about" || key == "parseType" { continue }
+                    let parts = key.split(separator: ":", maxSplits: 1)
+                    if parts.count == 2 {
+                        let prefix = String(parts[0])
+                        let prop = String(parts[1])
+                        if let ns = resolvePrefix(prefix) {
+                            structAttrs["\(ns)\(prop)"] = value
+                        }
+                    }
+                }
+                if !structAttrs.isEmpty {
+                    // This property element has namespaced attributes — treat as single structure
+                    inPropertyStructure = true
+                    propertyStructureFields = structAttrs
+                    propertyStructureProperty = elementName
+                    propertyStructureNamespace = namespaceURI ?? ""
+                }
+            }
         }
     }
 
@@ -248,21 +328,81 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         }
         if inRegions { return }
 
+        // Handle end of structure child elements
+        if inPropertyStructure && elementName != propertyStructureProperty {
+            if elementName == "Description" {
+                // End of rdf:Description inside the property — fields already captured
+                return
+            }
+            // Child element text value
+            let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, let ns = namespaceURI, !ns.isEmpty {
+                propertyStructureFields["\(ns)\(elementName)"] = trimmed
+            }
+            structureChildElement = ""
+            structureChildNamespace = ""
+            return
+        }
+
+        // End of property structure element
+        if inPropertyStructure && elementName == propertyStructureProperty {
+            if !propertyStructureFields.isEmpty {
+                let key = "\(propertyStructureNamespace)\(propertyStructureProperty)"
+                properties[key] = .structure(propertyStructureFields)
+            }
+            inPropertyStructure = false
+            propertyStructureFields = [:]
+            propertyStructureProperty = ""
+            propertyStructureNamespace = ""
+            return
+        }
+
+        // Handle structured items inside bag
+        if inStructuredItem && elementName != "li" && elementName != "Description" {
+            let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, let ns = namespaceURI, !ns.isEmpty {
+                currentStructureFields["\(ns)\(elementName)"] = trimmed
+            }
+            structureChildElement = ""
+            structureChildNamespace = ""
+            return
+        }
+        if inStructuredItem && elementName == "Description" {
+            // End of rdf:Description inside li — fields already captured from attributes
+            return
+        }
+
         // Standard XMP handling
         if elementName == "Description" {
             inDescription = false
         } else if elementName == "li" {
-            let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                currentArrayItems.append(trimmed)
+            if inStructuredItem && !currentStructureFields.isEmpty {
+                // This was a structured item in a Bag
+                isStructuredBag = true
+                currentStructuredArrayItems.append(currentStructureFields)
+                inStructuredItem = false
+                currentStructureFields = [:]
+            } else {
+                inStructuredItem = false
+                let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    currentArrayItems.append(trimmed)
+                }
             }
         } else if elementName == "Bag" || elementName == "Seq" {
-            if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
+            if isStructuredBag && !currentStructuredArrayItems.isEmpty {
+                // Store as structured array
+                if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
+                    properties["\(currentArrayNamespace)\(currentArrayProperty)"] = .structuredArray(currentStructuredArrayItems)
+                }
+            } else if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
                 properties["\(currentArrayNamespace)\(currentArrayProperty)"] = .array(currentArrayItems)
             }
             inBag = false
             inSeq = false
+            isStructuredBag = false
             currentArrayItems = []
+            currentStructuredArrayItems = []
         } else if elementName == "Alt" {
             if let first = currentArrayItems.first {
                 if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
@@ -295,6 +435,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         case "Iptc4xmpExt": return XMPNamespace.iptcExt
         case "xmp": return XMPNamespace.xmp
         case "xmpRights": return XMPNamespace.xmpRights
+        case "plus": return XMPNamespace.plus
         case "mwg-rs": return XMPNamespace.mwgRegions
         case "stArea": return XMPNamespace.stArea
         case "stDim": return XMPNamespace.stDim

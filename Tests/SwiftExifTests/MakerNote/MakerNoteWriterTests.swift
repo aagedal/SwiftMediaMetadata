@@ -138,6 +138,52 @@ final class MakerNoteWriterTests: XCTestCase {
         }
     }
 
+    // MARK: - DJI Round-Trip
+
+    func testDJIRoundTrip() {
+        let rawData = buildDJIMakerNote(make: "DJI", speedX: 2.5, byteOrder: .littleEndian)
+        let ifd = buildExifIFDWithMakerNote(rawData, byteOrder: .littleEndian)
+        guard let parsed = MakerNoteReader.parse(from: ifd, make: "DJI", byteOrder: .littleEndian) else {
+            XCTFail("Failed to parse DJI MakerNote"); return
+        }
+
+        var modified = parsed
+        modified.setTag("SpeedX", value: .double(9.8))
+
+        let written = MakerNoteWriter.write(modified, byteOrder: .littleEndian)
+        let newIFD = buildExifIFDWithMakerNote(written, byteOrder: .littleEndian)
+        let reparsed = MakerNoteReader.parse(from: newIFD, make: "DJI", byteOrder: .littleEndian)
+
+        if case .double(let sx) = reparsed?.tags["SpeedX"] {
+            XCTAssertEqual(sx, Double(Float(9.8)), accuracy: 0.01)
+        } else {
+            XCTFail("SpeedX not found after round-trip")
+        }
+    }
+
+    // MARK: - Samsung Round-Trip
+
+    func testSamsungRoundTrip() {
+        let rawData = buildSamsungMakerNote(deviceType: 0x2000, firmwareName: "OLD", byteOrder: .bigEndian)
+        let ifd = buildExifIFDWithMakerNote(rawData, byteOrder: .bigEndian)
+        guard let parsed = MakerNoteReader.parse(from: ifd, make: "Samsung", byteOrder: .bigEndian) else {
+            XCTFail("Failed to parse Samsung MakerNote"); return
+        }
+
+        var modified = parsed
+        modified.setTag("FirmwareName", value: .string("NEW_FW"))
+
+        let written = MakerNoteWriter.write(modified, byteOrder: .bigEndian)
+        let newIFD = buildExifIFDWithMakerNote(written, byteOrder: .bigEndian)
+        let reparsed = MakerNoteReader.parse(from: newIFD, make: "Samsung", byteOrder: .bigEndian)
+
+        if case .string(let fw) = reparsed?.tags["FirmwareName"] {
+            XCTAssertEqual(fw, "NEW_FW")
+        } else {
+            XCTFail("FirmwareName not found after round-trip")
+        }
+    }
+
     // MARK: - ImageMetadata Convenience
 
     func testSetMakerNoteTagConvenience() {
@@ -248,5 +294,51 @@ final class MakerNoteWriterTests: XCTestCase {
         writer.writeUInt32(0, endian: byteOrder)
         writer.writeBytes(externalData)
         return writer.data
+    }
+
+    /// Build a DJI MakerNote: IFD starting immediately, like Canon.
+    private func buildDJIMakerNote(
+        make: String = "DJI",
+        speedX: Float? = nil,
+        byteOrder: ByteOrder = .littleEndian
+    ) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+
+        // Make (tag 0x0001)
+        let makeBytes = Data(make.utf8) + Data([0x00])
+        entries.append((0x0001, .ascii, UInt32(makeBytes.count), makeBytes))
+
+        // SpeedX (tag 0x0003) — Float32
+        if let sx = speedX {
+            var w = BinaryWriter(capacity: 4)
+            w.writeFloat32(sx, endian: byteOrder)
+            entries.append((0x0003, .float, 1, w.data))
+        }
+
+        entries.sort { $0.tag < $1.tag }
+        return buildMiniIFD(entries: entries, byteOrder: byteOrder)
+    }
+
+    /// Build a Samsung MakerNote: IFD starting immediately, like Canon.
+    private func buildSamsungMakerNote(
+        deviceType: UInt32 = 0x3000,
+        firmwareName: String? = nil,
+        byteOrder: ByteOrder = .bigEndian
+    ) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+
+        // DeviceType (tag 0x0002) — UInt32
+        var dtWriter = BinaryWriter(capacity: 4)
+        dtWriter.writeUInt32(deviceType, endian: byteOrder)
+        entries.append((0x0002, .long, 1, dtWriter.data))
+
+        // FirmwareName (tag 0x0043) — ASCII
+        if let fw = firmwareName {
+            let fwBytes = Data(fw.utf8) + Data([0x00])
+            entries.append((0x0043, .ascii, UInt32(fwBytes.count), fwBytes))
+        }
+
+        entries.sort { $0.tag < $1.tag }
+        return buildMiniIFD(entries: entries, byteOrder: byteOrder)
     }
 }

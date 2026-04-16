@@ -11,6 +11,8 @@ struct ValidateCommand: ParsableCommand {
     @Argument(help: "Image files or directories to validate.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Validation profile: news (default), stock, editorial.")
     var profile: ProfileName = .news
 
@@ -21,7 +23,7 @@ struct ValidateCommand: ParsableCommand {
     var verbose = false
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         guard !urls.isEmpty else {
             printError("No files found.")
             throw ExitCode.failure

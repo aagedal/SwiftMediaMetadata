@@ -11,6 +11,8 @@ struct WriteCommand: ParsableCommand {
     @Argument(help: "Image files to modify.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .shortAndLong, help: "Tag to set (Key=Value), append (Key+=Value), or remove (Key-=Value). Can be repeated.")
     var tag: [String] = []
 
@@ -33,7 +35,7 @@ struct WriteCommand: ParsableCommand {
     }
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
         let tags = try parseTags(tag)
         let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)

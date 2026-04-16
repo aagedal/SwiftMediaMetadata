@@ -16,11 +16,31 @@ public struct XMPWriter: Sendable {
     public static func generateXML(_ xmpData: XMPData) -> String {
         var usedNamespaces: Set<String> = []
 
-        // Collect used namespaces
+        // Collect used namespaces (including from structure field keys)
         for key in xmpData.allKeys {
             for (ns, _) in XMPNamespace.prefixes {
                 if key.hasPrefix(ns) {
                     usedNamespaces.insert(ns)
+                }
+            }
+            // Also scan structure/structuredArray field keys for additional namespaces
+            if let value = findValue(in: xmpData, key: key) {
+                switch value {
+                case .structure(let fields):
+                    for fieldKey in fields.keys {
+                        for (ns, _) in XMPNamespace.prefixes {
+                            if fieldKey.hasPrefix(ns) { usedNamespaces.insert(ns); break }
+                        }
+                    }
+                case .structuredArray(let items):
+                    for item in items {
+                        for fieldKey in item.keys {
+                            for (ns, _) in XMPNamespace.prefixes {
+                                if fieldKey.hasPrefix(ns) { usedNamespaces.insert(ns); break }
+                            }
+                        }
+                    }
+                default: break
                 }
             }
         }
@@ -63,6 +83,32 @@ public struct XMPWriter: Sendable {
                     complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Alt>\n"
                     complexProps += "    <rdf:li xml:lang=\"x-default\">\(escapeXML(s))</rdf:li>\n"
                     complexProps += "   </rdf:Alt>\n  </\(prefix):\(localName)>"
+
+                case .structure(let fields):
+                    complexProps += "\n  <\(prefix):\(localName)>"
+                    complexProps += "\n   <rdf:Description"
+                    for (fieldKey, fieldValue) in fields.sorted(by: { $0.key < $1.key }) {
+                        if let (fieldPrefix, fieldLocal) = resolveKey(fieldKey) {
+                            complexProps += " \(fieldPrefix):\(fieldLocal)=\"\(escapeXML(fieldValue))\""
+                        }
+                    }
+                    complexProps += "/>"
+                    complexProps += "\n  </\(prefix):\(localName)>"
+
+                case .structuredArray(let items):
+                    complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>"
+                    for item in items {
+                        complexProps += "\n    <rdf:li>"
+                        complexProps += "\n     <rdf:Description"
+                        for (fieldKey, fieldValue) in item.sorted(by: { $0.key < $1.key }) {
+                            if let (fieldPrefix, fieldLocal) = resolveKey(fieldKey) {
+                                complexProps += " \(fieldPrefix):\(fieldLocal)=\"\(escapeXML(fieldValue))\""
+                            }
+                        }
+                        complexProps += "/>"
+                        complexProps += "\n    </rdf:li>"
+                    }
+                    complexProps += "\n   </rdf:Bag>\n  </\(prefix):\(localName)>"
                 }
             }
         }

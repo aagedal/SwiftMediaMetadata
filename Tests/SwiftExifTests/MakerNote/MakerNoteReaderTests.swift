@@ -207,6 +207,78 @@ final class MakerNoteReaderTests: XCTestCase {
         }
     }
 
+    // MARK: - DJI MakerNote
+
+    func testDJIMake() {
+        let makerNoteData = buildDJIMakerNote(make: "DJI", byteOrder: .littleEndian)
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .littleEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "DJI", byteOrder: .littleEndian)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.manufacturer, .dji)
+        if case .string(let m) = result?.tags["Make"] {
+            XCTAssertEqual(m, "DJI")
+        } else {
+            XCTFail("Make not found")
+        }
+    }
+
+    func testDJISpeedAndOrientation() {
+        let makerNoteData = buildDJIMakerNote(
+            make: "DJI", speedX: 1.5, yaw: -45.3, cameraRoll: 0.12,
+            byteOrder: .littleEndian
+        )
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .littleEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "DJI", byteOrder: .littleEndian)
+
+        XCTAssertNotNil(result)
+        if case .double(let sx) = result?.tags["SpeedX"] {
+            XCTAssertEqual(sx, Double(Float(1.5)), accuracy: 0.001)
+        } else {
+            XCTFail("SpeedX not found")
+        }
+        if case .double(let y) = result?.tags["Yaw"] {
+            XCTAssertEqual(y, Double(Float(-45.3)), accuracy: 0.01)
+        } else {
+            XCTFail("Yaw not found")
+        }
+        if case .double(let cr) = result?.tags["CameraRoll"] {
+            XCTAssertEqual(cr, Double(Float(0.12)), accuracy: 0.001)
+        } else {
+            XCTFail("CameraRoll not found")
+        }
+    }
+
+    // MARK: - Samsung MakerNote
+
+    func testSamsungDeviceType() {
+        let makerNoteData = buildSamsungMakerNote(deviceType: 0x3000, byteOrder: .bigEndian)
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "SAMSUNG", byteOrder: .bigEndian)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.manufacturer, .samsung)
+        if case .uint(let dt) = result?.tags["DeviceType"] {
+            XCTAssertEqual(dt, 0x3000) // phone
+        } else {
+            XCTFail("DeviceType not found")
+        }
+    }
+
+    func testSamsungFirmwareName() {
+        let makerNoteData = buildSamsungMakerNote(
+            deviceType: 0x3000, firmwareName: "S24Ultra_v3.1", byteOrder: .bigEndian
+        )
+        let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
+        let result = MakerNoteReader.parse(from: ifd, make: "Samsung", byteOrder: .bigEndian)
+
+        if case .string(let fw) = result?.tags["FirmwareName"] {
+            XCTAssertEqual(fw, "S24Ultra_v3.1")
+        } else {
+            XCTFail("FirmwareName not found")
+        }
+    }
+
     // MARK: - Round-trip Preservation
 
     func testMakerNoteRawDataPreserved() {
@@ -395,5 +467,67 @@ final class MakerNoteReaderTests: XCTestCase {
         let ifdData = buildMiniIFD(entries: entries, byteOrder: .bigEndian, offsetBase: 12)
         writer.writeBytes(ifdData)
         return writer.data
+    }
+
+    /// Build a DJI MakerNote: IFD starting immediately, like Canon.
+    private func buildDJIMakerNote(
+        make: String = "DJI",
+        speedX: Float? = nil,
+        yaw: Float? = nil,
+        cameraRoll: Float? = nil,
+        byteOrder: ByteOrder = .littleEndian
+    ) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+
+        // Make (tag 0x0001)
+        let makeBytes = Data(make.utf8) + Data([0x00])
+        entries.append((0x0001, .ascii, UInt32(makeBytes.count), makeBytes))
+
+        // SpeedX (tag 0x0003) — Float32
+        if let sx = speedX {
+            var w = BinaryWriter(capacity: 4)
+            w.writeFloat32(sx, endian: byteOrder)
+            entries.append((0x0003, .float, 1, w.data))
+        }
+
+        // Yaw (tag 0x0007) — Float32
+        if let y = yaw {
+            var w = BinaryWriter(capacity: 4)
+            w.writeFloat32(y, endian: byteOrder)
+            entries.append((0x0007, .float, 1, w.data))
+        }
+
+        // CameraRoll (tag 0x000b) — Float32
+        if let cr = cameraRoll {
+            var w = BinaryWriter(capacity: 4)
+            w.writeFloat32(cr, endian: byteOrder)
+            entries.append((0x000b, .float, 1, w.data))
+        }
+
+        entries.sort { $0.tag < $1.tag }
+        return buildMiniIFD(entries: entries, byteOrder: byteOrder)
+    }
+
+    /// Build a Samsung MakerNote: IFD starting immediately, like Canon.
+    private func buildSamsungMakerNote(
+        deviceType: UInt32 = 0x3000,
+        firmwareName: String? = nil,
+        byteOrder: ByteOrder = .bigEndian
+    ) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+
+        // DeviceType (tag 0x0002) — UInt32
+        var dtWriter = BinaryWriter(capacity: 4)
+        dtWriter.writeUInt32(deviceType, endian: byteOrder)
+        entries.append((0x0002, .long, 1, dtWriter.data))
+
+        // FirmwareName (tag 0x0043) — ASCII
+        if let fw = firmwareName {
+            let fwBytes = Data(fw.utf8) + Data([0x00])
+            entries.append((0x0043, .ascii, UInt32(fwBytes.count), fwBytes))
+        }
+
+        entries.sort { $0.tag < $1.tag }
+        return buildMiniIFD(entries: entries, byteOrder: byteOrder)
     }
 }

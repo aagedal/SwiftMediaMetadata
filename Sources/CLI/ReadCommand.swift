@@ -11,6 +11,8 @@ struct ReadCommand: ParsableCommand {
     @Argument(help: "Image or video files to read.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Output format: table (default), json, csv, xml.")
     var format: OutputFormat = .table
 
@@ -33,7 +35,7 @@ struct ReadCommand: ParsableCommand {
     var excludeTags: [String] = []
 
     func run() throws {
-        let urls = try resolveFiles(files)
+        let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
         let fieldList = fields?.split(separator: ",").map(String.init)
         let groups = Set(group)
@@ -41,14 +43,22 @@ struct ReadCommand: ParsableCommand {
             ? TagFilter(tags: tags, excludeTags: excludeTags) : nil
 
         let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
+        let audioExtensions: Set<String> = ["mp3", "flac", "m4a"]
 
         var imageDicts: [[String: String]] = []
         var videoDicts: [[String: String]] = []
+        var audioDicts: [[String: String]] = []
         var imageNames: [String] = []
         var videoNames: [String] = []
+        var audioNames: [String] = []
 
         for url in urls {
-            if videoExtensions.contains(url.pathExtension.lowercased()) {
+            if audioExtensions.contains(url.pathExtension.lowercased()) {
+                let am = try AudioMetadata.read(from: url)
+                let dict = AudioMetadataExporter.buildDictionary(am).mapValues { String(describing: $0) }
+                audioDicts.append(dict)
+                audioNames.append(url.lastPathComponent)
+            } else if videoExtensions.contains(url.pathExtension.lowercased()) {
                 let vm = try VideoMetadata.read(from: url)
                 let dict = VideoMetadataExporter.buildDictionary(vm).mapValues { String(describing: $0) }
                 videoDicts.append(dict)
@@ -74,8 +84,8 @@ struct ReadCommand: ParsableCommand {
             }
         }
 
-        let allDicts = imageDicts + videoDicts
-        let allNames = imageNames + videoNames
+        let allDicts = imageDicts + videoDicts + audioDicts
+        let allNames = imageNames + videoNames + audioNames
 
         switch format {
         case .json:

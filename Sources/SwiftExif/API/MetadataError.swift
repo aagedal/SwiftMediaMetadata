@@ -39,6 +39,8 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
     case invalidGIF(String)
     case invalidBMP(String)
     case invalidSVG(String)
+    case invalidMP3(String)
+    case invalidFLAC(String)
 
     public var description: String {
         switch self {
@@ -118,6 +120,10 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid BMP file: \(detail)"
         case .invalidSVG(let detail):
             return "Invalid SVG file: \(detail)"
+        case .invalidMP3(let detail):
+            return "Invalid MP3 file: \(detail)"
+        case .invalidFLAC(let detail):
+            return "Invalid FLAC file: \(detail)"
         }
     }
 }

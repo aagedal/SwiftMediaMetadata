@@ -68,4 +68,25 @@ final class FormatDetectorTests: XCTestCase {
     func testDetectUnknownFormat() {
         XCTAssertNil(FormatDetector.detect(Data(repeating: 0x00, count: 20)))
     }
+
+    // MARK: - Audio Detection
+
+    func testDetectMP3WithID3() {
+        var data = Data([0x49, 0x44, 0x33]) // "ID3"
+        data.append(Data(repeating: 0, count: 20))
+        XCTAssertEqual(FormatDetector.detectAudio(data), .mp3)
+    }
+
+    func testDetectFLAC() {
+        var data = Data([0x66, 0x4C, 0x61, 0x43]) // "fLaC"
+        data.append(Data(repeating: 0, count: 20))
+        XCTAssertEqual(FormatDetector.detectAudio(data), .flac)
+    }
+
+    func testDetectAudioFromExtension() {
+        XCTAssertEqual(FormatDetector.detectAudioFromExtension("mp3"), .mp3)
+        XCTAssertEqual(FormatDetector.detectAudioFromExtension("flac"), .flac)
+        XCTAssertEqual(FormatDetector.detectAudioFromExtension("m4a"), .m4a)
+        XCTAssertNil(FormatDetector.detectAudioFromExtension("wav"))
+    }
 }

@@ -17,32 +17,10 @@ struct GPXExportCommand: ParsableCommand {
     @Option(name: .long, help: "Track name in the GPX file.")
     var name: String?
 
-    @Flag(name: .shortAndLong, help: "Recursively search directories for images.")
-    var recursive = false
+    @OptionGroup var fileFilter: FileFilterOptions
 
     func run() throws {
-        var urls: [URL] = []
-
-        let fm = FileManager.default
-        for path in files {
-            let url = URL(fileURLWithPath: path)
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                if recursive {
-                    if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
-                        for case let fileURL as URL in enumerator {
-                            if isSupportedFile(fileURL) { urls.append(fileURL) }
-                        }
-                    }
-                } else {
-                    if let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
-                        urls.append(contentsOf: contents.filter { isSupportedFile($0) })
-                    }
-                }
-            } else {
-                urls.append(url)
-            }
-        }
+        let urls = try resolveFiles(files, filter: fileFilter)
 
         guard !urls.isEmpty else {
             printError("No files found.")

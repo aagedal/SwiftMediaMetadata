@@ -176,6 +176,16 @@ public struct MetadataValidator: Sendable {
             }
         }
 
+        // DigitalSourceType: should be from IPTC controlled vocabulary
+        if let xmp = metadata.xmp, let dst = xmp.digitalSourceType {
+            if !dst.hasPrefix("http://cv.iptc.org/newscodes/digitalsourcetype/") {
+                issues.append(ValidationIssue(
+                    field: "XMP-Iptc4xmpExt:DigitalSourceType",
+                    message: "Should use an IPTC controlled vocabulary URI (http://cv.iptc.org/newscodes/digitalsourcetype/...)",
+                    severity: .warning))
+            }
+        }
+
         return issues
     }
 
@@ -249,6 +259,7 @@ public struct MetadataValidator: Sendable {
             "IPTC:City",
             "IPTC:Country-PrimaryLocationName",
             "IPTC:Source",
+            "XMP-Iptc4xmpExt:DigitalSourceType",
         ],
         enforceFormats: true,
         minimumKeywords: 3

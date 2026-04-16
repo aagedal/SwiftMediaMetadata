@@ -14,6 +14,8 @@ struct CopyCommand: ParsableCommand {
     @Argument(help: "Destination image files.")
     var files: [String]
 
+    @OptionGroup var fileFilter: FileFilterOptions
+
     @Option(name: .long, help: "Metadata groups to copy (comma-separated): exif, iptc, xmp, c2pa, icc. Default: all.")
     var groups: String?
 
@@ -36,7 +38,7 @@ struct CopyCommand: ParsableCommand {
         }
 
         let source = try ImageMetadata.read(from: sourceURL)
-        let destURLs = try resolveFiles(files)
+        let destURLs = try resolveFiles(files, filter: fileFilter)
 
         let groupSet: Set<ImageMetadata.MetadataGroup>?
         if let groups {

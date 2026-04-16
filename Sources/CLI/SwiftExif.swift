@@ -11,6 +11,7 @@ struct SwiftExifCLI: ParsableCommand {
             ReadCommand.self,
             WriteCommand.self,
             WriteVideoCommand.self,
+            WriteAudioCommand.self,
             StripCommand.self,
             CopyCommand.self,
             DiffCommand.self,

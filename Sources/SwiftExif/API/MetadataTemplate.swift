@@ -91,4 +91,23 @@ public struct MetadataTemplate: Sendable {
             (XMPNamespace.xmpRights, "UsageTerms", .langAlternative("For editorial use only")),
         ]
     )
+
+    /// AI-generated content template with appropriate Digital Source Type.
+    public static let aiGenerated = MetadataTemplate(
+        name: "AI Generated",
+        xmpFields: [
+            (XMPNamespace.iptcExt, "DigitalSourceType",
+             .simple("http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia")),
+            (XMPNamespace.xmpRights, "UsageTerms", .langAlternative("AI-generated content")),
+        ]
+    )
+
+    /// Composite/edited image template with Digital Source Type.
+    public static let compositeEdited = MetadataTemplate(
+        name: "Composite Edited",
+        xmpFields: [
+            (XMPNamespace.iptcExt, "DigitalSourceType",
+             .simple("http://cv.iptc.org/newscodes/digitalsourcetype/compositeSynthetic")),
+        ]
+    )
 }

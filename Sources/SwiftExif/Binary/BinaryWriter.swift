@@ -62,6 +62,10 @@ public struct BinaryWriter: Sendable {
         writeUInt32(UInt32(bitPattern: value), endian: endian)
     }
 
+    public mutating func writeFloat32(_ value: Float, endian: ByteOrder) {
+        writeUInt32(value.bitPattern, endian: endian)
+    }
+
     public mutating func writeUInt64BigEndian(_ value: UInt64) {
         data.append(UInt8((value >> 56) & 0xFF))
         data.append(UInt8((value >> 48) & 0xFF))

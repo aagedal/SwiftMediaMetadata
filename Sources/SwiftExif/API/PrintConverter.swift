@@ -75,6 +75,14 @@ public struct PrintConverter: Sendable {
             if let v = value as? Double { return String(format: "%.1fx", v) }
         case "Composite:FOV":
             if let v = value as? Double { return String(format: "%.1f deg", v) }
+        case "XMP-Iptc4xmpExt:DigitalSourceType":
+            if let s = value as? String { return digitalSourceType(s) }
+        case "XMP-Iptc4xmpExt:ModelReleaseStatus":
+            if let s = value as? String { return modelReleaseStatus(s) }
+        case "XMP-Iptc4xmpExt:PropertyReleaseStatus":
+            if let s = value as? String { return propertyReleaseStatus(s) }
+        case "XMP-plus:MinorModelAgeDisclosure":
+            if let s = value as? String { return minorModelAgeDisclosure(s) }
         default:
             break
         }
@@ -368,6 +376,95 @@ public struct PrintConverter: Sendable {
         }
 
         return String(format: "%d° %d' %.2f\" %@", degrees, minutes, seconds, direction).trimmingCharacters(in: .whitespaces)
+    }
+
+    // MARK: - IPTC Digital Source Type
+
+    /// Convert an IPTC Digital Source Type URI to a human-readable label.
+    public static func digitalSourceType(_ uri: String) -> String {
+        let base = "http://cv.iptc.org/newscodes/digitalsourcetype/"
+        guard uri.hasPrefix(base) else { return uri }
+        let code = String(uri.dropFirst(base.count))
+        switch code {
+        case "digitalCapture":                          return "Digital capture of a real life scene"
+        case "negativeFilm":                            return "Digitised from a negative on film"
+        case "positiveFilm":                            return "Digitised from a positive on film"
+        case "print":                                   return "Digitised from a print on non-transparent medium"
+        case "minorHumanEdits":                         return "Minor human edits"
+        case "compositeWithTrainedAlgorithmicMedia":    return "Composite with trained algorithmic media"
+        case "algorithmicMedia":                        return "Pure algorithmic media (AI-generated)"
+        case "trainedAlgorithmicMedia":                 return "Trained algorithmic media"
+        case "compositeSynthetic":                      return "Composite including synthetic elements"
+        case "algorithmicallyEnhanced":                 return "Algorithmically enhanced"
+        case "dataDrivenMedia":                         return "Data-driven media"
+        case "digitalArt":                              return "Digital art"
+        case "virtualRecording":                        return "Virtual recording"
+        case "compositeCapture":                        return "Composite of multiple captures"
+        case "softwareImage":                           return "Created by software"
+        case "screenCapture":                           return "Screen capture"
+        case "multishotComposite":                      return "Multi-shot composite"
+        case "panorama":                                return "Panorama"
+        case "hdr":                                     return "High Dynamic Range (HDR)"
+        default:                                        return uri
+        }
+    }
+
+    // MARK: - PLUS Model Release Status
+
+    /// Convert a PLUS Model Release Status URI to a human-readable label.
+    public static func modelReleaseStatus(_ uri: String) -> String {
+        let base = "http://ns.useplus.org/ldf/vocab/"
+        guard uri.hasPrefix(base) else { return uri }
+        let code = String(uri.dropFirst(base.count))
+        switch code {
+        case "MR-NON":  return "Not Applicable"
+        case "MR-NAP":  return "Not Applicable"
+        case "MR-UMR":  return "Unlimited Model Releases"
+        case "MR-LMR":  return "Limited or Incomplete Model Releases"
+        case "MR-UPR":  return "Unlimited Property Releases"
+        case "MR-LPR":  return "Limited or Incomplete Property Releases"
+        default:        return uri
+        }
+    }
+
+    // MARK: - PLUS Property Release Status
+
+    /// Convert a PLUS Property Release Status URI to a human-readable label.
+    public static func propertyReleaseStatus(_ uri: String) -> String {
+        let base = "http://ns.useplus.org/ldf/vocab/"
+        guard uri.hasPrefix(base) else { return uri }
+        let code = String(uri.dropFirst(base.count))
+        switch code {
+        case "PR-NON":  return "None"
+        case "PR-NAP":  return "Not Applicable"
+        case "PR-UPR":  return "Unlimited Property Releases"
+        case "PR-LPR":  return "Limited or Incomplete Property Releases"
+        default:        return uri
+        }
+    }
+
+    // MARK: - PLUS Minor Model Age Disclosure
+
+    /// Convert a PLUS Minor Model Age Disclosure URI to a human-readable label.
+    public static func minorModelAgeDisclosure(_ uri: String) -> String {
+        let base = "http://ns.useplus.org/ldf/vocab/"
+        guard uri.hasPrefix(base) else { return uri }
+        let code = String(uri.dropFirst(base.count))
+        switch code {
+        case "AG-UNK":  return "Age Unknown"
+        case "AG-A25":  return "Age 25 or Over"
+        case "AG-A24":  return "Age 24"
+        case "AG-A23":  return "Age 23"
+        case "AG-A22":  return "Age 22"
+        case "AG-A21":  return "Age 21"
+        case "AG-A20":  return "Age 20"
+        case "AG-A19":  return "Age 19"
+        case "AG-A18":  return "Age 18"
+        case "AG-A17":  return "Age 17"
+        case "AG-A16":  return "Age 16"
+        case "AG-A15":  return "Age 15 or Under"
+        default:        return uri
+        }
     }
 }
 
