@@ -501,6 +501,91 @@ final class XMPIPTCExtensionTests: XCTestCase {
         XCTAssertEqual(artwork, restored)
     }
 
+    // MARK: - IPTC Extension 1.4+ Structures (Phase D)
+
+    func testImageCreatorRoundTrip() throws {
+        var xmp = XMPData()
+        xmp.imageCreator = [
+            IPTCImageCreator(creatorID: "urn:example:creator:42", creatorName: "Truls Aagedal"),
+        ]
+
+        let xml = XMPWriter.generateXML(xmp)
+        let readBack = try XMPReader.readFromXML(Data(xml.utf8))
+
+        XCTAssertEqual(readBack.imageCreator.count, 1)
+        XCTAssertEqual(readBack.imageCreator[0].creatorID, "urn:example:creator:42")
+        XCTAssertEqual(readBack.imageCreator[0].creatorName, "Truls Aagedal")
+    }
+
+    func testCopyrightOwnerRoundTrip() throws {
+        var xmp = XMPData()
+        xmp.copyrightOwner = [
+            IPTCCopyrightOwner(copyrightOwnerID: "owner:1", copyrightOwnerName: "NTB"),
+            IPTCCopyrightOwner(copyrightOwnerName: "Associated Press"),
+        ]
+
+        let xml = XMPWriter.generateXML(xmp)
+        let readBack = try XMPReader.readFromXML(Data(xml.utf8))
+
+        XCTAssertEqual(readBack.copyrightOwner.count, 2)
+        let names = Set(readBack.copyrightOwner.compactMap(\.copyrightOwnerName))
+        XCTAssertEqual(names, Set(["NTB", "Associated Press"]))
+    }
+
+    func testLicensorRoundTrip() throws {
+        var xmp = XMPData()
+        xmp.licensor = [
+            IPTCLicensor(
+                licensorID: "urn:licensor:ntb",
+                licensorName: "NTB",
+                licensorCity: "Oslo",
+                licensorCountry: "Norway",
+                licensorEmail: "licensing@ntb.no",
+                licensorURL: "https://ntb.no"
+            ),
+        ]
+
+        let xml = XMPWriter.generateXML(xmp)
+        let readBack = try XMPReader.readFromXML(Data(xml.utf8))
+
+        XCTAssertEqual(readBack.licensor.count, 1)
+        let lic = readBack.licensor[0]
+        XCTAssertEqual(lic.licensorID, "urn:licensor:ntb")
+        XCTAssertEqual(lic.licensorName, "NTB")
+        XCTAssertEqual(lic.licensorCity, "Oslo")
+        XCTAssertEqual(lic.licensorCountry, "Norway")
+        XCTAssertEqual(lic.licensorEmail, "licensing@ntb.no")
+        XCTAssertEqual(lic.licensorURL, "https://ntb.no")
+    }
+
+    func testGenresRoundTrip() throws {
+        var xmp = XMPData()
+        xmp.genres = ["News Photo", "Feature", "Portrait"]
+
+        let xml = XMPWriter.generateXML(xmp)
+        let readBack = try XMPReader.readFromXML(Data(xml.utf8))
+        XCTAssertEqual(readBack.genres, ["News Photo", "Feature", "Portrait"])
+    }
+
+    func testImageCreatorStructureSelfRoundTrip() {
+        let original = IPTCImageCreator(creatorID: "A", creatorName: "B")
+        let restored = IPTCImageCreator(fields: original.toFields())
+        XCTAssertEqual(original, restored)
+    }
+
+    func testLicensorStructureSelfRoundTrip() {
+        let original = IPTCLicensor(
+            licensorID: "id", licensorName: "n",
+            licensorStreetAddress: "street", licensorExtendedAddress: "apt 2",
+            licensorCity: "Oslo", licensorRegion: "Oslo",
+            licensorPostalCode: "0123", licensorCountry: "Norway",
+            licensorTelephone1: "+47 1", licensorTelephone2: "+47 2",
+            licensorEmail: "a@b.no", licensorURL: "https://b.no"
+        )
+        let restored = IPTCLicensor(fields: original.toFields())
+        XCTAssertEqual(original, restored)
+    }
+
     // MARK: - Template Tests
 
     func testAIGeneratedTemplate() throws {

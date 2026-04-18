@@ -61,6 +61,7 @@ public struct MetadataTemplate: Sendable {
         ],
         xmpFields: [
             (XMPNamespace.xmpRights, "UsageTerms", .langAlternative("For editorial use only")),
+            (XMPNamespace.xmp, "CreatorTool", .simple("SwiftExif")),
         ]
     )
 

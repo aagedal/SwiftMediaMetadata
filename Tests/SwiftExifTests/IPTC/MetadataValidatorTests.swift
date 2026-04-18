@@ -368,4 +368,56 @@ final class MetadataValidatorTests: XCTestCase {
         XCTAssertEqual(iptc.expirationDate, "20260430")
         XCTAssertEqual(iptc.expirationTime, "235959+0000")
     }
+
+    // MARK: - Minimum Rating (Phase A3)
+
+    private func makeSubmissionReady() -> ImageMetadata {
+        var m = ImageMetadata.empty()
+        m.iptc.headline = "Breaking News"
+        m.iptc.caption = "A major event occurred today."
+        m.iptc.byline = "John Doe"
+        m.iptc.credit = "AP"
+        return m
+    }
+
+    func testQualityReviewRejectsBelowThreshold() {
+        var metadata = makeSubmissionReady()
+        var xmp = XMPData()
+        xmp.rating = 2
+        metadata.xmp = xmp
+
+        let result = MetadataValidator.qualityReview.validate(metadata)
+        XCTAssertFalse(result.isValid)
+        XCTAssertTrue(result.errors.contains { $0.field == "XMP-xmp:Rating" })
+    }
+
+    func testQualityReviewAcceptsAboveThreshold() {
+        var metadata = makeSubmissionReady()
+        var xmp = XMPData()
+        xmp.rating = 4
+        metadata.xmp = xmp
+
+        let result = MetadataValidator.qualityReview.validate(metadata)
+        XCTAssertTrue(result.isValid, "got issues: \(result.issues)")
+    }
+
+    func testQualityReviewRejectsWhenRatingMissing() {
+        let metadata = makeSubmissionReady()
+        let result = MetadataValidator.qualityReview.validate(metadata)
+        XCTAssertFalse(result.isValid)
+        XCTAssertTrue(result.errors.contains { $0.field == "XMP-xmp:Rating" })
+    }
+
+    func testMinimumRatingNilProfileIgnoresRating() {
+        // newsWire has no minimumRating — a zero-star photo should not error on rating.
+        var metadata = makeSubmissionReady()
+        metadata.iptc.city = "Oslo"
+        metadata.iptc.countryName = "Norway"
+        metadata.iptc.dateCreated = "20260415"
+        metadata.iptc.copyright = "2026 AP"
+        metadata.iptc.keywords = ["news"]
+
+        let result = MetadataValidator.newsWire.validate(metadata)
+        XCTAssertFalse(result.errors.contains { $0.field == "XMP-xmp:Rating" })
+    }
 }

@@ -160,6 +160,90 @@ public struct XMPData: Equatable, Sendable {
         }
     }
 
+    // MARK: - XMP Basic Properties (xmp:)
+
+    /// User rating (xmp:Rating). Typically 0.0–5.0; Bridge may write halves. Returns nil when absent
+    /// or when the stored value isn't numeric.
+    public var rating: Double? {
+        get {
+            guard let s = simpleValue(namespace: XMPNamespace.xmp, property: "Rating") else { return nil }
+            return Double(s)
+        }
+        set {
+            if let v = newValue { setValue(.simple(Self.formatRating(v)), namespace: XMPNamespace.xmp, property: "Rating") }
+            else { removeValue(namespace: XMPNamespace.xmp, property: "Rating") }
+        }
+    }
+
+    /// Color label (xmp:Label). Lightroom/Bridge use "Red", "Yellow", "Green", "Blue", "Purple".
+    public var label: String? {
+        get { simpleValue(namespace: XMPNamespace.xmp, property: "Label") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.xmp, property: "Label") }
+            else { removeValue(namespace: XMPNamespace.xmp, property: "Label") }
+        }
+    }
+
+    /// Resource creation date (xmp:CreateDate). W3C-DTF / ISO 8601.
+    public var createDate: String? {
+        get { simpleValue(namespace: XMPNamespace.xmp, property: "CreateDate") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.xmp, property: "CreateDate") }
+            else { removeValue(namespace: XMPNamespace.xmp, property: "CreateDate") }
+        }
+    }
+
+    /// Resource last-modified date (xmp:ModifyDate). W3C-DTF / ISO 8601.
+    public var modifyDate: String? {
+        get { simpleValue(namespace: XMPNamespace.xmp, property: "ModifyDate") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.xmp, property: "ModifyDate") }
+            else { removeValue(namespace: XMPNamespace.xmp, property: "ModifyDate") }
+        }
+    }
+
+    /// Metadata last-modified date (xmp:MetadataDate). W3C-DTF / ISO 8601.
+    public var metadataDate: String? {
+        get { simpleValue(namespace: XMPNamespace.xmp, property: "MetadataDate") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.xmp, property: "MetadataDate") }
+            else { removeValue(namespace: XMPNamespace.xmp, property: "MetadataDate") }
+        }
+    }
+
+    /// Tool that created or last modified the resource (xmp:CreatorTool).
+    public var creatorTool: String? {
+        get { simpleValue(namespace: XMPNamespace.xmp, property: "CreatorTool") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.xmp, property: "CreatorTool") }
+            else { removeValue(namespace: XMPNamespace.xmp, property: "CreatorTool") }
+        }
+    }
+
+    /// Unordered identifier array (xmp:Identifier) — rdf:Bag of strings.
+    public var identifier: [String] {
+        get { arrayValue(namespace: XMPNamespace.xmp, property: "Identifier") }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.xmp, property: "Identifier") }
+            else { setValue(.array(newValue), namespace: XMPNamespace.xmp, property: "Identifier") }
+        }
+    }
+
+    /// Short human-readable name for the resource (xmp:Nickname).
+    public var nickname: String? {
+        get { simpleValue(namespace: XMPNamespace.xmp, property: "Nickname") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.xmp, property: "Nickname") }
+            else { removeValue(namespace: XMPNamespace.xmp, property: "Nickname") }
+        }
+    }
+
+    private static func formatRating(_ value: Double) -> String {
+        let clamped = max(0.0, min(5.0, value))
+        if clamped.rounded() == clamped { return String(Int(clamped)) }
+        return String(format: "%.1f", clamped)
+    }
+
     // MARK: - IPTC Core Properties (Iptc4xmpCore)
 
     /// Extended description for accessibility (Iptc4xmpCore:ExtDescrAccessibility).
@@ -375,6 +459,52 @@ public struct XMPData: Equatable, Sendable {
         }
     }
 
+    /// Image creators (Iptc4xmpExt:ImageCreator) — structured array, IPTC Extension 1.4+.
+    public var imageCreator: [IPTCImageCreator] {
+        get {
+            guard let items = structuredArrayValue(namespace: XMPNamespace.iptcExt, property: "ImageCreator") else { return [] }
+            return items.map { IPTCImageCreator(fields: $0) }
+        }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "ImageCreator") }
+            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.iptcExt, property: "ImageCreator") }
+        }
+    }
+
+    /// Genre of the content (Iptc4xmpExt:Genre) — rdf:Bag of controlled vocabulary terms.
+    /// Note: richer than Iptc4xmpCore:IntellectualGenre (which is a single string).
+    public var genres: [String] {
+        get { arrayValue(namespace: XMPNamespace.iptcExt, property: "Genre") }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "Genre") }
+            else { setValue(.array(newValue), namespace: XMPNamespace.iptcExt, property: "Genre") }
+        }
+    }
+
+    /// Copyright owners (plus:CopyrightOwner) — structured array from PLUS namespace.
+    public var copyrightOwner: [IPTCCopyrightOwner] {
+        get {
+            guard let items = structuredArrayValue(namespace: XMPNamespace.plus, property: "CopyrightOwner") else { return [] }
+            return items.map { IPTCCopyrightOwner(fields: $0) }
+        }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "CopyrightOwner") }
+            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.plus, property: "CopyrightOwner") }
+        }
+    }
+
+    /// Licensors (plus:Licensor) — structured array from PLUS namespace.
+    public var licensor: [IPTCLicensor] {
+        get {
+            guard let items = structuredArrayValue(namespace: XMPNamespace.plus, property: "Licensor") else { return [] }
+            return items.map { IPTCLicensor(fields: $0) }
+        }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "Licensor") }
+            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.plus, property: "Licensor") }
+        }
+    }
+
     // MARK: - PLUS Properties (Picture Licensing Universal System)
 
     /// Minor model age disclosure URI (plus:MinorModelAgeDisclosure).
@@ -396,6 +526,293 @@ public struct XMPData: Equatable, Sendable {
     public var plusPropertyReleaseID: [String] {
         get { arrayValue(namespace: XMPNamespace.plus, property: "PropertyReleaseID") }
         set { setValue(.array(newValue), namespace: XMPNamespace.plus, property: "PropertyReleaseID") }
+    }
+
+    // MARK: - EXIF / TIFF Camera Metadata
+
+    // Values in XMP arrive pre-serialized (rationals as "1/125", lists as rdf:Seq). Numeric parsing
+    // belongs on ExifData (the binary form), not here — this layer is a pass-through for XMP strings.
+
+    // --- exif: ---
+
+    /// Date and time the original image was taken (exif:DateTimeOriginal).
+    public var exifDateTimeOriginal: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "DateTimeOriginal") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.exif, property: "DateTimeOriginal") }
+            else { removeValue(namespace: XMPNamespace.exif, property: "DateTimeOriginal") }
+        }
+    }
+
+    /// Date and time the image was digitized (exif:DateTimeDigitized).
+    public var exifDateTimeDigitized: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "DateTimeDigitized") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "DateTimeDigitized") }
+    }
+
+    /// Exposure time in seconds (exif:ExposureTime). Rational form "1/125" or decimal.
+    public var exifExposureTime: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "ExposureTime") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "ExposureTime") }
+    }
+
+    /// F-number (exif:FNumber). Rational form "56/10" or decimal "5.6".
+    public var exifFNumber: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "FNumber") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "FNumber") }
+    }
+
+    /// ISO speed ratings (exif:ISOSpeedRatings) — rdf:Seq of integer strings.
+    public var exifISOSpeedRatings: [String] {
+        get { arrayValue(namespace: XMPNamespace.exif, property: "ISOSpeedRatings") }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.exif, property: "ISOSpeedRatings") }
+            else { setValue(.array(newValue), namespace: XMPNamespace.exif, property: "ISOSpeedRatings") }
+        }
+    }
+
+    /// Focal length in millimeters (exif:FocalLength).
+    public var exifFocalLength: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "FocalLength") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "FocalLength") }
+    }
+
+    /// Focal length equivalent in 35mm film (exif:FocalLengthIn35mmFilm).
+    public var exifFocalLengthIn35mmFilm: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "FocalLengthIn35mmFilm") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "FocalLengthIn35mmFilm") }
+    }
+
+    /// GPS latitude (exif:GPSLatitude). Formatted as "deg,min.decimalN" per XMP spec.
+    public var exifGPSLatitude: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "GPSLatitude") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "GPSLatitude") }
+    }
+
+    /// GPS longitude (exif:GPSLongitude).
+    public var exifGPSLongitude: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "GPSLongitude") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "GPSLongitude") }
+    }
+
+    /// GPS altitude in meters (exif:GPSAltitude). Rational.
+    public var exifGPSAltitude: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "GPSAltitude") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "GPSAltitude") }
+    }
+
+    /// GPS timestamp (exif:GPSTimeStamp). W3C-DTF.
+    public var exifGPSTimeStamp: String? {
+        get { simpleValue(namespace: XMPNamespace.exif, property: "GPSTimeStamp") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exif, property: "GPSTimeStamp") }
+    }
+
+    // --- tiff: ---
+
+    /// Camera manufacturer (tiff:Make).
+    public var tiffMake: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "Make") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "Make") }
+    }
+
+    /// Camera model (tiff:Model).
+    public var tiffModel: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "Model") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "Model") }
+    }
+
+    /// Orientation code "1"–"8" per TIFF 6.0 (tiff:Orientation).
+    public var tiffOrientation: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "Orientation") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "Orientation") }
+    }
+
+    /// Software used to create/edit the image (tiff:Software).
+    public var tiffSoftware: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "Software") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "Software") }
+    }
+
+    /// Pixel width (tiff:ImageWidth).
+    public var tiffImageWidth: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "ImageWidth") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "ImageWidth") }
+    }
+
+    /// Pixel height (tiff:ImageLength).
+    public var tiffImageLength: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "ImageLength") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "ImageLength") }
+    }
+
+    /// Image modification date (tiff:DateTime).
+    public var tiffDateTime: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "DateTime") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "DateTime") }
+    }
+
+    /// Horizontal resolution (tiff:XResolution). Rational.
+    public var tiffXResolution: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "XResolution") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "XResolution") }
+    }
+
+    /// Vertical resolution (tiff:YResolution). Rational.
+    public var tiffYResolution: String? {
+        get { simpleValue(namespace: XMPNamespace.tiff, property: "YResolution") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.tiff, property: "YResolution") }
+    }
+
+    /// Bits per sample (tiff:BitsPerSample) — rdf:Seq of ints, one per channel.
+    public var tiffBitsPerSample: [String] {
+        get { arrayValue(namespace: XMPNamespace.tiff, property: "BitsPerSample") }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.tiff, property: "BitsPerSample") }
+            else { setValue(.array(newValue), namespace: XMPNamespace.tiff, property: "BitsPerSample") }
+        }
+    }
+
+    // --- aux: (Lightroom/Adobe lens & body identity) ---
+
+    /// Human-readable lens description (aux:Lens).
+    public var auxLens: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "Lens") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "Lens") }
+    }
+
+    /// Lens info: four rationals (min/max focal length, min/max f-number) (aux:LensInfo).
+    public var auxLensInfo: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "LensInfo") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "LensInfo") }
+    }
+
+    /// Lens ID (aux:LensID).
+    public var auxLensID: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "LensID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "LensID") }
+    }
+
+    /// Lens serial number (aux:LensSerialNumber).
+    public var auxLensSerialNumber: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "LensSerialNumber") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "LensSerialNumber") }
+    }
+
+    /// Camera body serial number (aux:SerialNumber).
+    public var auxSerialNumber: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "SerialNumber") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "SerialNumber") }
+    }
+
+    /// Camera owner name (aux:OwnerName).
+    public var auxOwnerName: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "OwnerName") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "OwnerName") }
+    }
+
+    /// Camera firmware (aux:Firmware).
+    public var auxFirmware: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "Firmware") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "Firmware") }
+    }
+
+    /// Flash compensation (aux:FlashCompensation). Rational.
+    public var auxFlashCompensation: String? {
+        get { simpleValue(namespace: XMPNamespace.aux, property: "FlashCompensation") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.aux, property: "FlashCompensation") }
+    }
+
+    // --- exifEX: (Exif 2.3+ additions, minimal surface) ---
+
+    /// Lens model string (exifEX:LensModel). Preferred over aux:Lens on newer cameras.
+    public var exifExLensModel: String? {
+        get { simpleValue(namespace: XMPNamespace.exifEX, property: "LensModel") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exifEX, property: "LensModel") }
+    }
+
+    /// Lens serial number per Exif 2.3 (exifEX:LensSerialNumber).
+    public var exifExLensSerialNumber: String? {
+        get { simpleValue(namespace: XMPNamespace.exifEX, property: "LensSerialNumber") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exifEX, property: "LensSerialNumber") }
+    }
+
+    /// Body serial number per Exif 2.3 (exifEX:BodySerialNumber).
+    public var exifExBodySerialNumber: String? {
+        get { simpleValue(namespace: XMPNamespace.exifEX, property: "BodySerialNumber") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exifEX, property: "BodySerialNumber") }
+    }
+
+    /// Camera owner name per Exif 2.3 (exifEX:CameraOwnerName).
+    public var exifExCameraOwnerName: String? {
+        get { simpleValue(namespace: XMPNamespace.exifEX, property: "CameraOwnerName") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.exifEX, property: "CameraOwnerName") }
+    }
+
+    private mutating func setSimpleOrRemove(_ value: String?, namespace: String, property: String) {
+        if let v = value { setValue(.simple(v), namespace: namespace, property: property) }
+        else { removeValue(namespace: namespace, property: property) }
+    }
+
+    // MARK: - XMP Media Management (xmpMM:)
+
+    // Scalars only. xmpMM:DerivedFrom (stRef structure) and xmpMM:History (rdf:Seq of stEvt
+    // structures) ride the existing generic `.structure` / `.structuredArray` API. Callers
+    // that want typed access read them via `structureValue(namespace:property:)`.
+
+    /// Globally unique document identifier (xmpMM:DocumentID).
+    public var documentID: String? {
+        get { simpleValue(namespace: XMPNamespace.xmpMM, property: "DocumentID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.xmpMM, property: "DocumentID") }
+    }
+
+    /// Globally unique instance identifier (xmpMM:InstanceID).
+    public var instanceID: String? {
+        get { simpleValue(namespace: XMPNamespace.xmpMM, property: "InstanceID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.xmpMM, property: "InstanceID") }
+    }
+
+    /// Original source document identifier, preserved across copies (xmpMM:OriginalDocumentID).
+    public var originalDocumentID: String? {
+        get { simpleValue(namespace: XMPNamespace.xmpMM, property: "OriginalDocumentID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.xmpMM, property: "OriginalDocumentID") }
+    }
+
+    /// Rendition class (xmpMM:RenditionClass). Typically "default", "thumbnail", "screen", "proof".
+    public var renditionClass: String? {
+        get { simpleValue(namespace: XMPNamespace.xmpMM, property: "RenditionClass") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.xmpMM, property: "RenditionClass") }
+    }
+
+    /// Version identifier (xmpMM:VersionID).
+    public var versionID: String? {
+        get { simpleValue(namespace: XMPNamespace.xmpMM, property: "VersionID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.xmpMM, property: "VersionID") }
+    }
+
+    // MARK: - PDF (pdf:)
+
+    /// PDF producer application (pdf:Producer).
+    public var pdfProducer: String? {
+        get { simpleValue(namespace: XMPNamespace.pdf, property: "Producer") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.pdf, property: "Producer") }
+    }
+
+    /// PDF document keywords as a single semicolon-separated string (pdf:Keywords).
+    public var pdfKeywords: String? {
+        get { simpleValue(namespace: XMPNamespace.pdf, property: "Keywords") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.pdf, property: "Keywords") }
+    }
+
+    /// PDF specification version (pdf:PDFVersion), e.g. "1.7".
+    public var pdfVersion: String? {
+        get { simpleValue(namespace: XMPNamespace.pdf, property: "PDFVersion") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.pdf, property: "PDFVersion") }
+    }
+
+    /// Trapped status (pdf:Trapped) — "True", "False", or "Unknown".
+    public var pdfTrapped: String? {
+        get { simpleValue(namespace: XMPNamespace.pdf, property: "Trapped") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.pdf, property: "Trapped") }
     }
 
     // MARK: - Rights & Usage Terms

@@ -198,3 +198,134 @@ public struct IPTCArtworkOrObject: Equatable, Sendable {
         return fields
     }
 }
+
+// MARK: - IPTC Image Creator (Extension 1.4+)
+
+/// Image Creator structure (Iptc4xmpExt:ImageCreator).
+/// Identifies the image creator with an optional registry ID and a human-readable name.
+public struct IPTCImageCreator: Equatable, Sendable {
+    /// Identifier assigned by a registry, if any.
+    public var creatorID: String?
+    /// Human-readable name of the creator.
+    public var creatorName: String?
+
+    public init(creatorID: String? = nil, creatorName: String? = nil) {
+        self.creatorID = creatorID
+        self.creatorName = creatorName
+    }
+
+    public init(fields: [String: String]) {
+        let ns = XMPNamespace.iptcExt
+        self.creatorID = fields[ns + "ImageCreatorID"]
+        self.creatorName = fields[ns + "ImageCreatorName"]
+    }
+
+    public func toFields() -> [String: String] {
+        let ns = XMPNamespace.iptcExt
+        var fields: [String: String] = [:]
+        if let v = creatorID { fields[ns + "ImageCreatorID"] = v }
+        if let v = creatorName { fields[ns + "ImageCreatorName"] = v }
+        return fields
+    }
+}
+
+// MARK: - IPTC Copyright Owner (PLUS)
+
+/// Copyright Owner structure (plus:CopyrightOwner).
+public struct IPTCCopyrightOwner: Equatable, Sendable {
+    public var copyrightOwnerID: String?
+    public var copyrightOwnerName: String?
+
+    public init(copyrightOwnerID: String? = nil, copyrightOwnerName: String? = nil) {
+        self.copyrightOwnerID = copyrightOwnerID
+        self.copyrightOwnerName = copyrightOwnerName
+    }
+
+    public init(fields: [String: String]) {
+        let ns = XMPNamespace.plus
+        self.copyrightOwnerID = fields[ns + "CopyrightOwnerID"]
+        self.copyrightOwnerName = fields[ns + "CopyrightOwnerName"]
+    }
+
+    public func toFields() -> [String: String] {
+        let ns = XMPNamespace.plus
+        var fields: [String: String] = [:]
+        if let v = copyrightOwnerID { fields[ns + "CopyrightOwnerID"] = v }
+        if let v = copyrightOwnerName { fields[ns + "CopyrightOwnerName"] = v }
+        return fields
+    }
+}
+
+// MARK: - IPTC Licensor (PLUS)
+
+/// Licensor structure (plus:Licensor). Full PLUS licensor contact details.
+public struct IPTCLicensor: Equatable, Sendable {
+    public var licensorID: String?
+    public var licensorName: String?
+    public var licensorStreetAddress: String?
+    public var licensorExtendedAddress: String?
+    public var licensorCity: String?
+    public var licensorRegion: String?
+    public var licensorPostalCode: String?
+    public var licensorCountry: String?
+    public var licensorTelephone1: String?
+    public var licensorTelephone2: String?
+    public var licensorEmail: String?
+    public var licensorURL: String?
+
+    public init(
+        licensorID: String? = nil, licensorName: String? = nil,
+        licensorStreetAddress: String? = nil, licensorExtendedAddress: String? = nil,
+        licensorCity: String? = nil, licensorRegion: String? = nil,
+        licensorPostalCode: String? = nil, licensorCountry: String? = nil,
+        licensorTelephone1: String? = nil, licensorTelephone2: String? = nil,
+        licensorEmail: String? = nil, licensorURL: String? = nil
+    ) {
+        self.licensorID = licensorID
+        self.licensorName = licensorName
+        self.licensorStreetAddress = licensorStreetAddress
+        self.licensorExtendedAddress = licensorExtendedAddress
+        self.licensorCity = licensorCity
+        self.licensorRegion = licensorRegion
+        self.licensorPostalCode = licensorPostalCode
+        self.licensorCountry = licensorCountry
+        self.licensorTelephone1 = licensorTelephone1
+        self.licensorTelephone2 = licensorTelephone2
+        self.licensorEmail = licensorEmail
+        self.licensorURL = licensorURL
+    }
+
+    public init(fields: [String: String]) {
+        let ns = XMPNamespace.plus
+        self.licensorID = fields[ns + "LicensorID"]
+        self.licensorName = fields[ns + "LicensorName"]
+        self.licensorStreetAddress = fields[ns + "LicensorStreetAddress"]
+        self.licensorExtendedAddress = fields[ns + "LicensorExtendedAddress"]
+        self.licensorCity = fields[ns + "LicensorCity"]
+        self.licensorRegion = fields[ns + "LicensorRegion"]
+        self.licensorPostalCode = fields[ns + "LicensorPostalCode"]
+        self.licensorCountry = fields[ns + "LicensorCountry"]
+        self.licensorTelephone1 = fields[ns + "LicensorTelephone1"]
+        self.licensorTelephone2 = fields[ns + "LicensorTelephone2"]
+        self.licensorEmail = fields[ns + "LicensorEmail"]
+        self.licensorURL = fields[ns + "LicensorURL"]
+    }
+
+    public func toFields() -> [String: String] {
+        let ns = XMPNamespace.plus
+        var fields: [String: String] = [:]
+        if let v = licensorID { fields[ns + "LicensorID"] = v }
+        if let v = licensorName { fields[ns + "LicensorName"] = v }
+        if let v = licensorStreetAddress { fields[ns + "LicensorStreetAddress"] = v }
+        if let v = licensorExtendedAddress { fields[ns + "LicensorExtendedAddress"] = v }
+        if let v = licensorCity { fields[ns + "LicensorCity"] = v }
+        if let v = licensorRegion { fields[ns + "LicensorRegion"] = v }
+        if let v = licensorPostalCode { fields[ns + "LicensorPostalCode"] = v }
+        if let v = licensorCountry { fields[ns + "LicensorCountry"] = v }
+        if let v = licensorTelephone1 { fields[ns + "LicensorTelephone1"] = v }
+        if let v = licensorTelephone2 { fields[ns + "LicensorTelephone2"] = v }
+        if let v = licensorEmail { fields[ns + "LicensorEmail"] = v }
+        if let v = licensorURL { fields[ns + "LicensorURL"] = v }
+        return fields
+    }
+}

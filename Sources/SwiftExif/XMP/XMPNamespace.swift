@@ -15,6 +15,15 @@ public enum XMPNamespace: Sendable {
     public static let plus      = "http://ns.useplus.org/ldf/xmp/1.0/"
     public static let stArea    = "http://ns.adobe.com/xmp/sType/Area#"
     public static let stDim     = "http://ns.adobe.com/xmp/sType/Dimensions#"
+    public static let exif      = "http://ns.adobe.com/exif/1.0/"
+    public static let tiff      = "http://ns.adobe.com/tiff/1.0/"
+    public static let aux       = "http://ns.adobe.com/exif/1.0/aux/"
+    public static let exifEX    = "http://cipa.jp/exif/1.0/"
+    public static let xmpMM     = "http://ns.adobe.com/xap/1.0/mm/"
+    public static let stEvt     = "http://ns.adobe.com/xap/1.0/sType/ResourceEvent#"
+    public static let stRef     = "http://ns.adobe.com/xap/1.0/sType/ResourceRef#"
+    public static let pdf       = "http://ns.adobe.com/pdf/1.3/"
+    public static let crs       = "http://ns.adobe.com/camera-raw-settings/1.0/"
 
     /// Mapping from IPTC IIM tags to XMP namespace + property.
     public static let iimToXMP: [IPTCTag: (namespace: String, property: String)] = [
@@ -56,5 +65,14 @@ public enum XMPNamespace: Sendable {
         mwgRegions: "mwg-rs",
         stArea: "stArea",
         stDim: "stDim",
+        exif: "exif",
+        tiff: "tiff",
+        aux: "aux",
+        exifEX: "exifEX",
+        xmpMM: "xmpMM",
+        stEvt: "stEvt",
+        stRef: "stRef",
+        pdf: "pdf",
+        crs: "crs",
     ]
 }

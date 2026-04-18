@@ -70,6 +70,13 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     private var propertyStructureNamespace = ""
     private var structureChildElement = ""
     private var structureChildNamespace = ""
+    /// Tracks when we're inside a property element awaiting a value (child Bag/Alt/simple text or nested Description).
+    private var inPendingProperty = false
+
+    /// Stack of active xmlns prefix → URI mappings. XMLParser doesn't resolve attribute namespaces,
+    /// so we honor the document's live declarations to avoid silently dropping unknown-prefix attribute-form
+    /// properties (which is how Lightroom/Capture One/Photo Mechanic write most fields).
+    private var prefixStack: [(prefix: String, uri: String)] = []
 
     init(xmlString: String) {
         self.xmlString = xmlString
@@ -83,6 +90,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.shouldProcessNamespaces = true
+        parser.shouldReportNamespacePrefixes = true
         parser.parse()
 
         if let error = parseError {
@@ -187,7 +195,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         if inStructuredItem && elementName == "Description" {
             // Parse attributes as structure fields
             for (key, value) in attributeDict {
-                if key.hasPrefix("xmlns") || key == "about" || key == "parseType" { continue }
+                if Self.isMetaAttribute(key) { continue }
                 let parts = key.split(separator: ":", maxSplits: 1)
                 if parts.count == 2 {
                     let prefix = String(parts[0])
@@ -207,11 +215,29 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             return
         }
 
-        if elementName == "Description" {
+        if elementName == "Description" && inPendingProperty {
+            // Nested rdf:Description inside a property element → structure
+            inPropertyStructure = true
+            propertyStructureProperty = currentArrayProperty
+            propertyStructureNamespace = currentArrayNamespace
+            inPendingProperty = false
+            // Parse attributes as structure fields
+            for (key, value) in attributeDict {
+                if Self.isMetaAttribute(key) { continue }
+                let parts = key.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    let prefix = String(parts[0])
+                    let prop = String(parts[1])
+                    if let ns = resolvePrefix(prefix) {
+                        propertyStructureFields["\(ns)\(prop)"] = value
+                    }
+                }
+            }
+        } else if elementName == "Description" {
             inDescription = true
             // Some simple properties are stored as attributes on rdf:Description
             for (key, value) in attributeDict {
-                if !key.hasPrefix("xmlns") && key != "about" {
+                if !Self.isMetaAttribute(key) {
                     // Try to resolve the qualified name to namespace + property
                     let parts = key.split(separator: ":", maxSplits: 1)
                     if parts.count == 2 {
@@ -225,14 +251,17 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             }
         } else if elementName == "Bag" {
             inBag = true
+            inPendingProperty = false
             currentArrayItems = []
             isStructuredBag = false
             currentStructuredArrayItems = []
         } else if elementName == "Seq" {
             inSeq = true
+            inPendingProperty = false
             currentArrayItems = []
         } else if elementName == "Alt" {
             inAlt = true
+            inPendingProperty = false
             currentArrayItems = []
         } else if elementName == "li" {
             currentText = ""
@@ -247,10 +276,12 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             currentNamespace = namespaceURI ?? ""
             currentArrayProperty = elementName
             currentArrayNamespace = namespaceURI ?? ""
+            inPendingProperty = true
 
             // Check for rdf:parseType="Resource" indicating a single structure
             if attributeDict["rdf:parseType"] == "Resource" || attributeDict["parseType"] == "Resource" {
                 inPropertyStructure = true
+                inPendingProperty = false
                 propertyStructureFields = [:]
                 propertyStructureProperty = elementName
                 propertyStructureNamespace = namespaceURI ?? ""
@@ -258,7 +289,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                 // Check for structure attributes directly on the property element (compact form)
                 var structAttrs: [String: String] = [:]
                 for (key, value) in attributeDict {
-                    if key.hasPrefix("xmlns") || key == "about" || key == "parseType" { continue }
+                    if Self.isMetaAttribute(key) { continue }
                     let parts = key.split(separator: ":", maxSplits: 1)
                     if parts.count == 2 {
                         let prefix = String(parts[0])
@@ -271,6 +302,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                 if !structAttrs.isEmpty {
                     // This property element has namespaced attributes — treat as single structure
                     inPropertyStructure = true
+                    inPendingProperty = false
                     propertyStructureFields = structAttrs
                     propertyStructureProperty = elementName
                     propertyStructureNamespace = namespaceURI ?? ""
@@ -412,7 +444,8 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             inAlt = false
             currentArrayItems = []
         } else if inDescription && !inBag && !inSeq && !inAlt {
-            // Only store as simple if this key wasn't already set (by a child Bag/Seq/Alt)
+            inPendingProperty = false
+            // Only store as simple if this key wasn't already set (by a child Bag/Seq/Alt/structure)
             let key = "\(namespaceURI ?? "")\(elementName)"
             if properties[key] == nil {
                 let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -427,19 +460,31 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         self.parseError = MetadataError.invalidXMP(parseError.localizedDescription)
     }
 
-    private func resolvePrefix(_ prefix: String) -> String? {
-        switch prefix {
-        case "dc": return XMPNamespace.dc
-        case "photoshop": return XMPNamespace.photoshop
-        case "Iptc4xmpCore": return XMPNamespace.iptcCore
-        case "Iptc4xmpExt": return XMPNamespace.iptcExt
-        case "xmp": return XMPNamespace.xmp
-        case "xmpRights": return XMPNamespace.xmpRights
-        case "plus": return XMPNamespace.plus
-        case "mwg-rs": return XMPNamespace.mwgRegions
-        case "stArea": return XMPNamespace.stArea
-        case "stDim": return XMPNamespace.stDim
-        default: return nil
+    func parser(_ parser: XMLParser, didStartMappingPrefix prefix: String, toURI namespaceURI: String) {
+        prefixStack.append((prefix, namespaceURI))
+    }
+
+    func parser(_ parser: XMLParser, didEndMappingPrefix prefix: String) {
+        if let idx = prefixStack.lastIndex(where: { $0.prefix == prefix }) {
+            prefixStack.remove(at: idx)
         }
+    }
+
+    private func resolvePrefix(_ prefix: String) -> String? {
+        // Innermost xmlns declaration wins — mirrors XML scoping rules.
+        if let uri = prefixStack.reversed().first(where: { $0.prefix == prefix })?.uri {
+            return uri
+        }
+        // Fallback for documents that reference a prefix without declaring xmlns (malformed but tolerated).
+        return XMPNamespace.namespace(for: prefix)
+    }
+
+    /// RDF/XML meta-attributes that exist for parser control, not as user metadata. These must
+    /// never be stored as properties (rdf:about, xml:lang, etc. are infrastructure).
+    private static func isMetaAttribute(_ key: String) -> Bool {
+        if key.hasPrefix("xmlns") { return true }
+        if key == "about" || key == "parseType" || key == "ID" || key == "nodeID" || key == "resource" { return true }
+        if key.hasPrefix("rdf:") || key.hasPrefix("xml:") { return true }
+        return false
     }
 }

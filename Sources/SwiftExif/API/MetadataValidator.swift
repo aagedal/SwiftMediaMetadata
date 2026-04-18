@@ -51,16 +51,21 @@ public struct MetadataValidator: Sendable {
     /// Minimum number of keywords required (0 = no minimum).
     public let minimumKeywords: Int
 
+    /// Minimum xmp:Rating required (nil = no minimum). Editorial desks use this to gate submissions.
+    public let minimumRating: Double?
+
     public init(
         requiredFields: Set<String> = [],
         recommendedFields: Set<String> = [],
         enforceFormats: Bool = true,
-        minimumKeywords: Int = 0
+        minimumKeywords: Int = 0,
+        minimumRating: Double? = nil
     ) {
         self.requiredFields = requiredFields
         self.recommendedFields = recommendedFields
         self.enforceFormats = enforceFormats
         self.minimumKeywords = minimumKeywords
+        self.minimumRating = minimumRating
     }
 
     /// Validate metadata and return all issues found.
@@ -102,6 +107,17 @@ public struct MetadataValidator: Sendable {
                 issues.append(ValidationIssue(
                     field: "IPTC:Keywords",
                     message: "Requires at least \(minimumKeywords) keywords, found \(count)",
+                    severity: .error))
+            }
+        }
+
+        // Check minimum rating
+        if let minimum = minimumRating {
+            let actual = metadata.xmp?.rating ?? 0
+            if actual < minimum {
+                issues.append(ValidationIssue(
+                    field: "XMP-xmp:Rating",
+                    message: "Requires at least \(Self.formatRating(minimum)) stars, found \(Self.formatRating(actual))",
                     severity: .error))
             }
         }
@@ -218,6 +234,10 @@ public struct MetadataValidator: Sendable {
         code.count == 3 && code.allSatisfy { $0.isUppercase && $0.isLetter }
     }
 
+    private static func formatRating(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+    }
+
     // MARK: - Built-in Profiles
 
     /// News wire submission profile (AP/Reuters/AFP standards).
@@ -263,6 +283,24 @@ public struct MetadataValidator: Sendable {
         ],
         enforceFormats: true,
         minimumKeywords: 3
+    )
+
+    /// Editorial-desk quality review. Gates submissions on xmp:Rating in addition to the
+    /// core set required by the news/editorial profiles.
+    public static let qualityReview = MetadataValidator(
+        requiredFields: [
+            "IPTC:Headline",
+            "IPTC:Caption-Abstract",
+            "IPTC:By-line",
+            "IPTC:Credit",
+        ],
+        recommendedFields: [
+            "IPTC:CopyrightNotice",
+            "IPTC:Keywords",
+        ],
+        enforceFormats: true,
+        minimumKeywords: 0,
+        minimumRating: 3.0
     )
 
     /// Editorial/feature profile.
