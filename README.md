@@ -469,6 +469,37 @@ Sources/SwiftExif/
                     #   Sony NonRealTimeMeta (NRT / RDD-18) XML parser
 ```
 
+## Benchmark
+
+Measured with `Sources/Benchmark/main.swift` (release build) against a 382 KB JPEG sample, writing 8 IPTC fields + 8 XMP fields, and reading all of IPTC/XMP/EXIF. C2PA and MP4 parse benchmarks use synthetic JUMBF manifest stores.
+
+**Write / Read (100 files)**
+
+| Operation | exiftool batch | exiftool sequential | SwiftExif sequential | SwiftExif batch |
+|-----------|---------------:|--------------------:|---------------------:|----------------:|
+| Write     | 18.0 ms/file   | 267.7 ms/file       | 8.2 ms/file          | **2.8 ms/file** |
+| Read      | 22.6 ms/file   | —                   | 4.5 ms/file          | **2.8 ms/file** |
+
+SwiftExif batch write is ~6× faster than exiftool batch and ~95× faster than exiftool sequential. Read is ~8× faster than exiftool batch.
+
+**C2PA JUMBF parse (1 000 iterations)**
+
+| Payload | Size    | Per parse |
+|---------|--------:|----------:|
+| Small (1 manifest, 2 assertions)   | 1.2 KB  | 29.0 µs  |
+| Medium (3 manifests, 5 assertions) | 5.3 KB  | 120.0 µs |
+| Large (10 manifests, 10 assertions)| 27.4 KB | 590.3 µs |
+
+**MP4 container + C2PA parse (1 000 iterations)** — full `MP4Parser.parse` pass over a synthetic `ftyp` / `moov` / `uuid` container with embedded JUMBF.
+
+| Payload | Container | Per parse |
+|---------|----------:|----------:|
+| Small   | 1.3 KB    | 31.9 µs   |
+| Medium  | 5.4 KB    | 122.7 µs  |
+| Large   | 27.5 KB   | 604.0 µs  |
+
+<sup>Tested 2026-04-19 on macOS 26.4.1 (Apple M1 Max, 10 cores). SwiftExif @ `c84bfee` (main). ExifTool 13.55 via Homebrew.</sup>
+
 ## Acknowledgements
 
 - **GeoNames** (https://www.geonames.org/) — The reverse geocoding database is built from GeoNames geographical data, licensed under [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/). The embedded city database contains ~33,500 cities with population >= 15,000.

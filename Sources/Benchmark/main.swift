@@ -403,6 +403,67 @@ func benchmarkC2PAParsing(iterations: Int, manifestCount: Int, assertionsPerMani
     return (elapsed, data.count)
 }
 
+// MARK: - MP4 Video Benchmark Helpers
+
+/// C2PA user-type UUID for BMFF uuid boxes (AVIF/HEIF/MP4).
+let bmffC2PAUUID = Data([
+    0xD8, 0xFE, 0xC3, 0xD6, 0x1B, 0x0E, 0x48, 0x3C,
+    0x92, 0x97, 0x58, 0x28, 0x87, 0x7E, 0xC4, 0x81,
+])
+
+/// Build a minimal valid MP4 container with an embedded C2PA manifest store.
+func buildBenchmarkMP4(withC2PA jumbfData: Data) -> Data {
+    // ftyp: brand "mp42" + minorVersion + compatible brand
+    var ftypPayload = Data()
+    ftypPayload.append("mp42".data(using: .ascii)!)
+    ftypPayload.append(contentsOf: [0x00, 0x00, 0x00, 0x00]) // minor version
+    ftypPayload.append("mp42".data(using: .ascii)!)           // compatible brand
+    ftypPayload.append("isom".data(using: .ascii)!)           // compatible brand
+
+    // mvhd (version 0): 4 bytes fullbox + creation(4) + mod(4) + timescale(4) + duration(4)
+    // plus the remaining standard fields so total is 100 bytes
+    var mvhdPayload = Data()
+    mvhdPayload.append(contentsOf: [0x00, 0x00, 0x00, 0x00]) // version 0 + flags
+    mvhdPayload.append(contentsOf: withUnsafeBytes(of: UInt32(3_700_000_000).bigEndian) { Array($0) }) // creation
+    mvhdPayload.append(contentsOf: withUnsafeBytes(of: UInt32(3_700_000_000).bigEndian) { Array($0) }) // modification
+    mvhdPayload.append(contentsOf: withUnsafeBytes(of: UInt32(1000).bigEndian) { Array($0) })          // timescale
+    mvhdPayload.append(contentsOf: withUnsafeBytes(of: UInt32(10_000).bigEndian) { Array($0) })        // duration (10s)
+    mvhdPayload.append(Data(repeating: 0x00, count: 80)) // rate/volume/reserved/matrix/predefined/nextTrackID
+
+    let mvhdBox = buildBenchmarkBox(type: "mvhd", payload: mvhdPayload)
+    let moovBox = buildBenchmarkBox(type: "moov", payload: mvhdBox)
+    let ftypBox = buildBenchmarkBox(type: "ftyp", payload: ftypPayload)
+
+    // uuid box: 16-byte C2PA user UUID + JUMBF payload
+    var uuidPayload = Data()
+    uuidPayload.append(bmffC2PAUUID)
+    uuidPayload.append(jumbfData)
+    let uuidBox = buildBenchmarkBox(type: "uuid", payload: uuidPayload)
+
+    var mp4 = Data()
+    mp4.append(ftypBox)
+    mp4.append(moovBox)
+    mp4.append(uuidBox)
+    return mp4
+}
+
+func benchmarkMP4Parse(iterations: Int, manifestCount: Int, assertionsPerManifest: Int) -> (time: Double, dataSize: Int, c2paFound: Bool) {
+    let jumbf = buildBenchmarkManifestStore(manifestCount: manifestCount, assertionsPerManifest: assertionsPerManifest)
+    let mp4 = buildBenchmarkMP4(withC2PA: jumbf)
+
+    // Verify once that parsing produces a C2PA result
+    let verification = try? MP4Parser.parse(mp4)
+    let c2paFound = verification?.c2pa != nil
+
+    let elapsed = measureTime("MP4-parse") {
+        for _ in 0..<iterations {
+            let _ = try? MP4Parser.parse(mp4)
+        }
+    }
+
+    return (elapsed, mp4.count, c2paFound)
+}
+
 // MARK: - Verification
 
 func verify(files: [URL]) {
@@ -567,4 +628,38 @@ print("├───────────────────────�
 print(String(format: "│  Small  (%.1f KB):  %7.1f µs                           │", Double(c2paSmall.dataSize) / 1024, c2paSmall.time / Double(c2paIterations) * 1_000_000))
 print(String(format: "│  Medium (%.1f KB):  %7.1f µs                           │", Double(c2paMedium.dataSize) / 1024, c2paMedium.time / Double(c2paIterations) * 1_000_000))
 print(String(format: "│  Large  (%.1f KB): %7.1f µs                           │", Double(c2paLarge.dataSize) / 1024, c2paLarge.time / Double(c2paIterations) * 1_000_000))
+print("└──────────────────────────────────────────────────────────┘")
+
+// ==========================================================================
+// MP4 VIDEO CONTAINER PARSE BENCHMARK
+// ==========================================================================
+print()
+print("╔══════════════════════════════════════════════════════════╗")
+print("║       MP4 Video Container Parse Benchmark               ║")
+print("╚══════════════════════════════════════════════════════════╝")
+print()
+
+let mp4Iterations = 1000
+
+print("11) MP4 parse — small C2PA payload (1 manifest)")
+let mp4Small = benchmarkMP4Parse(iterations: mp4Iterations, manifestCount: 1, assertionsPerManifest: 2)
+print(String(format: "    %d iterations, %.1f KB container, C2PA %@", mp4Iterations, Double(mp4Small.dataSize) / 1024, mp4Small.c2paFound ? "✓" : "✗"))
+print(String(format: "    %.3f s  (%.1f µs/parse)\n", mp4Small.time, mp4Small.time / Double(mp4Iterations) * 1_000_000))
+
+print("12) MP4 parse — medium C2PA payload (3 manifests)")
+let mp4Medium = benchmarkMP4Parse(iterations: mp4Iterations, manifestCount: 3, assertionsPerManifest: 5)
+print(String(format: "    %d iterations, %.1f KB container, C2PA %@", mp4Iterations, Double(mp4Medium.dataSize) / 1024, mp4Medium.c2paFound ? "✓" : "✗"))
+print(String(format: "    %.3f s  (%.1f µs/parse)\n", mp4Medium.time, mp4Medium.time / Double(mp4Iterations) * 1_000_000))
+
+print("13) MP4 parse — large C2PA payload (10 manifests)")
+let mp4Large = benchmarkMP4Parse(iterations: mp4Iterations, manifestCount: 10, assertionsPerManifest: 10)
+print(String(format: "    %d iterations, %.1f KB container, C2PA %@", mp4Iterations, Double(mp4Large.dataSize) / 1024, mp4Large.c2paFound ? "✓" : "✗"))
+print(String(format: "    %.3f s  (%.1f µs/parse)\n", mp4Large.time, mp4Large.time / Double(mp4Iterations) * 1_000_000))
+
+print("┌──────────────────────────────────────────────────────────┐")
+print("│  MP4 Parse Results (per parse — full container + C2PA)   │")
+print("├──────────────────────────────────────────────────────────┤")
+print(String(format: "│  Small  (%.1f KB):  %7.1f µs                           │", Double(mp4Small.dataSize) / 1024, mp4Small.time / Double(mp4Iterations) * 1_000_000))
+print(String(format: "│  Medium (%.1f KB):  %7.1f µs                           │", Double(mp4Medium.dataSize) / 1024, mp4Medium.time / Double(mp4Iterations) * 1_000_000))
+print(String(format: "│  Large  (%.1f KB): %7.1f µs                           │", Double(mp4Large.dataSize) / 1024, mp4Large.time / Double(mp4Iterations) * 1_000_000))
 print("└──────────────────────────────────────────────────────────┘")
