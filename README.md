@@ -174,19 +174,38 @@ video.camera?.deviceManufacturer   // pulled from the sidecar
 
 ### C2PA Content Provenance
 
-Access embedded C2PA manifests for content authenticity:
+Access embedded C2PA manifests for content authenticity — works across
+JPEG (APP11), PNG (caBX), JPEG XL, AVIF, HEIF, MP4/MOV (uuid or
+top-level jumb), and MXF (SMPTE UL or Dark KLV):
 
 ```swift
 if let c2pa = metadata.c2pa {
     for manifest in c2pa.manifests {
-        print(manifest.claim.claimGenerator)
-        print(manifest.claim.title)
+        print(manifest.claim.claimGenerator)           // "SONY_CAMERA"
+        print(manifest.claim.claimGeneratorInfo?.name) // "SONY_CAMERA"
+        print(manifest.claim.title)                    // "20251212_TRA_MOV_0224.MP4"
+        print(manifest.signature.algorithm)            // ES256
+        print(manifest.signature.certificateChain.count)
+
         for assertion in manifest.assertions {
-            print(assertion.label)
+            print(assertion.label)   // "c2pa.actions.v2", "c2pa.hash.bmff.v3", …
+            if case .actions(let actions) = assertion.content {
+                for action in actions.actions {
+                    print(action.action)              // "c2pa.created"
+                    print(action.digitalSourceType)   // IPTC URL
+                }
+            }
         }
     }
 }
 ```
+
+The JSON exporter surfaces the same fields under `HasContentCredentials`,
+`HasSignature`, `ClaimGenerator`, `ClaimGeneratorInfoName`, `ClaimTitle`,
+`ManifestLabel`, `SignatureAlgorithm`, `SignatureCertificateCount`,
+`Assertions`, `ActionsAction`, `ActionsDigitalSourceType`,
+`ActionsSoftwareAgent` — matching the field set consumed by downstream
+apps that previously shelled out to ExifTool.
 
 ### MakerNotes
 
@@ -243,6 +262,47 @@ if matched {
     try metadata.write(to: imageURL)
 }
 ```
+
+### Reverse Geocoding
+
+Convert GPS coordinates to city, region, and country names **offline** —
+no network access, no API key. Uses an embedded GeoNames database
+(~33,500 cities with population ≥ 15,000) behind a k-d tree for
+O(log n) nearest-neighbor lookup.
+
+```swift
+// Standalone lookup
+let geocoder = ReverseGeocoder.shared
+if let location = geocoder.lookup(latitude: 59.9139, longitude: 10.7522) {
+    print(location.city)        // "Oslo"
+    print(location.region)      // "Oslo"
+    print(location.country)     // "Norway"
+    print(location.countryCode) // "NOR" (ISO 3166-1 alpha-3)
+    print(location.timezone)    // "Europe/Oslo"
+    print(location.population)  // 580000
+    print(location.distance)    // 0.3 (km from query point)
+}
+
+// Nearest N cities — useful for disambiguating near borders
+let nearby = geocoder.nearest(latitude: 59.9139, longitude: 10.7522, count: 5)
+```
+
+Populate IPTC/XMP location fields directly from an image's embedded GPS:
+
+```swift
+var metadata = try readMetadata(from: imageURL)
+
+// Fills IPTC City / Province-State / Country-Name / Country-PrimaryLocationCode
+// and the matching XMP fields. Skips fields that are already set unless
+// overwrite: true is passed.
+if let location = metadata.fillLocationFromGPS() {
+    print("Matched \(location)")
+    try metadata.write(to: imageURL)
+}
+```
+
+Both APIs accept a `maxDistance:` parameter (km) to reject matches that
+are too far away — defaults are 50 km for `lookup`, 100 km for `nearest`.
 
 ### Copy Metadata Between Files
 
@@ -395,6 +455,7 @@ Sources/SwiftExif/
 ├── MakerNote/      # Camera-specific MakerNote parsers
 ├── Composite/      # Computed/derived tag calculator
 ├── GPX/            # GPX track parser and geotagging
+├── Geolocation/    # Offline reverse geocoder (GeoNames + k-d tree)
 ├── ICC/            # ICC color profile reader
 ├── JPEG/           # JPEG segment parser and writer
 ├── TIFF/           # TIFF/RAW file parser and writer

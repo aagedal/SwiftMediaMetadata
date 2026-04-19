@@ -45,7 +45,7 @@ struct ReadCommand: ParsableCommand {
         let tagFilter = (!tags.isEmpty || !excludeTags.isEmpty)
             ? TagFilter(tags: tags, excludeTags: excludeTags) : nil
 
-        let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
+        let videoExtensions: Set<String> = ["mp4", "mov", "m4v", "mxf"]
         let audioExtensions: Set<String> = ["mp3", "flac", "m4a"]
 
         var imageDicts: [[String: String]] = []

@@ -52,8 +52,40 @@ public struct VideoMetadataExporter: Sendable {
             if let v = cam.captureFps            { dict["CaptureFps"]            = v }
         }
 
-        if metadata.c2pa != nil {
+        if let c2pa = metadata.c2pa {
             dict["HasContentCredentials"] = true
+            if let manifest = c2pa.activeManifest {
+                dict["HasSignature"] = true
+                dict["ManifestLabel"] = manifest.label
+                dict["ClaimGenerator"] = manifest.claim.claimGenerator
+                if let info = manifest.claim.claimGeneratorInfo {
+                    dict["ClaimGeneratorInfoName"] = info.name
+                    if let v = info.version { dict["ClaimGeneratorInfoVersion"] = v }
+                }
+                if let title = manifest.claim.title { dict["ClaimTitle"] = title }
+                if let fmt = manifest.claim.format { dict["ClaimFormat"] = fmt }
+                if let alg = manifest.signature.algorithm {
+                    dict["SignatureAlgorithm"] = String(describing: alg)
+                }
+                if !manifest.signature.certificateChain.isEmpty {
+                    dict["SignatureCertificateCount"] = manifest.signature.certificateChain.count
+                }
+                dict["Assertions"] = manifest.assertions.map(\.label)
+
+                // First c2pa.actions assertion is what the Media Converter app uses
+                // to populate actionsAction / actionsDigitalSourceType.
+                if let actionsAssertion = manifest.assertions.first(where: { $0.label.hasPrefix("c2pa.actions") }),
+                   case .actions(let actions) = actionsAssertion.content,
+                   let firstAction = actions.actions.first {
+                    dict["ActionsAction"] = firstAction.action
+                    if let digital = firstAction.digitalSourceType {
+                        dict["ActionsDigitalSourceType"] = digital
+                    }
+                    if let agent = firstAction.softwareAgent {
+                        dict["ActionsSoftwareAgent"] = agent
+                    }
+                }
+            }
         }
 
         return dict
