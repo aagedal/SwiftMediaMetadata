@@ -39,8 +39,12 @@ public struct VideoMetadata: Sendable {
     /// If the URL points at an MXF file or a container with a Sony NonRealTimeMeta
     /// sidecar (e.g. `CLIP.MXF` next to `CLIP.XML`), the sidecar is auto-discovered
     /// and merged into `camera`.
+    ///
+    /// The file is memory-mapped when safe (`.mappedIfSafe`) so multi-gigabyte
+    /// video essence (mdat, MXF KLV body) never needs to be fully resident — only
+    /// the metadata-bearing boxes/KLVs the parsers touch end up paged in.
     public static func read(from url: URL) throws -> VideoMetadata {
-        let data = try Data(contentsOf: url)
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
         var metadata = try parseContainer(data)
         metadata.originalData = data
 

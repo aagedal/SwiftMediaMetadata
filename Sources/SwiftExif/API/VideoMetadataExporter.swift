@@ -50,6 +50,13 @@ public struct VideoMetadataExporter: Sendable {
             if let v = cam.captureGammaEquation  { dict["CaptureGammaEquation"]  = v }
             if let v = cam.recordingModeType     { dict["RecordingMode"]         = v }
             if let v = cam.captureFps            { dict["CaptureFps"]            = v }
+            if !cam.userMetaNames.isEmpty {
+                dict["UserDescriptiveMetadataMetaName"]    = cam.userMetaNames
+                dict["UserDescriptiveMetadataMetaContent"] = cam.userMetaContents
+            }
+            if let date = cam.creationDate {
+                dict["CreationDateValue"] = ISO8601DateFormatter().string(from: date)
+            }
         }
 
         if let c2pa = metadata.c2pa {

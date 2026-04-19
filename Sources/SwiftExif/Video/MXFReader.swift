@@ -34,8 +34,27 @@ public struct MXFReader: Sendable {
         return true
     }
 
+    /// Upper bound on a KLV value we're willing to fully materialize.
+    ///
+    /// Metadata-bearing KLVs (NRT XML, C2PA manifest stores) are at most a few
+    /// MB; raw essence KLVs in a 40 GB XDCAM clip can be many gigabytes. We
+    /// peek at the first 64 bytes of every KLV to decide whether it's worth
+    /// reading fully, and cap a full read at this size so a malformed length
+    /// field on a giant KLV can't OOM us even if our heuristic mis-fires.
+    private static let maxMetadataKLVSize = 32 * 1024 * 1024
+
+    /// How many bytes of each KLV value to peek at before deciding whether
+    /// it's metadata we care about. Must be large enough to fit an XML
+    /// declaration plus the `<NonRealTimeMeta` opening tag, which can appear
+    /// a couple hundred bytes in when long xmlns attributes are present.
+    private static let klvPeekBytes = 512
+
     /// Parse an MXF file into a VideoMetadata, extracting camera metadata
     /// where possible.
+    ///
+    /// The KLV scan only fully materializes values that pass a cheap
+    /// content-type peek — essence (video/audio) KLVs, which can be GBs each
+    /// in XDCAM/XAVC files, are skipped via a seek without copying into RAM.
     public static func parse(_ data: Data) throws -> VideoMetadata {
         guard isMXF(data) else {
             throw MetadataError.invalidVideo("Not an MXF file — missing partition pack prefix")
@@ -48,29 +67,89 @@ public struct MXFReader: Sendable {
             guard let key = try? reader.readBytes(16) else { break }
             guard let length = try? readBERLength(&reader) else { break }
             guard length <= reader.remainingCount else { break }
+
+            let valueStart = reader.offset
+            let peekCount = min(length, klvPeekBytes)
+            guard let peek = try? reader.slice(from: valueStart, count: peekCount) else { break }
+
+            let keyIsC2PA = isC2PAKey(key)
+            let peekIsXML = looksLikeNRTXML(peek)
+            let peekIsJUMBF = looksLikeJUMBF(peek, totalLength: length)
+            let isMetadata = keyIsC2PA || peekIsXML || peekIsJUMBF
+
+            // Skip anything that doesn't look like metadata, plus anything
+            // larger than the hard cap (defensive — metadata payloads are
+            // never this big).
+            guard isMetadata, length <= maxMetadataKLVSize else {
+                // Advance past the KLV without copying its value.
+                if (try? reader.seek(to: valueStart + length)) == nil { break }
+                continue
+            }
+
             guard let value = try? reader.readBytes(length) else { break }
 
-            // Look for an embedded XML KLV whose value starts with a "<" byte
-            // and contains "NonRealTimeMeta". This is how Sony cameras and
-            // ExifTool's RDD-18 workflow surface NRT metadata inside MXF.
-            if looksLikeNRTXML(value) {
+            // Sony NRT XML: RDD-18 clip metadata surfaced through MXF.
+            if peekIsXML {
                 if let cam = try? NRTXMLParser.parse(value) {
                     metadata.camera = cam
                 }
             }
 
-            // Look for a C2PA manifest store in the KLV payload.
-            // The C2PA spec carries manifest stores in MXF under a registered
-            // SMPTE UL, but a format-agnostic approach is to scan the value
-            // for a JUMBF "jumb" box signature — this also tolerates "Dark"
-            // KLV keys that implementations sometimes use before UL
-            // registration is finalized.
-            if metadata.c2pa == nil, isC2PAKey(key) || looksLikeJUMBF(value) {
+            // C2PA manifest store: either under the registered SMPTE UL or in
+            // a "Dark" KLV whose value starts with a JUMBF "jumb" box.
+            if metadata.c2pa == nil, keyIsC2PA || peekIsJUMBF {
                 extractC2PA(fromKLVValue: value, into: &metadata)
             }
         }
 
+        // Fallback: Sony XDCAM/XAVC writers often wrap NRT XML inside an
+        // RP 2057 XML Document Set whose value is a local-tag/length/value
+        // sequence — the XML bytes therefore live *inside* a KLV value, not
+        // at its start, so the top-level peek misses them. Do a bounded
+        // substring scan of the header metadata region to catch these.
+        if metadata.camera == nil || metadata.camera?.isEmpty == true {
+            if let xml = findEmbeddedNRTXML(in: data) {
+                if let cam = try? NRTXMLParser.parse(xml), !cam.isEmpty {
+                    metadata.camera = cam
+                }
+            }
+        }
+
         return metadata
+    }
+
+    // MARK: - Embedded-NRT fallback
+
+    /// Upper bound on how many bytes we're willing to substring-scan for
+    /// `<NonRealTimeMeta`. MXF header metadata lives at the top of the file
+    /// (well under 16 MB even for multi-track broadcast clips), and memory
+    /// mapping keeps this cheap.
+    private static let nrtScanWindow = 16 * 1024 * 1024
+
+    /// Locate a `<?xml … <NonRealTimeMeta … </NonRealTimeMeta>` document
+    /// anywhere in the first `nrtScanWindow` bytes of the file and return
+    /// it as a standalone UTF-8 buffer. Returns nil if no complete document
+    /// is found.
+    static func findEmbeddedNRTXML(in data: Data) -> Data? {
+        let scanLimit = min(data.count, nrtScanWindow)
+        guard scanLimit > 0 else { return nil }
+
+        let haystack = data.prefix(scanLimit)
+        let openTag  = Data("<NonRealTimeMeta".utf8)
+        let closeTag = Data("</NonRealTimeMeta>".utf8)
+        let xmlDecl  = Data("<?xml".utf8)
+
+        guard let openRange = haystack.range(of: openTag) else { return nil }
+        guard let closeRange = haystack.range(of: closeTag, in: openRange.upperBound..<haystack.endIndex) else {
+            return nil
+        }
+        // Prefer starting at a preceding <?xml declaration within ~200 bytes
+        // of the open tag; fall back to the open tag itself otherwise.
+        let searchStart = max(haystack.startIndex, openRange.lowerBound - 256)
+        let declRange = haystack.range(of: xmlDecl, in: searchStart..<openRange.lowerBound)
+        let start = declRange?.lowerBound ?? openRange.lowerBound
+        let end = closeRange.upperBound
+        return Data(haystack[start..<end])
     }
 
     // MARK: - C2PA
@@ -90,20 +169,25 @@ public struct MXFReader: Sendable {
         return true
     }
 
-    /// True if the value payload starts with (or contains near its start) a
-    /// JUMBF "jumb" box whose size field is self-consistent.
-    private static func looksLikeJUMBF(_ data: Data) -> Bool {
-        guard data.count >= 16 else { return false }
+    /// True if the peek bytes look like the start of a JUMBF "jumb" box
+    /// whose declared size is self-consistent with the total KLV length.
+    ///
+    /// `totalLength` is the full KLV value length (the peek is only the first
+    /// few hundred bytes of that value) — the size field in the jumb header
+    /// is allowed to extend beyond the peek window, but must fit inside the
+    /// value as a whole.
+    private static func looksLikeJUMBF(_ peek: Data, totalLength: Int) -> Bool {
+        guard peek.count >= 8 else { return false }
+        let bytes = [UInt8](peek.prefix(min(peek.count, 32)))
         // Fast path: first box is "jumb" at offset 4.
-        let bytes = [UInt8](data.prefix(min(data.count, 32)))
-        if bytes[4] == 0x6A && bytes[5] == 0x75 && bytes[6] == 0x6D && bytes[7] == 0x62 {
+        if bytes.count >= 8,
+           bytes[4] == 0x6A, bytes[5] == 0x75, bytes[6] == 0x6D, bytes[7] == 0x62 {
             let size = (UInt32(bytes[0]) << 24) | (UInt32(bytes[1]) << 16)
                 | (UInt32(bytes[2]) << 8) | UInt32(bytes[3])
-            if size >= 8 && Int(size) <= data.count { return true }
+            if size >= 8 && Int(size) <= totalLength { return true }
         }
-        // Slow path: scan the first 256 bytes for a valid jumb box header.
-        let scanLimit = min(data.count, 256)
-        return C2PAReader.findJUMBFStart(in: data.prefix(scanLimit)) != nil
+        // Slow path: scan the peek window for a valid jumb box header.
+        return C2PAReader.findJUMBFStart(in: peek) != nil
     }
 
     private static func extractC2PA(fromKLVValue value: Data, into metadata: inout VideoMetadata) {

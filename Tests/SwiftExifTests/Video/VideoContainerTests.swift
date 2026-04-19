@@ -219,6 +219,86 @@ final class VideoContainerTests: XCTestCase {
         XCTAssertNil(metadata.camera)
     }
 
+    func testMXFFindsNRTXMLEmbeddedInsideMetadataSet() throws {
+        // Real Sony XDCAM/XAVC MXF files wrap NRT inside an RP 2057 XML
+        // Document Set, so the XML bytes are NOT at the start of any KLV
+        // value — they live several hundred bytes in, behind the set's
+        // local-tag/length/value preamble. The fallback scan must still
+        // recover them.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta:ver.2.20">
+          <Device manufacturer="Sony" modelName="PXW-FX9V" serialNo="4002062"/>
+          <Lens modelName="FE PZ 28-135mm F4 G OSS"/>
+        </NonRealTimeMeta>
+        """
+
+        // Build an MXF where the KLV value *starts* with non-XML bytes
+        // (mimicking an RP 2057 set preamble) and the XML comes after.
+        var klvValue = Data()
+        klvValue.append(contentsOf: [UInt8](repeating: 0x00, count: 64))
+        klvValue.append(Data("text/xml".utf8))
+        klvValue.append(contentsOf: [UInt8](repeating: 0x81, count: 16))
+        klvValue.append(Data(xml.utf8))
+
+        // Use a non-C2PA, non-JUMBF-looking key so only the fallback scan
+        // (not the peek) can recover this.
+        let metadataKey = Data(repeating: 0x44, count: 16)
+        let data = buildMinimalMXF(extraKLVs: [(key: metadataKey, value: klvValue)])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.camera?.deviceManufacturer, "Sony")
+        XCTAssertEqual(metadata.camera?.deviceModelName, "PXW-FX9V")
+        XCTAssertEqual(metadata.camera?.lensModelName, "FE PZ 28-135mm F4 G OSS")
+    }
+
+    func testMXFSkipsLargeEssenceKLVsWithoutLoadingThem() throws {
+        // Build an MXF where a "Dark" KLV carries multi-MB of essence bytes,
+        // followed by a small NRT XML KLV. The parser must not hang on the
+        // essence and must still find the metadata KLV.
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="AFTER-ESSENCE" serialNo="E-1"/>
+        </NonRealTimeMeta>
+        """
+        let essenceKey = Data(repeating: 0x77, count: 16) // not C2PA, not JUMBF-looking
+        let essenceValue = Data(repeating: 0x00, count: 4 * 1024 * 1024)
+        let xmlKey = Data(repeating: 0xAA, count: 16)
+
+        let data = buildMinimalMXF(extraKLVs: [
+            (key: essenceKey, value: essenceValue),
+            (key: xmlKey,     value: Data(xml.utf8)),
+        ])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "AFTER-ESSENCE")
+    }
+
+    func testMXFIgnoresGiantMetadataKLVAboveSafetyCap() throws {
+        // A KLV whose content peek looks like NRT XML but whose declared
+        // length is implausibly large (> safety cap) must be skipped.
+        let xmlPrefix = "<NonRealTimeMeta>\n"
+        var value = Data(xmlPrefix.utf8)
+        // Pad past the 32 MB safety cap with XML-looking bytes.
+        value.append(Data(repeating: 0x20, count: 33 * 1024 * 1024))
+
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="RECOVERED" serialNo="R-1"/>
+        </NonRealTimeMeta>
+        """
+
+        let data = buildMinimalMXF(extraKLVs: [
+            (key: Data(repeating: 0xBB, count: 16), value: value),
+            (key: Data(repeating: 0xAA, count: 16), value: Data(xml.utf8)),
+        ])
+
+        let metadata = try VideoMetadata.read(from: data)
+        // Must have recovered the second KLV, proving the parser did not
+        // choke on the oversized one.
+        XCTAssertEqual(metadata.camera?.deviceModelName, "RECOVERED")
+    }
+
     func testBERLengthShortForm() throws {
         var reader = BinaryReader(data: Data([0x42]))
         XCTAssertEqual(try MXFReader.readBERLength(&reader), 0x42)
@@ -270,6 +350,34 @@ final class VideoContainerTests: XCTestCase {
         let candidates = NRTXMLParser.sidecarCandidates(for: url).map(\.lastPathComponent)
         XCTAssertTrue(candidates.contains("CLIP.XML"))
         XCTAssertTrue(candidates.contains("CLIP.xml"))
+        // Sony XAVC / NXCAM layout: CLIPM01.XML next to CLIP.MP4
+        XCTAssertTrue(candidates.contains("CLIPM01.XML"))
+        XCTAssertTrue(candidates.contains("CLIPM01.xml"))
+    }
+
+    func testSidecarDiscoveryFindsSonyXAVCM01Pattern() throws {
+        // Mirrors the on-card layout of FX3/FX6/A7S etc:
+        //   M4ROOT/CLIP/rre_8077.MP4 + rre_8077M01.XML
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_m01_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mp4URL = tmp.appendingPathComponent("rre_8077.MP4")
+        let xmlURL = tmp.appendingPathComponent("rre_8077M01.XML")
+
+        try buildMinimalValidMP4(brand: "mp42").write(to: mp4URL)
+        let xml = """
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta:ver.2.20">
+          <Device manufacturer="Sony" modelName="PXW-FX9" serialNo="12345"/>
+          <VideoFormat><VideoFrame captureFps="50.00p"/></VideoFormat>
+        </NonRealTimeMeta>
+        """
+        try Data(xml.utf8).write(to: xmlURL)
+
+        let metadata = try VideoMetadata.read(from: mp4URL)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "PXW-FX9")
+        XCTAssertEqual(metadata.camera?.captureFps, 50.0)
     }
 
     // MARK: - Public API

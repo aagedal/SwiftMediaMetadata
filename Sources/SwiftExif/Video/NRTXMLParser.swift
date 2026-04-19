@@ -56,11 +56,32 @@ public struct NRTXMLParser: Sendable {
     // MARK: - Sidecar discovery
 
     /// Candidate sidecar XML URLs for a given video clip URL.
-    /// Probes case variants `.XML`, `.xml`, and Sony's `.M01` / `.NFO`.
+    ///
+    /// Handles both common Sony layouts:
+    /// - XDCAM optical / MXF: `CLIP.MXF` → `CLIP.XML`
+    /// - XAVC / NXCAM cards:  `CLIP.MP4` → `CLIPM01.XML`
+    ///
+    /// Plus lowercase variants and the occasional `.NFO` used by older
+    /// NXCAM firmware.
     public static func sidecarCandidates(for videoURL: URL) -> [URL] {
-        let base = videoURL.deletingPathExtension()
-        let exts = ["XML", "xml", "M01", "m01"]
-        return exts.map { base.appendingPathExtension($0) }
+        let dir = videoURL.deletingLastPathComponent()
+        let baseName = videoURL.deletingPathExtension().lastPathComponent
+
+        // Order matters — the `M01` layout is by far the most common on
+        // modern Sony cameras (FX3/FX6/A7S/FS5/FX9), so probe it first.
+        let candidateNames: [String] = [
+            "\(baseName)M01.XML",
+            "\(baseName)M01.xml",
+            "\(baseName)m01.XML",
+            "\(baseName)m01.xml",
+            "\(baseName).XML",
+            "\(baseName).xml",
+            "\(baseName).M01",
+            "\(baseName).m01",
+            "\(baseName).NFO",
+            "\(baseName).nfo",
+        ]
+        return candidateNames.map { dir.appendingPathComponent($0) }
     }
 
     /// Return the first existing sidecar URL, or nil if none is present.
@@ -128,6 +149,15 @@ private final class NRTDelegate: NSObject, XMLParserDelegate {
 
         case "LensUnitMetadata":
             inLensUnit = true
+
+        case "Lens":
+            // Shorter attribute form used by Alpha-series NRT XML:
+            //   <Lens modelName="FE 16-35mm F4 ZA OSS"/>
+            // This lives outside <LensUnitMetadata>, so it's handled here
+            // rather than in didEndElement.
+            if lensModelName == nil, let v = attributeDict["modelName"], !v.isEmpty {
+                lensModelName = v
+            }
 
         case "RecordingMode":
             if let t = attributeDict["type"] { recordingModeType = t }
