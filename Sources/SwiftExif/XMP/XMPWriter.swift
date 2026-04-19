@@ -16,33 +16,28 @@ public struct XMPWriter: Sendable {
     public static func generateXML(_ xmpData: XMPData) -> String {
         var usedNamespaces: Set<String> = []
 
-        // Collect used namespaces (including from structure field keys)
-        for key in xmpData.allKeys {
-            for (ns, _) in XMPNamespace.prefixes {
-                if key.hasPrefix(ns) {
-                    usedNamespaces.insert(ns)
-                }
+        // Resolve every key once into (prefix, localName, namespace) and keep the value alongside —
+        // the writer previously split each key three separate times via hasPrefix scans.
+        struct ResolvedProp {
+            let prefix: String
+            let localName: String
+            let value: XMPValue
+        }
+
+        let resolved: [ResolvedProp] = xmpData.allKeys.sorted().compactMap { key in
+            guard let parts = resolveKey(key), let value = xmpData.value(forKey: key) else { return nil }
+            usedNamespaces.insert(parts.namespace)
+
+            // Scan nested structure field keys for additional namespaces in the same pass.
+            switch value {
+            case .structure(let fields):
+                collectNamespaces(from: fields.keys, into: &usedNamespaces)
+            case .structuredArray(let items):
+                for item in items { collectNamespaces(from: item.keys, into: &usedNamespaces) }
+            default: break
             }
-            // Also scan structure/structuredArray field keys for additional namespaces
-            if let value = findValue(in: xmpData, key: key) {
-                switch value {
-                case .structure(let fields):
-                    for fieldKey in fields.keys {
-                        for (ns, _) in XMPNamespace.prefixes {
-                            if fieldKey.hasPrefix(ns) { usedNamespaces.insert(ns); break }
-                        }
-                    }
-                case .structuredArray(let items):
-                    for item in items {
-                        for fieldKey in item.keys {
-                            for (ns, _) in XMPNamespace.prefixes {
-                                if fieldKey.hasPrefix(ns) { usedNamespaces.insert(ns); break }
-                            }
-                        }
-                    }
-                default: break
-                }
-            }
+
+            return ResolvedProp(prefix: parts.prefix, localName: parts.localName, value: value)
         }
 
         // Add region namespaces if needed
@@ -64,52 +59,51 @@ public struct XMPWriter: Sendable {
         var simpleProps = ""
         var complexProps = ""
 
-        for key in xmpData.allKeys.sorted() {
-            guard let (prefix, localName) = resolveKey(key) else { continue }
+        for prop in resolved {
+            let prefix = prop.prefix
+            let localName = prop.localName
 
-            if let value = findValue(in: xmpData, key: key) {
-                switch value {
-                case .simple(let s):
-                    simpleProps += "\n   \(prefix):\(localName)=\"\(escapeXML(s))\""
+            switch prop.value {
+            case .simple(let s):
+                simpleProps += "\n   \(prefix):\(localName)=\"\(escapeXML(s))\""
 
-                case .array(let items):
-                    complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>\n"
-                    for item in items {
-                        complexProps += "    <rdf:li>\(escapeXML(item))</rdf:li>\n"
+            case .array(let items):
+                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>\n"
+                for item in items {
+                    complexProps += "    <rdf:li>\(escapeXML(item))</rdf:li>\n"
+                }
+                complexProps += "   </rdf:Bag>\n  </\(prefix):\(localName)>"
+
+            case .langAlternative(let s):
+                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Alt>\n"
+                complexProps += "    <rdf:li xml:lang=\"x-default\">\(escapeXML(s))</rdf:li>\n"
+                complexProps += "   </rdf:Alt>\n  </\(prefix):\(localName)>"
+
+            case .structure(let fields):
+                complexProps += "\n  <\(prefix):\(localName)>"
+                complexProps += "\n   <rdf:Description"
+                for (fieldKey, fieldValue) in fields.sorted(by: { $0.key < $1.key }) {
+                    if let parts = resolveKey(fieldKey) {
+                        complexProps += " \(parts.prefix):\(parts.localName)=\"\(escapeXML(fieldValue))\""
                     }
-                    complexProps += "   </rdf:Bag>\n  </\(prefix):\(localName)>"
+                }
+                complexProps += "/>"
+                complexProps += "\n  </\(prefix):\(localName)>"
 
-                case .langAlternative(let s):
-                    complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Alt>\n"
-                    complexProps += "    <rdf:li xml:lang=\"x-default\">\(escapeXML(s))</rdf:li>\n"
-                    complexProps += "   </rdf:Alt>\n  </\(prefix):\(localName)>"
-
-                case .structure(let fields):
-                    complexProps += "\n  <\(prefix):\(localName)>"
-                    complexProps += "\n   <rdf:Description"
-                    for (fieldKey, fieldValue) in fields.sorted(by: { $0.key < $1.key }) {
-                        if let (fieldPrefix, fieldLocal) = resolveKey(fieldKey) {
-                            complexProps += " \(fieldPrefix):\(fieldLocal)=\"\(escapeXML(fieldValue))\""
+            case .structuredArray(let items):
+                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>"
+                for item in items {
+                    complexProps += "\n    <rdf:li>"
+                    complexProps += "\n     <rdf:Description"
+                    for (fieldKey, fieldValue) in item.sorted(by: { $0.key < $1.key }) {
+                        if let parts = resolveKey(fieldKey) {
+                            complexProps += " \(parts.prefix):\(parts.localName)=\"\(escapeXML(fieldValue))\""
                         }
                     }
                     complexProps += "/>"
-                    complexProps += "\n  </\(prefix):\(localName)>"
-
-                case .structuredArray(let items):
-                    complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>"
-                    for item in items {
-                        complexProps += "\n    <rdf:li>"
-                        complexProps += "\n     <rdf:Description"
-                        for (fieldKey, fieldValue) in item.sorted(by: { $0.key < $1.key }) {
-                            if let (fieldPrefix, fieldLocal) = resolveKey(fieldKey) {
-                                complexProps += " \(fieldPrefix):\(fieldLocal)=\"\(escapeXML(fieldValue))\""
-                            }
-                        }
-                        complexProps += "/>"
-                        complexProps += "\n    </rdf:li>"
-                    }
-                    complexProps += "\n   </rdf:Bag>\n  </\(prefix):\(localName)>"
+                    complexProps += "\n    </rdf:li>"
                 }
+                complexProps += "\n   </rdf:Bag>\n  </\(prefix):\(localName)>"
             }
         }
 
@@ -202,27 +196,26 @@ public struct XMPWriter: Sendable {
         XMPNamespace.prefixes.sorted { $0.key.count > $1.key.count }.map { (ns: $0.key, prefix: $0.value) }
     }()
 
-    private static func resolveKey(_ key: String) -> (prefix: String, localName: String)? {
+    private static func resolveKey(_ key: String) -> (prefix: String, localName: String, namespace: String)? {
         for entry in sortedPrefixes {
             if key.hasPrefix(entry.ns) {
                 let localName = String(key.dropFirst(entry.ns.count))
                 // Only match if the local name is a valid XML name (no slashes)
                 guard !localName.isEmpty && !localName.contains("/") else { continue }
-                return (entry.prefix, localName)
+                return (entry.prefix, localName, entry.ns)
             }
         }
         return nil
     }
 
-    private static func findValue(in xmpData: XMPData, key: String) -> XMPValue? {
-        for entry in sortedPrefixes {
-            if key.hasPrefix(entry.ns) {
-                let property = String(key.dropFirst(entry.ns.count))
-                guard !property.isEmpty && !property.contains("/") else { continue }
-                return xmpData.value(namespace: entry.ns, property: property)
+    /// Add the namespace URI for any key that starts with a known prefix.
+    private static func collectNamespaces(from keys: some Sequence<String>, into set: inout Set<String>) {
+        for key in keys {
+            for entry in sortedPrefixes where key.hasPrefix(entry.ns) {
+                set.insert(entry.ns)
+                break
             }
         }
-        return nil
     }
 
     private static func escapeXML(_ string: String) -> String {

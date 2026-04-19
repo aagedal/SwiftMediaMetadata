@@ -68,6 +68,11 @@ public struct XMPData: Equatable, Sendable {
     /// All property keys.
     public var allKeys: [String] { Array(properties.keys) }
 
+    /// Lookup by the internal "namespace+property" key (as returned by `allKeys`).
+    public func value(forKey key: String) -> XMPValue? {
+        properties[key]
+    }
+
     // MARK: - Convenience Properties (IPTC-mapped fields)
 
     public var title: String? {

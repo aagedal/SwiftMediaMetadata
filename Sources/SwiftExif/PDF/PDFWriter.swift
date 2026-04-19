@@ -7,7 +7,6 @@ public struct PDFWriter: Sendable {
     /// Appends new objects and xref table to the end of the original file.
     public static func write(_ file: PDFFile, infoDict: [String: String]?, xmpData: Data?) throws -> Data {
         var output = file.rawData
-        let appendStart = output.count
 
         var newXRefEntries: [(objNum: Int, offset: Int, genNum: Int)] = []
         var nextObjNum = file.nextObjectNumber
