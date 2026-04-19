@@ -117,6 +117,36 @@ final class PDFTests: XCTestCase {
         }
     }
 
+    func testWritePDFPreservesUnicodeTitle() throws {
+        // Regression: writer previously emitted raw UTF-8 inside `(…)`, which PDF readers
+        // decode as PDFDocEncoding — corrupting Scandinavian characters.
+        let pdf = buildMinimalPDF(title: "Original")
+        var metadata = try ImageMetadata.read(from: pdf)
+
+        if case .pdf(var file) = metadata.container {
+            file.infoDict["Title"] = "Øvingsbilde fra Trondheim — Ærlig talt"
+            file.infoDict["Author"] = "Ingrid Åse"
+            metadata.container = .pdf(file)
+        }
+
+        let written = try metadata.writeToData()
+
+        // Verify the Unicode values are NOT serialized as raw UTF-8 in a (…) literal.
+        // The old buggy output contained the bytes C3 98 (Ø) between parens; the fix
+        // should emit a UTF-16BE hex string <FEFF…> instead.
+        let asciiDump = String(decoding: written, as: UTF8.self)
+        XCTAssertFalse(asciiDump.contains("(Øvingsbilde"),
+                       "Non-ASCII value must not be written as raw UTF-8 in a PDF literal")
+
+        let reread = try ImageMetadata.read(from: written)
+        if case .pdf(let file) = reread.container {
+            XCTAssertEqual(file.infoDict["Title"], "Øvingsbilde fra Trondheim — Ærlig talt")
+            XCTAssertEqual(file.infoDict["Author"], "Ingrid Åse")
+        } else {
+            XCTFail("Expected PDF container")
+        }
+    }
+
     func testPDFExport() throws {
         let pdf = buildMinimalPDF(title: "Export Test", author: "Charlie")
         let metadata = try ImageMetadata.read(from: pdf)

@@ -85,10 +85,27 @@ public struct PDFWriter: Sendable {
     private static func buildInfoObject(objNum: Int, genNum: Int, dict: [String: String]) -> String {
         var obj = "\(objNum) \(genNum) obj\n<<"
         for (key, value) in dict.sorted(by: { $0.key < $1.key }) {
-            obj += "\n/\(key) (\(escapePDFString(value)))"
+            obj += "\n/\(key) \(encodePDFString(value))"
         }
         obj += "\n>>\nendobj\n"
         return obj
+    }
+
+    /// Encode a metadata value as a PDF string object.
+    ///
+    /// Pure ASCII values stay in the readable `(…)` literal form. Anything with a non-ASCII
+    /// character is serialized as a UTF-16BE hex string with a BOM, which is the only
+    /// encoding the PDF 1.x Info dictionary spec actually guarantees readers will decode as
+    /// Unicode — raw UTF-8 inside `(…)` would otherwise be interpreted as PDFDocEncoding.
+    private static func encodePDFString(_ value: String) -> String {
+        if value.allSatisfy({ $0.isASCII }) {
+            return "(\(escapePDFString(value)))"
+        }
+        var hex = "FEFF"
+        for unit in value.utf16 {
+            hex += String(format: "%04X", unit)
+        }
+        return "<\(hex)>"
     }
 
     private static func buildXMPStreamObject(objNum: Int, genNum: Int, data: Data) -> Data {
