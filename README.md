@@ -14,8 +14,10 @@ A native Swift library for reading and writing image and video metadata — Exif
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
 | WebP | Yes | Yes | Exif, XMP, ICC |
-| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS |
+| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata |
+| MXF (SMPTE 377) | Yes | — | Sony NonRealTimeMeta (RDD-18) camera metadata |
 | XMP sidecar (.xmp) | Yes | Yes | XMP |
+| Sony NRT sidecar (.XML) | Yes | — | Camera metadata auto-probed next to MP4/MXF |
 
 ## Requirements
 
@@ -110,7 +112,7 @@ metadata.syncXMPToIPTC()
 
 ### Video Metadata
 
-Read metadata from MP4, MOV, and M4V files:
+Read metadata from MP4, MOV, M4V, and MXF files:
 
 ```swift
 let video = try VideoMetadata.read(from: videoURL)
@@ -124,6 +126,50 @@ print(video.gpsLatitude)    // Double?
 
 // Export as JSON
 let json = VideoMetadataExporter.toJSONString(video)
+```
+
+#### Async video API
+
+Convenience top-level functions parse on a detached task so callers can
+`await` without blocking the main actor. Missing metadata returns `nil`
+rather than throwing — reserve errors for I/O and hard parse failures.
+
+```swift
+import SwiftExif
+
+// C2PA manifests embedded in MP4/MOV (same JUMBF path as AVIF/HEIF).
+if let c2pa = try await readVideoC2PAMetadata(from: videoURL) {
+    let claim = c2pa.activeManifest?.claim
+    print(claim?.claimGenerator)             // "Adobe Premiere Pro 24.0"
+    print(claim?.claimGeneratorInfo?.name)   // "Adobe Premiere Pro"
+    for assertion in c2pa.activeManifest?.assertions ?? [] {
+        print(assertion.label)               // "c2pa.actions", "c2pa.hash.data", …
+    }
+}
+
+// Sony NonRealTimeMeta (RDD-18) camera metadata — embedded or sidecar .XML.
+if let cam = try await readVideoCameraMetadata(from: videoURL) {
+    print(cam.deviceManufacturer)    // "Sony"
+    print(cam.deviceModelName)       // "PXW-FX9"
+    print(cam.lensModelName)         // "Sony FE 24-70mm F2.8 GM"
+    print(cam.captureFps)            // 23.98
+    print(cam.captureGammaEquation)  // "SLog3"
+}
+
+// Both in one pass (cheaper than calling the two above separately).
+let video = try await readVideoMetadata(from: videoURL)
+```
+
+#### Sidecar auto-discovery
+
+When reading `CLIP.MP4` or `CLIP.MXF`, SwiftExif automatically probes for
+a Sony NonRealTimeMeta sidecar (`CLIP.XML`, `CLIP.xml`, `CLIP.M01`) next
+to the clip. If found, its parsed contents populate `camera`.
+
+```swift
+// Given: /path/CLIP.MXF next to /path/CLIP.XML
+let video = try VideoMetadata.read(from: mxfURL)
+video.camera?.deviceManufacturer   // pulled from the sidecar
 ```
 
 ### C2PA Content Provenance
@@ -358,7 +404,8 @@ Sources/SwiftExif/
 ├── AVIF/           # AVIF (ISOBMFF) parser and writer
 ├── HEIF/           # HEIF/HEIC parser and writer
 ├── WebP/           # WebP (RIFF container) parser and writer
-└── Video/          # MP4/MOV/M4V metadata parser
+└── Video/          # MP4/MOV/M4V metadata parser, MXF KLV reader,
+                    #   Sony NonRealTimeMeta (NRT / RDD-18) XML parser
 ```
 
 ## Acknowledgements

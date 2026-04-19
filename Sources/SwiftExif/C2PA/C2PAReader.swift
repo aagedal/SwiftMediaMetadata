@@ -44,7 +44,7 @@ public struct C2PAReader: Sendable {
     }
 
     /// Shared JUMBF extraction for any ISOBMFF-based format.
-    private static func extractJUMBFFromISOBMFF(_ boxes: [ISOBMFFBox]) -> Data? {
+    static func extractJUMBFFromISOBMFF(_ boxes: [ISOBMFFBox]) -> Data? {
         // First try: top-level jumb box
         if let jumbBox = boxes.first(where: { $0.type == "jumb" }) {
             return buildBoxData(type: "jumb", payload: jumbBox.data)

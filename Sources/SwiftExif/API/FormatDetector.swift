@@ -260,6 +260,12 @@ public struct FormatDetector: Sendable {
     /// Detect video format from the first bytes of data.
     public static func detectVideo(_ data: Data) -> VideoFormat? {
         guard data.count >= 12 else { return nil }
+
+        // MXF Partition Pack key: 06 0E 2B 34 02 05 01 01 0D 01 02 …
+        if MXFReader.isMXF(data) {
+            return .mxf
+        }
+
         let bytes = [UInt8](data.prefix(12))
 
         // ISOBMFF: check for ftyp box at offset 4
@@ -287,6 +293,7 @@ public struct FormatDetector: Sendable {
         case "mp4":  return .mp4
         case "mov":  return .mov
         case "m4v":  return .m4v
+        case "mxf":  return .mxf
         default:     return nil
         }
     }

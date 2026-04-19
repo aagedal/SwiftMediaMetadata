@@ -18,6 +18,10 @@ public struct VideoMetadata: Sendable {
     public var gpsLongitude: Double?
     public var gpsAltitude: Double?
     public var xmp: XMPData?
+    /// Parsed C2PA manifests (if the video is C2PA-signed).
+    public var c2pa: C2PAData?
+    /// Camera/clip metadata from Sony NonRealTimeMeta (embedded or sidecar XML).
+    public var camera: CameraMetadata?
     public var warnings: [String]
 
     /// The original file data (needed for writing back).
@@ -31,18 +35,40 @@ public struct VideoMetadata: Sendable {
     // MARK: - Reading
 
     /// Read video metadata from a file URL.
+    ///
+    /// If the URL points at an MXF file or a container with a Sony NonRealTimeMeta
+    /// sidecar (e.g. `CLIP.MXF` next to `CLIP.XML`), the sidecar is auto-discovered
+    /// and merged into `camera`.
     public static func read(from url: URL) throws -> VideoMetadata {
         let data = try Data(contentsOf: url)
-        var metadata = try MP4Parser.parse(data)
+        var metadata = try parseContainer(data)
         metadata.originalData = data
+
+        // Auto-probe NRT sidecar if no embedded camera metadata is present.
+        if metadata.camera == nil || metadata.camera?.isEmpty == true {
+            if let sidecarURL = NRTXMLParser.sidecarURL(for: url) {
+                if let sidecarData = try? Data(contentsOf: sidecarURL),
+                   let cam = try? NRTXMLParser.parse(sidecarData) {
+                    metadata.camera = cam
+                }
+            }
+        }
+
         return metadata
     }
 
     /// Read video metadata from data.
     public static func read(from data: Data) throws -> VideoMetadata {
-        var metadata = try MP4Parser.parse(data)
+        var metadata = try parseContainer(data)
         metadata.originalData = data
         return metadata
+    }
+
+    private static func parseContainer(_ data: Data) throws -> VideoMetadata {
+        if MXFReader.isMXF(data) {
+            return try MXFReader.parse(data)
+        }
+        return try MP4Parser.parse(data)
     }
 
     // MARK: - Writing
@@ -88,7 +114,7 @@ public struct VideoMetadata: Sendable {
 
     // MARK: - Stripping
 
-    /// Strip all user metadata (title, artist, comment, GPS, XMP).
+    /// Strip all user metadata (title, artist, comment, GPS, XMP, C2PA, camera).
     public mutating func stripMetadata() {
         title = nil
         artist = nil
@@ -97,6 +123,8 @@ public struct VideoMetadata: Sendable {
         gpsLongitude = nil
         gpsAltitude = nil
         xmp = nil
+        c2pa = nil
+        camera = nil
     }
 
     /// Strip only GPS metadata.

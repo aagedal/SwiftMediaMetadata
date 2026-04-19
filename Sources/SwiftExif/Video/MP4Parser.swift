@@ -57,6 +57,17 @@ public struct MP4Parser: Sendable {
             parseUUIDBox(uuid.data, into: &metadata)
         }
 
+        // Parse C2PA manifest store if present (top-level jumb or uuid-wrapped JUMBF).
+        if let jumbfData = C2PAReader.extractJUMBFFromISOBMFF(boxes) {
+            do {
+                if let c2pa = try C2PAReader.parseManifestStore(from: jumbfData) {
+                    metadata.c2pa = c2pa
+                }
+            } catch {
+                metadata.warnings.append("C2PA parse error: \(error)")
+            }
+        }
+
         return metadata
     }
 
@@ -368,16 +379,36 @@ public struct MP4Parser: Sendable {
         }
     }
 
-    // MARK: - UUID (XMP)
+    // MARK: - UUID (XMP / embedded XML)
 
     private static func parseUUIDBox(_ data: Data, into metadata: inout VideoMetadata) {
         guard data.count > 16 else { return }
         let uuid = data.prefix(16)
-        guard uuid == xmpUUID else { return }
+        let payload = Data(data.suffix(from: data.startIndex + 16))
 
-        let xmpPayload = data.suffix(from: data.startIndex + 16)
-        if let xmpData = try? XMPReader.readFromXML(Data(xmpPayload)) {
-            metadata.xmp = xmpData
+        if uuid == xmpUUID {
+            if let xmpData = try? XMPReader.readFromXML(payload) {
+                metadata.xmp = xmpData
+            }
+            return
         }
+
+        // Some Sony MP4 cameras embed NonRealTimeMeta inside a uuid box.
+        // The user-type UUID varies between firmware versions, so content-sniff
+        // instead of matching a fixed UUID.
+        if looksLikeNRT(payload) {
+            if let cam = try? NRTXMLParser.parse(payload) {
+                metadata.camera = cam
+            }
+        }
+    }
+
+    private static func looksLikeNRT(_ data: Data) -> Bool {
+        guard data.count > 16 else { return false }
+        let scanLimit = min(data.count, 4096)
+        guard let head = String(data: data.prefix(scanLimit), encoding: .utf8) else {
+            return false
+        }
+        return head.contains("NonRealTimeMeta")
     }
 }

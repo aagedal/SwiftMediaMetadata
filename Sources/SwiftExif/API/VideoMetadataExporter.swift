@@ -41,6 +41,21 @@ public struct VideoMetadataExporter: Sendable {
             dict["ModificationDate"] = ISO8601DateFormatter().string(from: date)
         }
 
+        if let cam = metadata.camera {
+            if let v = cam.deviceManufacturer    { dict["DeviceManufacturer"]    = v }
+            if let v = cam.deviceModelName       { dict["DeviceModelName"]       = v }
+            if let v = cam.deviceSerialNumber    { dict["DeviceSerialNumber"]    = v }
+            if let v = cam.lensModelName         { dict["LensModelName"]         = v }
+            if let v = cam.timeZone              { dict["TimeZone"]              = v }
+            if let v = cam.captureGammaEquation  { dict["CaptureGammaEquation"]  = v }
+            if let v = cam.recordingModeType     { dict["RecordingMode"]         = v }
+            if let v = cam.captureFps            { dict["CaptureFps"]            = v }
+        }
+
+        if metadata.c2pa != nil {
+            dict["HasContentCredentials"] = true
+        }
+
         return dict
     }
 }
