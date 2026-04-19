@@ -54,19 +54,31 @@ public struct MetadataExporter: Sendable {
     // MARK: - Dictionary Building
 
     /// Build a flat dictionary of all metadata fields, including file-level tags if URL is provided.
-    public static func buildDictionary(_ metadata: ImageMetadata, fileURL: URL? = nil) -> [String: Any] {
+    ///
+    /// - Parameter includeHashes: When true, reads the full file to compute File:MD5 and File:SHA256.
+    ///   This is expensive on large RAW/video files (full re-read plus two passes of cryptographic
+    ///   hashing), so it's opt-in. FileSize/FileName/Directory are always cheap and always included.
+    public static func buildDictionary(_ metadata: ImageMetadata, fileURL: URL? = nil, includeHashes: Bool = false) -> [String: Any] {
         var dict: [String: Any] = [:]
 
         dict["FileFormat"] = formatName(metadata.format)
 
-        // File-level tags (size, hashes) when URL is available
-        if let url = fileURL, let data = try? Data(contentsOf: url) {
-            dict["File:FileSize"] = Int(data.count)
-            let hashes = FileHasher.allHashes(data)
-            dict["File:MD5"] = hashes.md5
-            dict["File:SHA256"] = hashes.sha256
+        if let url = fileURL {
             dict["File:FileName"] = url.lastPathComponent
             dict["File:Directory"] = url.deletingLastPathComponent().path
+            // Prefer stat over re-reading the file — a 60MB RAW shouldn't need to be reloaded just to report its size.
+            if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                dict["File:FileSize"] = size
+            }
+            if includeHashes, let data = try? Data(contentsOf: url) {
+                let hashes = FileHasher.allHashes(data)
+                dict["File:MD5"] = hashes.md5
+                dict["File:SHA256"] = hashes.sha256
+                // resourceValues didn't have the size (rare, e.g. non-file URL); fall back now that data is loaded.
+                if dict["File:FileSize"] == nil {
+                    dict["File:FileSize"] = Int(data.count)
+                }
+            }
         }
 
         // EXIF

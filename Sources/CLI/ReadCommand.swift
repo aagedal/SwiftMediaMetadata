@@ -34,6 +34,9 @@ struct ReadCommand: ParsableCommand {
     @Option(name: .long, help: "Exclude tags matching glob pattern (e.g. 'MakerNote:*').")
     var excludeTags: [String] = []
 
+    @Flag(name: .long, help: "Compute File:MD5 and File:SHA256 hashes (slow on large files).")
+    var hash = false
+
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
@@ -69,13 +72,13 @@ struct ReadCommand: ParsableCommand {
 
                 let dict: [String: String]
                 if numeric {
-                    let raw = MetadataExporter.buildDictionary(metadata, fileURL: url)
+                    let raw = MetadataExporter.buildDictionary(metadata, fileURL: url, includeHashes: hash)
                     dict = raw.mapValues { value in
                         if let arr = value as? [String] { return arr.joined(separator: ", ") }
                         return String(describing: value)
                     }
                 } else {
-                    dict = PrintConverter.buildReadableDictionary(metadata, fileURL: url)
+                    dict = PrintConverter.buildReadableDictionary(metadata, fileURL: url, includeHashes: hash)
                 }
                 var filtered = filterByGroups(dict, groups: groups, fields: fieldList)
                 if let tagFilter { filtered = tagFilter.apply(to: filtered).mapValues { String(describing: $0) } }

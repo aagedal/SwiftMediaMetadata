@@ -5,8 +5,8 @@ import Foundation
 public struct PrintConverter: Sendable {
 
     /// Build a human-readable dictionary from metadata, converting raw values where applicable.
-    public static func buildReadableDictionary(_ metadata: ImageMetadata, fileURL: URL? = nil) -> [String: String] {
-        let rawDict = MetadataExporter.buildDictionary(metadata, fileURL: fileURL)
+    public static func buildReadableDictionary(_ metadata: ImageMetadata, fileURL: URL? = nil, includeHashes: Bool = false) -> [String: String] {
+        let rawDict = MetadataExporter.buildDictionary(metadata, fileURL: fileURL, includeHashes: includeHashes)
         var result: [String: String] = [:]
 
         for (key, value) in rawDict {

@@ -172,6 +172,39 @@ final class MetadataExporterTests: XCTestCase {
         XCTAssertEqual(dict["XMP-photoshop:City"] as? String, "Stockholm")
     }
 
+    func testBuildDictionaryDefaultSkipsHashes() throws {
+        // Default behavior should include cheap file attributes but NOT read the file
+        // to compute MD5/SHA256 — that's opt-in to keep batch processing fast.
+        let jpeg = TestFixtures.minimalJPEG()
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("exporter-default-\(UUID().uuidString).jpg")
+        try jpeg.write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let metadata = try ImageMetadata.read(from: tmp)
+        let dict = MetadataExporter.buildDictionary(metadata, fileURL: tmp)
+
+        XCTAssertEqual(dict["File:FileName"] as? String, tmp.lastPathComponent)
+        XCTAssertEqual(dict["File:FileSize"] as? Int, jpeg.count)
+        XCTAssertNil(dict["File:MD5"])
+        XCTAssertNil(dict["File:SHA256"])
+    }
+
+    func testBuildDictionaryIncludesHashesWhenRequested() throws {
+        let jpeg = TestFixtures.minimalJPEG()
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("exporter-hash-\(UUID().uuidString).jpg")
+        try jpeg.write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let metadata = try ImageMetadata.read(from: tmp)
+        let dict = MetadataExporter.buildDictionary(metadata, fileURL: tmp, includeHashes: true)
+
+        XCTAssertEqual(dict["File:MD5"] as? String, FileHasher.md5(jpeg))
+        XCTAssertEqual(dict["File:SHA256"] as? String, FileHasher.sha256(jpeg))
+        XCTAssertEqual(dict["File:FileSize"] as? Int, jpeg.count)
+    }
+
     func testXMLEscapesSpecialCharacters() throws {
         var metadata = ImageMetadata(container: .jpeg(JPEGFile()), format: .jpeg)
         metadata.iptc.headline = "Test <>&\""
