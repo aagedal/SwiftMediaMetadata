@@ -173,6 +173,52 @@ final class VideoContainerTests: XCTestCase {
         XCTAssertEqual(fps, 24.0, accuracy: 0.01)
     }
 
+    func testMXFWithC2PAUnderSMPTEUL() throws {
+        let jumbf = buildMinimalManifestStore()
+        let c2paKey: [UInt8] = [
+            0x06, 0x0E, 0x2B, 0x34, 0x02, 0x53, 0x01, 0x01,
+            0x0D, 0x01, 0x03, 0x01, 0x20, 0xC2, 0x00, 0x00,
+        ]
+        let data = buildMinimalMXF(extraKLVs: [(key: Data(c2paKey), value: jumbf)])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertNotNil(metadata.c2pa, "MXF C2PA must be extracted via SMPTE UL")
+        XCTAssertEqual(metadata.c2pa?.activeManifest?.claim.claimGenerator, "SwiftExif Test")
+    }
+
+    func testMXFWithC2PAUnderDarkKey() throws {
+        // "Dark" KLV: unknown 16-byte key, but value starts with JUMBF.
+        let jumbf = buildMinimalManifestStore()
+        let data = buildMinimalMXF(extraKLVs: [(key: Data(repeating: 0x5A, count: 16), value: jumbf)])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertNotNil(metadata.c2pa, "MXF C2PA should be found via JUMBF sniff even under Dark KLV")
+    }
+
+    func testMXFWithBothC2PAAndNRT() throws {
+        let jumbf = buildMinimalManifestStore()
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="PMW-F55" serialNo="X-1"/>
+        </NonRealTimeMeta>
+        """
+        let data = buildMinimalMXF(extraKLVs: [
+            (key: Data(repeating: 0xAA, count: 16), value: Data(xml.utf8)),
+            (key: Data(repeating: 0x5A, count: 16), value: jumbf),
+        ])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "PMW-F55")
+        XCTAssertNotNil(metadata.c2pa)
+    }
+
+    func testPlainMXFHasNoC2PA() throws {
+        let data = buildMinimalMXF(extraKLVs: [])
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertNil(metadata.c2pa)
+        XCTAssertNil(metadata.camera)
+    }
+
     func testBERLengthShortForm() throws {
         var reader = BinaryReader(data: Data([0x42]))
         XCTAssertEqual(try MXFReader.readBERLength(&reader), 0x42)
@@ -353,24 +399,27 @@ final class VideoContainerTests: XCTestCase {
     }
 
     private func buildMinimalMXF(withNRTXML xml: Data) -> Data {
+        return buildMinimalMXF(extraKLVs: [(key: Data(repeating: 0xAA, count: 16), value: xml)])
+    }
+
+    private func buildMinimalMXF(extraKLVs: [(key: Data, value: Data)]) -> Data {
         // Partition Pack key (first 16 bytes).
         let partitionPackKey: [UInt8] = [
             0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01,
             0x0D, 0x01, 0x02, 0x01, 0x01, 0x02, 0x04, 0x00,
         ]
-        // Body: 16 bytes of dummy Partition Pack content.
         let partitionBody = Data(repeating: 0x00, count: 16)
-
-        // Second KLV carrying the NRT XML. Key is a generic 16-byte label.
-        let xmlKey = Data(repeating: 0xAA, count: 16)
 
         var out = Data()
         out.append(contentsOf: partitionPackKey)
         out.append(berLength(partitionBody.count))
         out.append(partitionBody)
-        out.append(xmlKey)
-        out.append(berLength(xml.count))
-        out.append(xml)
+
+        for klv in extraKLVs {
+            out.append(klv.key)
+            out.append(berLength(klv.value.count))
+            out.append(klv.value)
+        }
         return out
     }
 

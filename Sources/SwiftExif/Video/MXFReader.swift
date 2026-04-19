@@ -59,14 +59,70 @@ public struct MXFReader: Sendable {
                 }
             }
 
-            // (Optional future work: parse Generic Track Descriptor KLVs to
-            //  extract video width/height/codec. Sony clip workflows typically
-            //  supply this via the NRT XML so we defer until needed.)
-
-            _ = key // keys are ignored for now
+            // Look for a C2PA manifest store in the KLV payload.
+            // The C2PA spec carries manifest stores in MXF under a registered
+            // SMPTE UL, but a format-agnostic approach is to scan the value
+            // for a JUMBF "jumb" box signature — this also tolerates "Dark"
+            // KLV keys that implementations sometimes use before UL
+            // registration is finalized.
+            if metadata.c2pa == nil, isC2PAKey(key) || looksLikeJUMBF(value) {
+                extractC2PA(fromKLVValue: value, into: &metadata)
+            }
         }
 
         return metadata
+    }
+
+    // MARK: - C2PA
+
+    /// SMPTE UL assigned to the C2PA manifest store in MXF (see C2PA spec, MXF annex).
+    /// The final byte varies across drafts; we match on the first 13 bytes only.
+    private static let c2paULPrefix: [UInt8] = [
+        0x06, 0x0E, 0x2B, 0x34, 0x02, 0x53, 0x01, 0x01,
+        0x0D, 0x01, 0x03, 0x01, 0x20,
+    ]
+
+    private static func isC2PAKey(_ key: Data) -> Bool {
+        guard key.count >= c2paULPrefix.count else { return false }
+        for (i, b) in c2paULPrefix.enumerated() where key[key.startIndex + i] != b {
+            return false
+        }
+        return true
+    }
+
+    /// True if the value payload starts with (or contains near its start) a
+    /// JUMBF "jumb" box whose size field is self-consistent.
+    private static func looksLikeJUMBF(_ data: Data) -> Bool {
+        guard data.count >= 16 else { return false }
+        // Fast path: first box is "jumb" at offset 4.
+        let bytes = [UInt8](data.prefix(min(data.count, 32)))
+        if bytes[4] == 0x6A && bytes[5] == 0x75 && bytes[6] == 0x6D && bytes[7] == 0x62 {
+            let size = (UInt32(bytes[0]) << 24) | (UInt32(bytes[1]) << 16)
+                | (UInt32(bytes[2]) << 8) | UInt32(bytes[3])
+            if size >= 8 && Int(size) <= data.count { return true }
+        }
+        // Slow path: scan the first 256 bytes for a valid jumb box header.
+        let scanLimit = min(data.count, 256)
+        return C2PAReader.findJUMBFStart(in: data.prefix(scanLimit)) != nil
+    }
+
+    private static func extractC2PA(fromKLVValue value: Data, into metadata: inout VideoMetadata) {
+        // Find the JUMBF start offset (handles payloads that begin with a
+        // small prefix before the jumb box).
+        let jumbfData: Data
+        if let offset = C2PAReader.findJUMBFStart(in: value) {
+            jumbfData = Data(value.suffix(from: value.startIndex + offset))
+        } else {
+            jumbfData = value
+        }
+
+        do {
+            if let c2pa = try C2PAReader.parseManifestStore(from: jumbfData) {
+                metadata.c2pa = c2pa
+            }
+        } catch {
+            metadata.warnings.append("MXF C2PA parse error: \(error)")
+        }
     }
 
     // MARK: - BER length

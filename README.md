@@ -15,7 +15,7 @@ A native Swift library for reading and writing image and video metadata — Exif
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
 | WebP | Yes | Yes | Exif, XMP, ICC |
 | MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata |
-| MXF (SMPTE 377) | Yes | — | Sony NonRealTimeMeta (RDD-18) camera metadata |
+| MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18) camera metadata |
 | XMP sidecar (.xmp) | Yes | Yes | XMP |
 | Sony NRT sidecar (.XML) | Yes | — | Camera metadata auto-probed next to MP4/MXF |
 
