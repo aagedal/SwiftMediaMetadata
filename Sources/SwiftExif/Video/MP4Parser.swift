@@ -191,6 +191,12 @@ public struct MP4Parser: Sendable {
             }
         }
 
+        // Disposition flags from trak.udta.kind (ISO/IEC 14496-12 + DASH Role
+        // scheme, "urn:mpeg:dash:role:2011"). This is how ffmpeg records
+        // -disposition:s:N forced / caption / main on an MP4 subtitle track;
+        // tx3g displayFlags (3GPP TS 26.245 §5.16) is the alternative path.
+        let dispositions = parseTrackKindDispositions(children)
+
         guard let mdia = children.first(where: { $0.type == "mdia" }),
               let mdiaChildren = try? ISOBMFFBoxReader.parseBoxes(from: mdia.data) else {
             return
@@ -297,6 +303,9 @@ public struct MP4Parser: Sendable {
             stream.duration = trackDuration
             stream.language = language
             parseSubtitleSampleEntry(stsdBox.data, handlerType: handlerType, into: &stream)
+            if dispositions.isDefault { stream.isDefault = true }
+            if dispositions.isForced { stream.isForced = true }
+            if dispositions.isHearingImpaired { stream.isHearingImpaired = true }
             metadata.subtitleStreams.append(stream)
         }
     }
@@ -312,7 +321,9 @@ public struct MP4Parser: Sendable {
     }
 
     /// Inspect the first SampleEntry in `stsd` to capture the subtitle codec
-    /// FourCC (tx3g / wvtt / stpp / c608 / c708 / text / …).
+    /// FourCC (tx3g / wvtt / stpp / c608 / c708 / text / …) and, for 3GPP
+    /// timed-text / QuickTime text tracks, the forced-display bit from
+    /// `displayFlags`.
     private static func parseSubtitleSampleEntry(
         _ stsdData: Data,
         handlerType: String,
@@ -329,6 +340,71 @@ public struct MP4Parser: Sendable {
 
         stream.codec = codec
         stream.codecName = subtitleLongName(forFourCC: codec, handler: handlerType) ?? codec
+
+        // TextSampleEntry (tx3g, QuickTime text) extends SampleEntry with a
+        // 32-bit displayFlags field. Per 3GPP TS 26.245 §5.16, bit 0x40000000
+        // = "all samples are forced". ffmpeg writes forced tracks via the
+        // `kind` box instead (handled in parseTrak); this path catches
+        // muxers that follow the 3GPP spec.
+        if codec == "tx3g" || codec == "text" {
+            // Skip SampleEntry base: reserved[6] + data_reference_index(2).
+            guard (try? reader.readBytes(8)) != nil,
+                  let displayFlags = try? reader.readUInt32BigEndian() else { return }
+            if (displayFlags & 0x40000000) != 0 {
+                stream.isForced = true
+            }
+        }
+    }
+
+    /// DASH Role scheme dispositions recorded on a `trak` via `udta > kind`.
+    private struct TrackDispositions {
+        var isDefault = false
+        var isForced = false
+        var isHearingImpaired = false
+    }
+
+    /// Walk `trak > udta > kind` boxes, mapping recognised DASH Role values
+    /// ("main", "forced-subtitle", "caption", "sign") and TV-Anytime audio
+    /// purpose code 4 to subtitle disposition flags.
+    private static func parseTrackKindDispositions(
+        _ trakChildren: [ISOBMFFBox]
+    ) -> TrackDispositions {
+        var result = TrackDispositions()
+        guard let udta = trakChildren.first(where: { $0.type == "udta" }),
+              let udtaChildren = try? ISOBMFFBoxReader.parseBoxes(from: udta.data) else {
+            return result
+        }
+        for kind in udtaChildren where kind.type == "kind" {
+            guard let (scheme, value) = parseKindBox(kind.data) else { continue }
+            switch scheme {
+            case "urn:mpeg:dash:role:2011", "urn:mpeg:dash:role:2012":
+                switch value {
+                case "main": result.isDefault = true
+                case "forced-subtitle": result.isForced = true
+                case "caption", "sign": result.isHearingImpaired = true
+                default: break
+                }
+            case "urn:tva:metadata:cs:AudioPurposeCS:2007" where value == "4":
+                result.isHearingImpaired = true
+            default: break
+            }
+        }
+        return result
+    }
+
+    /// Decode a `kind` FullBox payload into (schemeURI, value). Both fields
+    /// are NUL-terminated UTF-8 strings per ISO/IEC 14496-12.
+    private static func parseKindBox(_ data: Data) -> (scheme: String, value: String)? {
+        // FullBox header: version(1) + flags(3).
+        guard data.count > 4 else { return nil }
+        let payload = data[data.startIndex + 4 ..< data.endIndex]
+        let parts = payload.split(separator: 0, maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count >= 2,
+              let scheme = String(data: Data(parts[0]), encoding: .utf8),
+              let value = String(data: Data(parts[1]), encoding: .utf8) else {
+            return nil
+        }
+        return (scheme, value)
     }
 
     private static func subtitleLongName(forFourCC fourCC: String, handler: String) -> String? {

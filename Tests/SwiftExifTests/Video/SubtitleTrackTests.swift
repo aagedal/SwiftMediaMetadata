@@ -16,6 +16,19 @@ final class SubtitleTrackTests: XCTestCase {
         XCTAssertEqual(sub.codec, "tx3g")
         XCTAssertEqual(sub.codecName, "3GPP Timed Text")
         XCTAssertEqual(sub.language, "nor")
+        // Plain track: neither the `kind` disposition box nor the tx3g
+        // forced bit is present, so the flag stays nil.
+        XCTAssertNil(sub.isForced)
+    }
+
+    /// Forced disposition surfaces as `isForced = true` via the tx3g
+    /// displayFlags bit 0x40000000 that ffmpeg writes for
+    /// `-disposition:s:0 forced`.
+    func testMP4ForcedSubtitleTrackFlag() throws {
+        let url = try generateMP4WithTimedText(language: "eng", forced: true)
+        let m = try VideoMetadata.read(from: url)
+        XCTAssertEqual(m.subtitleStreams.count, 1)
+        XCTAssertEqual(m.subtitleStreams[0].isForced, true)
     }
 
     // MARK: - Matroska (SubRip)
@@ -34,20 +47,21 @@ final class SubtitleTrackTests: XCTestCase {
 
     /// Build an MP4 with an embedded `tx3g` subtitle track and a chosen
     /// ISO 639-2 language code.
-    private func generateMP4WithTimedText(language: String) throws -> URL {
+    private func generateMP4WithTimedText(language: String, forced: Bool = false) throws -> URL {
         let subURL = try writeSRT()
-        return try runFFmpeg(
-            arguments: [
-                "-y", "-v", "error",
-                "-f", "lavfi",
-                "-i", "testsrc=size=640x360:rate=25:duration=2",
-                "-i", subURL.path,
-                "-c:v", "libx264", "-preset", "ultrafast",
-                "-c:s", "mov_text",
-                "-metadata:s:s:0", "language=\(language)",
-            ],
-            suffix: ".mp4"
-        )
+        var args = [
+            "-y", "-v", "error",
+            "-f", "lavfi",
+            "-i", "testsrc=size=640x360:rate=25:duration=2",
+            "-i", subURL.path,
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:s", "mov_text",
+            "-metadata:s:s:0", "language=\(language)",
+        ]
+        if forced {
+            args.append(contentsOf: ["-disposition:s:0", "forced"])
+        }
+        return try runFFmpeg(arguments: args, suffix: ".mp4")
     }
 
     private func generateMKVWithSRT(language: String) throws -> URL {

@@ -63,6 +63,15 @@ public struct VideoMetadataExporter: Sendable {
             if !languages.isEmpty { dict["SubtitleLanguages"] = languages }
             let titles = metadata.subtitleStreams.compactMap { $0.title }
             if !titles.isEmpty { dict["SubtitleTitles"] = titles }
+            // Disposition flags (default / forced / SDH). Only emit when the
+            // container actually signaled something so absent flags aren't
+            // reported as `false`.
+            let defaults = metadata.subtitleStreams.compactMap(\.isDefault)
+            if !defaults.isEmpty { dict["SubtitleDefaultFlags"] = defaults }
+            let forced = metadata.subtitleStreams.compactMap(\.isForced)
+            if !forced.isEmpty { dict["SubtitleForcedFlags"] = forced }
+            let sdh = metadata.subtitleStreams.compactMap(\.isHearingImpaired)
+            if !sdh.isEmpty { dict["SubtitleHearingImpairedFlags"] = sdh }
         }
         if let t = metadata.title { dict["Title"] = t }
         if let a = metadata.artist { dict["Artist"] = a }
