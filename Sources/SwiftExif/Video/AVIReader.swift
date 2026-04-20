@@ -243,10 +243,14 @@ public struct AVIReader: Sendable {
                 let formatTag = Int(readUInt16LE(data, at: strfStart))
                 let channels = Int(readUInt16LE(data, at: strfStart + 2))
                 let sampleRate = Int(readUInt32LE(data, at: strfStart + 4))
+                let avgBytesPerSec = Int(readUInt32LE(data, at: strfStart + 8))
                 let bitsPerSample = Int(readUInt16LE(data, at: strfStart + 14))
                 stream.channels = channels
                 stream.sampleRate = sampleRate
                 stream.bitDepth = bitsPerSample
+                if avgBytesPerSec > 0 {
+                    stream.bitRate = avgBytesPerSec * 8
+                }
                 stream.codec = String(format: "0x%04X", formatTag)
                 stream.codecName = audioFormatTagName(UInt16(formatTag))
             }
