@@ -20,6 +20,20 @@ final class MatroskaReaderTests: XCTestCase {
         XCTAssertEqual(m.audioStreams[0].title, "Dialog Track")
     }
 
+    /// Matroska's per-track bitrate doesn't live on the TrackEntry — it's
+    /// emitted as a `BPS` SimpleTag inside the Segment's `Tags` block, keyed
+    /// by `TagTrackUID`. This verifies parseTags routes BPS back to the owning
+    /// stream's `bitRate`. We set BPS via `-metadata:s:*` because FFmpeg's
+    /// default matroska muxer only writes DURATION per-track, not BPS.
+    func testMKVPerTrackBitRateFromTagsBlock() throws {
+        let url = try generateMKVWithBPSTags(videoBPS: 500_000, audioBPS: 96_000)
+        let m = try VideoMetadata.read(from: url)
+        XCTAssertEqual(m.videoStreams.count, 1)
+        XCTAssertEqual(m.audioStreams.count, 1)
+        XCTAssertEqual(m.videoStreams[0].bitRate, 500_000)
+        XCTAssertEqual(m.audioStreams[0].bitRate, 96_000)
+    }
+
     // MARK: - Fixtures
 
     private func generateMKVWithTitles(videoTitle: String, audioTitle: String) throws -> URL {
@@ -34,6 +48,23 @@ final class MatroskaReaderTests: XCTestCase {
                 "-c:a", "aac",
                 "-metadata:s:v:0", "title=\(videoTitle)",
                 "-metadata:s:a:0", "title=\(audioTitle)",
+            ],
+            suffix: ".mkv"
+        )
+    }
+
+    private func generateMKVWithBPSTags(videoBPS: Int, audioBPS: Int) throws -> URL {
+        try runFFmpeg(
+            arguments: [
+                "-y", "-v", "error",
+                "-f", "lavfi",
+                "-i", "testsrc=size=320x240:rate=25:duration=1",
+                "-f", "lavfi",
+                "-i", "sine=frequency=440:duration=1",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-c:a", "aac",
+                "-metadata:s:v:0", "BPS=\(videoBPS)",
+                "-metadata:s:a:0", "BPS=\(audioBPS)",
             ],
             suffix: ".mkv"
         )

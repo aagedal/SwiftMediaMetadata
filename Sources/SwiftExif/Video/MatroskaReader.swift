@@ -77,6 +77,8 @@ public struct MatroskaReader: Sendable {
         (try? reader.seek(to: start)) ?? ()
 
         var timestampScale: UInt64 = 1_000_000 // nanoseconds per tick (Matroska default)
+        var trackRefs: [TrackRef] = []
+        var tagsBlocks: [(start: Int, end: Int)] = []
 
         while reader.offset < end, reader.remainingCount >= 2 {
             guard let id = try? readEBMLID(&reader),
@@ -91,7 +93,11 @@ public struct MatroskaReader: Sendable {
                 parseInfo(data, from: childStart, end: childEnd,
                           timestampScale: &timestampScale, into: &metadata)
             case 0x1654AE6B: // Tracks
-                parseTracks(data, from: childStart, end: childEnd, into: &metadata)
+                parseTracks(data, from: childStart, end: childEnd,
+                            into: &metadata, refs: &trackRefs)
+            case 0x1254C367: // Tags — deferred: the Tag targets reference TrackUIDs
+                             // which we only know after Tracks has been walked.
+                tagsBlocks.append((childStart, childEnd))
             case 0x1C53BB6B, 0x1F43B675, 0x1941A469: // Cues, Cluster, Attachments
                 break
             default:
@@ -99,6 +105,10 @@ public struct MatroskaReader: Sendable {
             }
 
             if (try? reader.seek(to: childEnd)) == nil { return }
+        }
+
+        for (s, e) in tagsBlocks {
+            parseTags(data, from: s, end: e, refs: trackRefs, into: &metadata)
         }
 
         // Fold Duration (ticks) × TimestampScale (ns/tick) into seconds.
@@ -260,11 +270,19 @@ public struct MatroskaReader: Sendable {
         }
     }
 
+    private enum TrackKind { case video, audio, subtitle }
+    private struct TrackRef {
+        let uid: UInt64
+        let kind: TrackKind
+        let index: Int
+    }
+
     private static func parseTracks(
         _ data: Data,
         from start: Int,
         end: Int,
-        into metadata: inout VideoMetadata
+        into metadata: inout VideoMetadata,
+        refs: inout [TrackRef]
     ) {
         var reader = BinaryReader(data: data)
         (try? reader.seek(to: start)) ?? ()
@@ -278,7 +296,8 @@ public struct MatroskaReader: Sendable {
             let entryEnd = entryStart + Int(size)
 
             if id == 0xAE {
-                parseTrackEntry(data, from: entryStart, end: entryEnd, into: &metadata)
+                parseTrackEntry(data, from: entryStart, end: entryEnd,
+                                into: &metadata, refs: &refs)
             }
 
             if (try? reader.seek(to: entryEnd)) == nil { return }
@@ -289,12 +308,14 @@ public struct MatroskaReader: Sendable {
         _ data: Data,
         from start: Int,
         end: Int,
-        into metadata: inout VideoMetadata
+        into metadata: inout VideoMetadata,
+        refs: inout [TrackRef]
     ) {
         var reader = BinaryReader(data: data)
         (try? reader.seek(to: start)) ?? ()
 
         var trackType: UInt64 = 0
+        var trackUID: UInt64 = 0
         var codecID: String?
         var defaultDurationNs: UInt64 = 0
         var language: String?
@@ -318,6 +339,10 @@ public struct MatroskaReader: Sendable {
             case 0x83: // TrackType
                 if let v = readUIntPayload(data, offset: vStart, size: vSize) {
                     trackType = v
+                }
+            case 0x73C5: // TrackUID
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    trackUID = v
                 }
             case 0x86: // CodecID
                 codecID = readStringPayload(data, offset: vStart, size: vSize)
@@ -362,6 +387,9 @@ public struct MatroskaReader: Sendable {
             if defaultDurationNs > 0 {
                 stream.frameRate = Double(defaultDurationNs)
             }
+            if trackUID != 0 {
+                refs.append(TrackRef(uid: trackUID, kind: .video, index: stream.index))
+            }
             metadata.videoStreams.append(stream)
 
         case 2: // Audio
@@ -372,6 +400,9 @@ public struct MatroskaReader: Sendable {
             stream.title = trackName
             if let s = audioBlockStart, let e = audioBlockEnd {
                 parseAudioBlock(data, from: s, end: e, into: &stream)
+            }
+            if trackUID != 0 {
+                refs.append(TrackRef(uid: trackUID, kind: .audio, index: stream.index))
             }
             metadata.audioStreams.append(stream)
 
@@ -384,8 +415,167 @@ public struct MatroskaReader: Sendable {
             stream.isDefault = flagDefault
             stream.isForced = flagForced
             stream.isHearingImpaired = flagHearingImpaired
+            if trackUID != 0 {
+                refs.append(TrackRef(uid: trackUID, kind: .subtitle, index: stream.index))
+            }
             metadata.subtitleStreams.append(stream)
 
+        default:
+            break
+        }
+    }
+
+    // MARK: - Tags (per-track SimpleTag values)
+
+    /// Walk `Tags` master: a sequence of `Tag` entries. Each Tag carries a
+    /// Targets master (listing one or more TagTrackUIDs) plus any number of
+    /// SimpleTag name/value pairs. FFmpeg and mkvtoolnix encode per-track
+    /// `BPS`, `DURATION`, `NUMBER_OF_FRAMES`, `NUMBER_OF_BYTES` here — it's
+    /// the only place a declared bitrate appears in most MKV/WebM files.
+    private static func parseTags(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        refs: [TrackRef],
+        into metadata: inout VideoMetadata
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+            if id == 0x7373 { // Tag
+                parseTag(data, from: vStart, end: vStart + vSize,
+                         refs: refs, into: &metadata)
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { return }
+        }
+    }
+
+    private static func parseTag(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        refs: [TrackRef],
+        into metadata: inout VideoMetadata
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        var targetUIDs: [UInt64] = []
+        var simpleTags: [(name: String, value: String)] = []
+
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+            switch id {
+            case 0x63C0: // Targets
+                targetUIDs = readTagTargetUIDs(data, from: vStart, end: vStart + vSize)
+            case 0x67C8: // SimpleTag
+                if let pair = readSimpleTag(data, from: vStart, end: vStart + vSize) {
+                    simpleTags.append(pair)
+                }
+            default:
+                break
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { return }
+        }
+
+        // A Tag without a TagTrackUID targets the Segment itself; we have no
+        // per-segment tag fields to fill, so skip.
+        guard !targetUIDs.isEmpty else { return }
+
+        for uid in targetUIDs {
+            guard let ref = refs.first(where: { $0.uid == uid }) else { continue }
+            for (name, value) in simpleTags {
+                applyTrackTag(name: name, value: value, to: ref, in: &metadata)
+            }
+        }
+    }
+
+    private static func readTagTargetUIDs(_ data: Data, from start: Int, end: Int) -> [UInt64] {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+        var out: [UInt64] = []
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+            if id == 0x63C5 { // TagTrackUID
+                if let v = readUIntPayload(data, offset: vStart, size: vSize), v != 0 {
+                    out.append(v)
+                }
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { return out }
+        }
+        return out
+    }
+
+    /// Read a SimpleTag's `TagName` + `TagString`. Nested SimpleTags are
+    /// ignored — Matroska allows them but no mainstream muxer writes nested
+    /// BPS/DURATION.
+    private static func readSimpleTag(
+        _ data: Data,
+        from start: Int,
+        end: Int
+    ) -> (name: String, value: String)? {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+        var name: String?
+        var value: String?
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+            switch id {
+            case 0x45A3: // TagName
+                name = readStringPayload(data, offset: vStart, size: vSize)
+            case 0x4487: // TagString
+                value = readStringPayload(data, offset: vStart, size: vSize)
+            default:
+                break
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { break }
+        }
+        guard let n = name, let v = value else { return nil }
+        return (n, v)
+    }
+
+    private static func applyTrackTag(
+        name: String,
+        value: String,
+        to ref: TrackRef,
+        in metadata: inout VideoMetadata
+    ) {
+        switch name.uppercased() {
+        case "BPS":
+            guard let bps = Int(value.trimmingCharacters(in: .whitespaces)),
+                  bps > 0 else { return }
+            switch ref.kind {
+            case .video:
+                guard ref.index < metadata.videoStreams.count else { return }
+                if metadata.videoStreams[ref.index].bitRate == nil {
+                    metadata.videoStreams[ref.index].bitRate = bps
+                }
+            case .audio:
+                guard ref.index < metadata.audioStreams.count else { return }
+                if metadata.audioStreams[ref.index].bitRate == nil {
+                    metadata.audioStreams[ref.index].bitRate = bps
+                }
+            case .subtitle:
+                break // SubtitleStream has no bitRate.
+            }
         default:
             break
         }
