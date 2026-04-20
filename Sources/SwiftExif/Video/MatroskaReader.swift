@@ -353,6 +353,7 @@ public struct MatroskaReader: Sendable {
             var stream = VideoStream(index: metadata.videoStreams.count)
             stream.codec = codecID
             stream.codecName = codecLongNameMatroska(codecID)
+            stream.title = trackName
             if let s = videoBlockStart, let e = videoBlockEnd {
                 parseVideoBlock(data, from: s, end: e, into: &stream)
             }
@@ -368,6 +369,7 @@ public struct MatroskaReader: Sendable {
             stream.codec = codecID
             stream.codecName = codecLongNameMatroska(codecID)
             stream.language = language
+            stream.title = trackName
             if let s = audioBlockStart, let e = audioBlockEnd {
                 parseAudioBlock(data, from: s, end: e, into: &stream)
             }

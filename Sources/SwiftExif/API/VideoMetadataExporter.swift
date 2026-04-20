@@ -50,9 +50,13 @@ public struct VideoMetadataExporter: Sendable {
         }
         if !metadata.videoStreams.isEmpty {
             dict["VideoStreamCount"] = metadata.videoStreams.count
+            let titles = metadata.videoStreams.compactMap(\.title)
+            if !titles.isEmpty { dict["VideoStreamTitles"] = titles }
         }
         if !metadata.audioStreams.isEmpty {
             dict["AudioStreamCount"] = metadata.audioStreams.count
+            let titles = metadata.audioStreams.compactMap(\.title)
+            if !titles.isEmpty { dict["AudioStreamTitles"] = titles }
         }
         if !metadata.subtitleStreams.isEmpty {
             dict["SubtitleStreamCount"] = metadata.subtitleStreams.count

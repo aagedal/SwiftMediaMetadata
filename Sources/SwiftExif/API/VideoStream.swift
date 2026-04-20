@@ -73,6 +73,8 @@ public struct VideoStream: Sendable, Equatable {
     public var chromaSubsampling: String?
     /// Number of video frames (from container metadata).
     public var frameCount: Int?
+    /// Optional human-readable track title / label set by the muxer.
+    public var title: String?
 
     public init(index: Int) {
         self.index = index
@@ -96,6 +98,7 @@ public struct VideoStream: Sendable, Equatable {
             && lhs.colorInfo == rhs.colorInfo
             && lhs.chromaSubsampling == rhs.chromaSubsampling
             && lhs.frameCount == rhs.frameCount
+            && lhs.title == rhs.title
     }
 }
 
@@ -138,6 +141,8 @@ public struct AudioStream: Sendable, Equatable {
     public var bitRate: Int?
     public var duration: TimeInterval?
     public var language: String?
+    /// Optional human-readable track title / label set by the muxer.
+    public var title: String?
 
     public init(index: Int) {
         self.index = index
