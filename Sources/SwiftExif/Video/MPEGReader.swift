@@ -194,6 +194,7 @@ public struct MPEGReader: Sendable {
             stream.width = info.width
             stream.height = info.height
             stream.frameRate = info.frameRate
+            if let br = info.bitRate, br > 0 { stream.bitRate = br }
             if let dw = info.displayWidth, let dh = info.displayHeight,
                dw != info.width || dh != info.height {
                 stream.displayWidth = dw
@@ -211,6 +212,7 @@ public struct MPEGReader: Sendable {
             stream.codec = info.codec
             stream.codecName = info.codecName
             stream.language = info.language
+            if let br = info.bitRate, br > 0 { stream.bitRate = br }
             metadata.audioStreams.append(stream)
             if metadata.audioCodec == nil { metadata.audioCodec = info.codec }
         }
@@ -326,48 +328,56 @@ public struct MPEGReader: Sendable {
                 var info = videoPIDs[pid] ?? TSStreamInfo()
                 info.codec = "mpeg2video"
                 info.codecName = "MPEG-2 Video"
+                applyMaxBitRate(esDescriptors, to: &info)
                 videoPIDs[pid] = info
             case 0x1B:
                 var info = videoPIDs[pid] ?? TSStreamInfo()
                 info.codec = "avc1"
                 info.codecName = "H.264 / AVC"
                 info.sequenceHeaderParsed = true // SPS parsing is out of scope
+                applyMaxBitRate(esDescriptors, to: &info)
                 videoPIDs[pid] = info
             case 0x24:
                 var info = videoPIDs[pid] ?? TSStreamInfo()
                 info.codec = "hvc1"
                 info.codecName = "H.265 / HEVC"
                 info.sequenceHeaderParsed = true
+                applyMaxBitRate(esDescriptors, to: &info)
                 videoPIDs[pid] = info
             case 0x10:
                 var info = videoPIDs[pid] ?? TSStreamInfo()
                 info.codec = "mp4v"
                 info.codecName = "MPEG-4 Visual"
                 info.sequenceHeaderParsed = true
+                applyMaxBitRate(esDescriptors, to: &info)
                 videoPIDs[pid] = info
             case 0x03, 0x04:
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "mp3"
                 info.codecName = "MPEG-1/2 Layer III"
                 info.language = esDescriptors.language
+                applyMaxBitRate(esDescriptors, to: &info)
                 audioPIDs[pid] = info
             case 0x0F, 0x11:
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "aac"
                 info.codecName = "AAC"
                 info.language = esDescriptors.language
+                applyMaxBitRate(esDescriptors, to: &info)
                 audioPIDs[pid] = info
             case 0x81:
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "ac3"
                 info.codecName = "Dolby Digital (AC-3)"
                 info.language = esDescriptors.language
+                applyMaxBitRate(esDescriptors, to: &info)
                 audioPIDs[pid] = info
             case 0x87:
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "eac3"
                 info.codecName = "Dolby Digital Plus (E-AC-3)"
                 info.language = esDescriptors.language
+                applyMaxBitRate(esDescriptors, to: &info)
                 audioPIDs[pid] = info
             case 0x82:
                 // HDMV PGS (Blu-ray graphic subtitles).
@@ -398,6 +408,7 @@ public struct MPEGReader: Sendable {
                         a.codec = "ac3"
                         a.codecName = "Dolby Digital (AC-3)"
                         a.language = esDescriptors.language
+                        applyMaxBitRate(esDescriptors, to: &a)
                         audioPIDs[pid] = a
                         off += 5 + esInfoLen
                         continue
@@ -421,12 +432,22 @@ public struct MPEGReader: Sendable {
         var language: String?
         var privateKind: PrivateStreamKind?
         var isHearingImpaired: Bool?
+        /// Maximum bit-rate (bits/s) from the ISO/IEC 13818-1 maximum_bitrate
+        /// descriptor (tag 0x0E). For H.264/H.265/AAC/AC-3 streams this is
+        /// usually the only bit-rate the container advertises.
+        var maxBitRate: Int?
     }
 
     private enum PrivateStreamKind {
         case dvbSubtitle
         case teletext
         case ac3
+    }
+
+    private static func applyMaxBitRate(_ desc: ESDescriptorInfo, to info: inout TSStreamInfo) {
+        if info.bitRate == nil, let mbr = desc.maxBitRate, mbr > 0 {
+            info.bitRate = mbr
+        }
     }
 
     /// Walk the descriptor loop that follows every ES entry in the PMT.
@@ -497,6 +518,19 @@ public struct MPEGReader: Sendable {
                 }
             case 0x6A: // DVB AC-3 descriptor
                 info.privateKind = .ac3
+            case 0x0E:
+                // Maximum bitrate descriptor (ISO/IEC 13818-1 §2.6.26):
+                // 2 reserved bits + 22-bit maximum_bitrate in 50 bytes/s units
+                // → bits/s = value * 50 * 8 = value * 400.
+                if length >= 3 {
+                    let s = data.startIndex + valueStart
+                    let raw = (UInt32(data[s] & 0x3F) << 16)
+                        | (UInt32(data[s + 1]) << 8)
+                        | UInt32(data[s + 2])
+                    if raw > 0 {
+                        info.maxBitRate = Int(raw) * 400
+                    }
+                }
             default:
                 break
             }
