@@ -37,6 +37,8 @@ public struct VideoMetadata: Sendable {
     public var videoStreams: [VideoStream]
     /// Per-track audio streams (for multi-track files).
     public var audioStreams: [AudioStream]
+    /// Per-track subtitle / timed-text / closed-caption streams.
+    public var subtitleStreams: [SubtitleStream]
     /// Overall container bit rate in bits/second, when the container advertises one.
     public var bitRate: Int?
     public var title: String?
@@ -60,6 +62,7 @@ public struct VideoMetadata: Sendable {
         self.warnings = []
         self.videoStreams = []
         self.audioStreams = []
+        self.subtitleStreams = []
     }
 
     // MARK: - Reading

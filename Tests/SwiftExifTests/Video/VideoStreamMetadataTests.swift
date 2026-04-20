@@ -87,6 +87,13 @@ final class VideoStreamMetadataTests: XCTestCase {
         XCTAssertEqual(m.colorInfo?.primaries, 9)
         XCTAssertEqual(m.colorInfo?.transfer, 16)
         XCTAssertEqual(m.colorInfo?.matrix, 9)
+
+        // Blu-ray remux carries PGS subtitles (S_HDMV/PGS, TrackType 17).
+        XCTAssertFalse(m.subtitleStreams.isEmpty)
+        let first = m.subtitleStreams[0]
+        XCTAssertEqual(first.codec, "S_HDMV/PGS")
+        XCTAssertEqual(first.codecName, "PGS (Blu-ray)")
+        XCTAssertNotNil(first.language)
     }
 
     // MARK: - MXF

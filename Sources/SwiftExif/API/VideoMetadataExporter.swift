@@ -54,6 +54,16 @@ public struct VideoMetadataExporter: Sendable {
         if !metadata.audioStreams.isEmpty {
             dict["AudioStreamCount"] = metadata.audioStreams.count
         }
+        if !metadata.subtitleStreams.isEmpty {
+            dict["SubtitleStreamCount"] = metadata.subtitleStreams.count
+            // Build a flat summary the CLI / consumers can read at a glance.
+            let codecs = metadata.subtitleStreams.compactMap { $0.codecName ?? $0.codec }
+            if !codecs.isEmpty { dict["SubtitleCodecs"] = codecs }
+            let languages = metadata.subtitleStreams.compactMap { $0.language }
+            if !languages.isEmpty { dict["SubtitleLanguages"] = languages }
+            let titles = metadata.subtitleStreams.compactMap { $0.title }
+            if !titles.isEmpty { dict["SubtitleTitles"] = titles }
+        }
         if let t = metadata.title { dict["Title"] = t }
         if let a = metadata.artist { dict["Artist"] = a }
         if let c = metadata.comment { dict["Comment"] = c }

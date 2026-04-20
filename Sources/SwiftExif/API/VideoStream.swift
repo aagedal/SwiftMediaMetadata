@@ -99,6 +99,33 @@ public struct VideoStream: Sendable, Equatable {
     }
 }
 
+/// A subtitle / timed-text / closed-caption track inside a container.
+public struct SubtitleStream: Sendable, Equatable {
+    public var index: Int
+    /// Short codec identifier as stored in the container (e.g. "tx3g", "wvtt",
+    /// "stpp", "c608", "c708", "S_TEXT/UTF8", "S_TEXT/ASS", "S_HDMV/PGS",
+    /// "S_VOBSUB", "dvb_subtitle", "dvb_teletext").
+    public var codec: String?
+    /// Human-readable codec label ("WebVTT", "TTML", "3GPP Timed Text",
+    /// "SubRip", "ASS", "PGS", "VobSub", "DVB Subtitles", …).
+    public var codecName: String?
+    /// ISO 639-2/T language code (e.g. "eng", "nor", "swe"), when declared.
+    public var language: String?
+    /// Optional human-readable track title / label.
+    public var title: String?
+    /// Default-track flag if the container signals one.
+    public var isDefault: Bool?
+    /// Forced-display flag (e.g. foreign-audio burn-in tracks).
+    public var isForced: Bool?
+    /// Hearing-impaired flag (SDH).
+    public var isHearingImpaired: Bool?
+    public var duration: TimeInterval?
+
+    public init(index: Int) {
+        self.index = index
+    }
+}
+
 /// An audio track (stream) inside a container.
 public struct AudioStream: Sendable, Equatable {
     public var index: Int

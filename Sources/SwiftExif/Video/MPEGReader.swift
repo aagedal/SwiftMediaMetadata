@@ -138,6 +138,7 @@ public struct MPEGReader: Sendable {
         let packetPayloadSize = 188
         var videoPIDs: [Int: TSStreamInfo] = [:]
         var audioPIDs: [Int: TSStreamInfo] = [:]
+        var subtitlePIDs: [Int: TSStreamInfo] = [:]
 
         // Pass 1: find PAT → PMT → elementary stream types.
         var patPMTPids: Set<Int> = []
@@ -152,7 +153,8 @@ public struct MPEGReader: Sendable {
             }
             if patPMTPids.contains(pid), unitStart {
                 parsePMT(data, from: payloadStart, end: packetStart + packetPayloadSize,
-                         videoPIDs: &videoPIDs, audioPIDs: &audioPIDs)
+                         videoPIDs: &videoPIDs, audioPIDs: &audioPIDs,
+                         subtitlePIDs: &subtitlePIDs)
             }
         }
 
@@ -208,8 +210,18 @@ public struct MPEGReader: Sendable {
             var stream = AudioStream(index: audioIdx); audioIdx += 1
             stream.codec = info.codec
             stream.codecName = info.codecName
+            stream.language = info.language
             metadata.audioStreams.append(stream)
             if metadata.audioCodec == nil { metadata.audioCodec = info.codec }
+        }
+
+        var subIdx = 0
+        for (_, info) in subtitlePIDs.sorted(by: { $0.key < $1.key }) {
+            var stream = SubtitleStream(index: subIdx); subIdx += 1
+            stream.codec = info.codec
+            stream.codecName = info.codecName
+            stream.language = info.language
+            metadata.subtitleStreams.append(stream)
         }
     }
 
@@ -222,6 +234,7 @@ public struct MPEGReader: Sendable {
         var bitRate: Int?
         var displayWidth: Int?
         var displayHeight: Int?
+        var language: String?
         var sequenceHeaderParsed: Bool = false
     }
 
@@ -282,7 +295,8 @@ public struct MPEGReader: Sendable {
         from start: Int,
         end: Int,
         videoPIDs: inout [Int: TSStreamInfo],
-        audioPIDs: inout [Int: TSStreamInfo]
+        audioPIDs: inout [Int: TSStreamInfo],
+        subtitlePIDs: inout [Int: TSStreamInfo]
     ) {
         guard start < end else { return }
         var s = start
@@ -300,6 +314,10 @@ public struct MPEGReader: Sendable {
             let streamType = data[data.startIndex + off]
             let pid = (Int(data[data.startIndex + off + 1] & 0x1F) << 8) | Int(data[data.startIndex + off + 2])
             let esInfoLen = (Int(data[data.startIndex + off + 3] & 0x0F) << 8) | Int(data[data.startIndex + off + 4])
+
+            let descriptorStart = off + 5
+            let descriptorEnd = min(descriptorStart + esInfoLen, sectionEnd)
+            let esDescriptors = parseESDescriptors(data, from: descriptorStart, end: descriptorEnd)
 
             switch streamType {
             case 0x01, 0x02:
@@ -329,28 +347,132 @@ public struct MPEGReader: Sendable {
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "mp3"
                 info.codecName = "MPEG-1/2 Layer III"
+                info.language = esDescriptors.language
                 audioPIDs[pid] = info
             case 0x0F, 0x11:
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "aac"
                 info.codecName = "AAC"
+                info.language = esDescriptors.language
                 audioPIDs[pid] = info
             case 0x81:
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "ac3"
                 info.codecName = "Dolby Digital (AC-3)"
+                info.language = esDescriptors.language
                 audioPIDs[pid] = info
             case 0x87:
                 var info = audioPIDs[pid] ?? TSStreamInfo()
                 info.codec = "eac3"
                 info.codecName = "Dolby Digital Plus (E-AC-3)"
+                info.language = esDescriptors.language
                 audioPIDs[pid] = info
+            case 0x82:
+                // HDMV PGS (Blu-ray graphic subtitles).
+                var info = subtitlePIDs[pid] ?? TSStreamInfo()
+                info.codec = "hdmv_pgs"
+                info.codecName = "PGS (Blu-ray)"
+                info.language = esDescriptors.language
+                subtitlePIDs[pid] = info
+            case 0x92:
+                // HDMV IGS (Blu-ray interactive graphics) — not subtitles, skip.
+                break
+            case 0x06:
+                // Private data — resolve to DVB subtitles / teletext via
+                // descriptors when present.
+                if let kind = esDescriptors.privateKind {
+                    var info = subtitlePIDs[pid] ?? TSStreamInfo()
+                    switch kind {
+                    case .dvbSubtitle:
+                        info.codec = "dvb_subtitle"
+                        info.codecName = "DVB Subtitles"
+                    case .teletext:
+                        info.codec = "dvb_teletext"
+                        info.codecName = "DVB Teletext"
+                    case .ac3:
+                        // Some muxers carry AC-3 on private stream type 0x06
+                        // with an AC-3 descriptor. Route it to audio.
+                        var a = audioPIDs[pid] ?? TSStreamInfo()
+                        a.codec = "ac3"
+                        a.codecName = "Dolby Digital (AC-3)"
+                        a.language = esDescriptors.language
+                        audioPIDs[pid] = a
+                        off += 5 + esInfoLen
+                        continue
+                    }
+                    info.language = esDescriptors.language
+                    subtitlePIDs[pid] = info
+                }
             default:
                 break
             }
 
             off += 5 + esInfoLen
         }
+    }
+
+    /// Fields we extract from an elementary stream's descriptor loop.
+    private struct ESDescriptorInfo {
+        var language: String?
+        var privateKind: PrivateStreamKind?
+    }
+
+    private enum PrivateStreamKind {
+        case dvbSubtitle
+        case teletext
+        case ac3
+    }
+
+    /// Walk the descriptor loop that follows every ES entry in the PMT.
+    /// Recognises:
+    ///   - ISO 639 language descriptor (tag 0x0A) — 3-byte ISO code per entry.
+    ///   - DVB subtitle descriptor (tag 0x59) — marks subtitle streams.
+    ///   - Teletext descriptor (tag 0x56) — marks teletext streams.
+    ///   - AC-3 descriptor (tag 0x6A) — present on DVB private-stream AC-3.
+    private static func parseESDescriptors(_ data: Data, from start: Int, end: Int) -> ESDescriptorInfo {
+        var info = ESDescriptorInfo()
+        guard start < end, end <= data.count else { return info }
+        var off = start
+        while off + 2 <= end {
+            let tag = data[data.startIndex + off]
+            let length = Int(data[data.startIndex + off + 1])
+            let valueStart = off + 2
+            let valueEnd = valueStart + length
+            guard valueEnd <= end else { break }
+
+            switch tag {
+            case 0x0A: // ISO 639 language descriptor — first 3 bytes are the language code.
+                if length >= 3 {
+                    let bytes = data[data.startIndex + valueStart ..< data.startIndex + valueStart + 3]
+                    if let lang = String(data: bytes, encoding: .ascii)?
+                        .lowercased()
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       lang.count == 3 {
+                        info.language = lang
+                    }
+                }
+            case 0x56: // Teletext descriptor
+                info.privateKind = .teletext
+                // First 3 bytes of each 5-byte entry are a language code.
+                if length >= 3, info.language == nil {
+                    let bytes = data[data.startIndex + valueStart ..< data.startIndex + valueStart + 3]
+                    info.language = String(data: bytes, encoding: .ascii)?.lowercased()
+                }
+            case 0x59: // DVB subtitling descriptor
+                info.privateKind = .dvbSubtitle
+                if length >= 3, info.language == nil {
+                    let bytes = data[data.startIndex + valueStart ..< data.startIndex + valueStart + 3]
+                    info.language = String(data: bytes, encoding: .ascii)?.lowercased()
+                }
+            case 0x6A: // DVB AC-3 descriptor
+                info.privateKind = .ac3
+            default:
+                break
+            }
+
+            off = valueEnd
+        }
+        return info
     }
 
     /// Skip the PES header when a packet's payload begins with 0x000001 start code.

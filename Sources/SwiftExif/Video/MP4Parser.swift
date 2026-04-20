@@ -292,6 +292,57 @@ public struct MP4Parser: Sendable {
             if metadata.audioCodec == nil { metadata.audioCodec = stream.codec }
             if metadata.audioSampleRate == nil { metadata.audioSampleRate = stream.sampleRate }
             if metadata.audioChannels == nil { metadata.audioChannels = stream.channels }
+        } else if isSubtitleHandler(handlerType), let stsdBox {
+            var stream = SubtitleStream(index: metadata.subtitleStreams.count)
+            stream.duration = trackDuration
+            stream.language = language
+            parseSubtitleSampleEntry(stsdBox.data, handlerType: handlerType, into: &stream)
+            metadata.subtitleStreams.append(stream)
+        }
+    }
+
+    /// ISOBMFF handler types that advertise subtitle / timed-text / closed-
+    /// caption content:
+    ///   "subt" — generic subtitle (WebVTT / TTML / 3GPP timed text)
+    ///   "text" — QuickTime text track
+    ///   "sbtl" — subtitles (also produced by older Apple tools)
+    ///   "clcp" — closed captions
+    private static func isSubtitleHandler(_ type: String) -> Bool {
+        type == "subt" || type == "text" || type == "sbtl" || type == "clcp"
+    }
+
+    /// Inspect the first SampleEntry in `stsd` to capture the subtitle codec
+    /// FourCC (tx3g / wvtt / stpp / c608 / c708 / text / …).
+    private static func parseSubtitleSampleEntry(
+        _ stsdData: Data,
+        handlerType: String,
+        into stream: inout SubtitleStream
+    ) {
+        guard stsdData.count >= 16 else { return }
+        var reader = BinaryReader(data: stsdData)
+        _ = try? reader.readBytes(4) // FullBox header
+        _ = try? reader.readUInt32BigEndian() // entry_count
+        guard reader.remainingCount >= 8 else { return }
+        _ = try? reader.readUInt32BigEndian() // entry_size
+        guard let codecBytes = try? reader.readBytes(4),
+              let codec = String(data: codecBytes, encoding: .ascii) else { return }
+
+        stream.codec = codec
+        stream.codecName = subtitleLongName(forFourCC: codec, handler: handlerType) ?? codec
+    }
+
+    private static func subtitleLongName(forFourCC fourCC: String, handler: String) -> String? {
+        switch fourCC {
+        case "tx3g": return "3GPP Timed Text"
+        case "wvtt": return "WebVTT"
+        case "stpp": return "TTML"
+        case "text": return "QuickTime Text"
+        case "c608": return "CEA-608 Closed Captions"
+        case "c708": return "CEA-708 Closed Captions"
+        default:
+            if handler == "clcp" { return "Closed Captions" }
+            if handler == "subt" { return "Subtitles" }
+            return nil
         }
     }
 

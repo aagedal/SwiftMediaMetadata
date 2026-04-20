@@ -298,6 +298,10 @@ public struct MatroskaReader: Sendable {
         var codecID: String?
         var defaultDurationNs: UInt64 = 0
         var language: String?
+        var trackName: String?
+        var flagDefault: Bool?
+        var flagForced: Bool?
+        var flagHearingImpaired: Bool?
         var videoBlockStart: Int?
         var videoBlockEnd: Int?
         var audioBlockStart: Int?
@@ -323,6 +327,14 @@ public struct MatroskaReader: Sendable {
                 }
             case 0x22B59C: // Language (ASCII)
                 language = readStringPayload(data, offset: vStart, size: vSize)
+            case 0x536E: // Name (UTF-8)
+                trackName = readStringPayload(data, offset: vStart, size: vSize)
+            case 0x88: // FlagDefault
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) { flagDefault = v != 0 }
+            case 0x55AA: // FlagForced
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) { flagForced = v != 0 }
+            case 0x55AB: // FlagHearingImpaired (Matroska v4)
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) { flagHearingImpaired = v != 0 }
             case 0xE0: // Video (master)
                 videoBlockStart = vStart
                 videoBlockEnd = vStart + vSize
@@ -361,8 +373,37 @@ public struct MatroskaReader: Sendable {
             }
             metadata.audioStreams.append(stream)
 
+        case 0x11: // Subtitle (Matroska TrackType value 17)
+            var stream = SubtitleStream(index: metadata.subtitleStreams.count)
+            stream.codec = codecID
+            stream.codecName = subtitleLongNameMatroska(codecID)
+            stream.language = language
+            stream.title = trackName
+            stream.isDefault = flagDefault
+            stream.isForced = flagForced
+            stream.isHearingImpaired = flagHearingImpaired
+            metadata.subtitleStreams.append(stream)
+
         default:
             break
+        }
+    }
+
+    private static func subtitleLongNameMatroska(_ id: String?) -> String? {
+        guard let id else { return nil }
+        switch id {
+        case "S_TEXT/UTF8": return "SubRip (SRT)"
+        case "S_TEXT/ASCII": return "Plain text"
+        case "S_TEXT/SSA": return "SSA"
+        case "S_TEXT/ASS": return "ASS"
+        case "S_TEXT/USF": return "Universal Subtitle Format"
+        case "S_TEXT/WEBVTT": return "WebVTT"
+        case "S_VOBSUB": return "VobSub"
+        case "S_HDMV/PGS": return "PGS (Blu-ray)"
+        case "S_HDMV/TEXTST": return "HDMV Text Subtitles"
+        case "S_KATE": return "Kate"
+        case "S_IMAGE/BMP": return "Image Subtitles (BMP)"
+        default: return id
         }
     }
 

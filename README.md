@@ -14,12 +14,12 @@ A native Swift library for reading and writing image and video metadata — Exif
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
 | WebP | Yes | Yes | Exif, XMP, ICC |
-| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, fps, field order, bit depth, chroma subsampling, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) |
+| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, fps, field order, bit depth, chroma subsampling, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language |
 | MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
-| Matroska (.mkv) | Yes | — | Stream info (codec, fps, dimensions, bit depth, chroma, color), audio tracks |
-| WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) |
+| Matroska (.mkv) | Yes | — | Stream info (codec, fps, dimensions, bit depth, chroma, color), audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
+| WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) + subtitle tracks |
 | AVI (RIFF) | Yes | — | Stream info (codec, fps, dimensions, bit depth) + audio (codec, sample rate, channels), INFO tags |
-| MPEG-PS / MPEG-TS / M2TS | Yes | — | Sequence-header stream facts (resolution, fps, aspect, bit rate), PMT elementary-stream inventory; M2TS (Blu-ray BDAV, 192-byte packets) auto-detected |
+| MPEG-PS / MPEG-TS / M2TS | Yes | — | Sequence-header stream facts (resolution, fps, aspect, bit rate), PMT elementary-stream inventory (DVB subtitles / teletext / PGS with language), M2TS (Blu-ray BDAV, 192-byte packets) auto-detected |
 | MP3 (ID3v1 / ID3v2) | Yes | Yes | Tags + codec, sample rate, channels, bit rate, duration |
 | FLAC | Yes | Yes | Tags + sample rate, channels, bit depth, duration |
 | M4A | Yes | Yes | Tags + codec, sample rate, channels, bit depth, channel layout, bit rate, duration |
@@ -153,6 +153,11 @@ print(video.audioStreams.first?.channelLayout) // "5.1"
 // Per-track details for multi-track files
 for stream in video.videoStreams { … }
 for stream in video.audioStreams { … }
+
+// Subtitle / closed-caption tracks with language + flags
+for sub in video.subtitleStreams {
+    print(sub.codecName, sub.language, sub.title, sub.isForced, sub.isHearingImpaired)
+}
 
 // Export as JSON
 let json = VideoMetadataExporter.toJSONString(video)
