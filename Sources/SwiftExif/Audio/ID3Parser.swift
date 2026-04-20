@@ -6,10 +6,17 @@ public struct ID3Parser: Sendable {
     /// Parse an MP3 file and extract metadata from ID3 tags.
     public static func parse(_ data: Data) throws -> AudioMetadata {
         var metadata = AudioMetadata(format: .mp3)
+        metadata.codec = "mp3"
+        metadata.codecName = "MP3"
 
         // Try ID3v2 first
+        var firstFrameOffset = 0
         if data.count >= 10 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33 {
             try parseID3v2(data, into: &metadata)
+            // ID3v2 header size is syncsafe in bytes 6..9; the MPEG audio frame
+            // starts right after the tag.
+            let tagSize = decodeSyncsafe(data[6], data[7], data[8], data[9])
+            firstFrameOffset = min(10 + tagSize, data.count)
         }
 
         // Fallback/supplement with ID3v1
@@ -17,7 +24,127 @@ public struct ID3Parser: Sendable {
             parseID3v1(data, into: &metadata)
         }
 
+        // Audio-frame derived facts: sample rate, channels, bitrate, duration.
+        parseFirstAudioFrame(data, from: firstFrameOffset, into: &metadata)
+
         return metadata
+    }
+
+    // MARK: - MPEG audio frame header
+
+    /// Walk forward from `offset` looking for a valid MPEG audio frame sync
+    /// word (FFF…). Decode the first frame we find to extract stream-level
+    /// facts. The cost is bounded — we search a small window.
+    private static let frameScanWindow = 64 * 1024
+
+    private static func parseFirstAudioFrame(_ data: Data, from offset: Int, into metadata: inout AudioMetadata) {
+        let end = min(data.count - 4, offset + frameScanWindow)
+        guard offset >= 0, offset < end else { return }
+
+        var i = offset
+        while i < end {
+            let b0 = data[data.startIndex + i]
+            let b1 = data[data.startIndex + i + 1]
+            if b0 == 0xFF && (b1 & 0xE0) == 0xE0 {
+                let b2 = data[data.startIndex + i + 2]
+                let b3 = data[data.startIndex + i + 3]
+                if let info = decodeMPEGFrameHeader(b0, b1, b2, b3) {
+                    metadata.sampleRate = info.sampleRate
+                    metadata.channels = info.channels
+                    metadata.bitrate = info.bitrate
+                    switch info.layer {
+                    case 1: metadata.codecName = "MPEG Layer I"
+                    case 2: metadata.codecName = "MP2"
+                    case 3: metadata.codecName = "MP3"
+                    default: break
+                    }
+                    // Approximate duration from (file_size - offset) / (bitrate/8).
+                    // Accurate VBR files populate this via the Xing/Info frame,
+                    // which is out of scope here.
+                    if info.bitrate > 0 {
+                        let audioBytes = Double(data.count - i)
+                        metadata.duration = audioBytes / (Double(info.bitrate) / 8)
+                    }
+                    return
+                }
+            }
+            i += 1
+        }
+    }
+
+    private struct MPEGFrameInfo {
+        let layer: Int       // 1, 2, 3
+        let bitrate: Int     // bps
+        let sampleRate: Int  // Hz
+        let channels: Int
+    }
+
+    private static let bitrateTable: [[[Int]]] = [
+        // [version_index][layer_index][bitrate_index] → kbps
+        // version: 0=MPEG-1, 1=MPEG-2/2.5
+        // layer:   0=Layer I, 1=Layer II, 2=Layer III
+        // Entries below are kbps; 0 means "free" (not supported here), -1 means reserved.
+        [ // MPEG-1
+            [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, -1],
+            [0, 32, 48, 56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 384, -1],
+            [0, 32, 40, 48,  56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, -1],
+        ],
+        [ // MPEG-2 / MPEG-2.5
+            [0, 32, 48, 56,  64,  80,  96, 112, 128, 144, 160, 176, 192, 224, 256, -1],
+            [0,  8, 16, 24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, -1],
+            [0,  8, 16, 24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, -1],
+        ],
+    ]
+
+    /// MPEG audio frame header (4 bytes):
+    ///   b0         sync byte (0xFF)
+    ///   b1[7..5]   sync (111)
+    ///   b1[4..3]   version (00=MPEG-2.5, 10=MPEG-2, 11=MPEG-1)
+    ///   b1[2..1]   layer   (01=III, 10=II, 11=I)
+    ///   b1[0]      protection
+    ///   b2[7..4]   bitrate index
+    ///   b2[3..2]   sampling frequency index
+    ///   b2[1]      padding
+    ///   b3[7..6]   channel mode (00=stereo,01=joint,10=dual,11=mono)
+    private static func decodeMPEGFrameHeader(_ b0: UInt8, _ b1: UInt8, _ b2: UInt8, _ b3: UInt8) -> MPEGFrameInfo? {
+        let versionBits = (b1 >> 3) & 0x03
+        let layerBits = (b1 >> 1) & 0x03
+        let bitrateIdx = Int((b2 >> 4) & 0x0F)
+        let freqIdx = Int((b2 >> 2) & 0x03)
+        let channelMode = (b3 >> 6) & 0x03
+
+        guard versionBits != 0x01 else { return nil } // reserved
+        guard layerBits != 0x00 else { return nil }   // reserved
+        guard bitrateIdx > 0, bitrateIdx < 15 else { return nil }
+        guard freqIdx != 3 else { return nil }
+
+        let versionIndex = versionBits == 0x03 ? 0 : 1 // MPEG-1 vs MPEG-2/2.5
+        let layer: Int
+        let layerIndex: Int
+        switch layerBits {
+        case 0x03: layer = 1; layerIndex = 0
+        case 0x02: layer = 2; layerIndex = 1
+        case 0x01: layer = 3; layerIndex = 2
+        default: return nil
+        }
+
+        let kbps = bitrateTable[versionIndex][layerIndex][bitrateIdx]
+        guard kbps > 0 else { return nil }
+
+        // Sample rate tables (Hz).
+        let mpeg1Rates = [44100, 48000, 32000]
+        let mpeg2Rates = [22050, 24000, 16000]
+        let mpeg25Rates = [11025, 12000, 8000]
+        let sampleRate: Int
+        switch versionBits {
+        case 0x03: sampleRate = mpeg1Rates[freqIdx]
+        case 0x02: sampleRate = mpeg2Rates[freqIdx]
+        case 0x00: sampleRate = mpeg25Rates[freqIdx]
+        default: return nil
+        }
+
+        let channels = channelMode == 0x03 ? 1 : 2
+        return MPEGFrameInfo(layer: layer, bitrate: kbps * 1000, sampleRate: sampleRate, channels: channels)
     }
 
     // MARK: - ID3v2

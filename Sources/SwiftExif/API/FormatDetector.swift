@@ -266,6 +266,25 @@ public struct FormatDetector: Sendable {
             return .mxf
         }
 
+        // Matroska / WebM: EBML header 1A 45 DF A3 + DocType "matroska" or "webm".
+        if MatroskaReader.isMatroska(data) {
+            if let doctypeRange = data.range(of: Data("webm".utf8), in: 0..<min(data.count, 64)) {
+                _ = doctypeRange
+                return .webm
+            }
+            return .mkv
+        }
+
+        // AVI: RIFF … AVI
+        if AVIReader.isAVI(data) {
+            return .avi
+        }
+
+        // MPEG PS/TS
+        if MPEGReader.isMPEG(data) {
+            return .mpg
+        }
+
         let bytes = [UInt8](data.prefix(12))
 
         // ISOBMFF: check for ftyp box at offset 4
@@ -294,6 +313,10 @@ public struct FormatDetector: Sendable {
         case "mov":  return .mov
         case "m4v":  return .m4v
         case "mxf":  return .mxf
+        case "mkv":  return .mkv
+        case "webm": return .webm
+        case "avi":  return .avi
+        case "mpg", "mpeg", "vob", "ts", "m2ts", "mts": return .mpg
         default:     return nil
         }
     }
@@ -320,6 +343,14 @@ public struct FormatDetector: Sendable {
             return .flac
         }
 
+        // Ogg container — inspect the first page to pick Opus vs Vorbis.
+        // Any codec we can't identify is rejected here (Theora, Speex, FLAC-
+        // in-Ogg, chained streams …) so the caller can fall through to the
+        // extension probe or surface an unsupported-format error.
+        if bytes[0] == 0x4F && bytes[1] == 0x67 && bytes[2] == 0x67 && bytes[3] == 0x53 {
+            if let codec = OggReader.detectOggCodec(data) { return codec }
+        }
+
         // M4A: ISOBMFF with "M4A " brand (check via existing infrastructure)
         if data.count >= 12 {
             let b = [UInt8](data.prefix(12))
@@ -339,6 +370,8 @@ public struct FormatDetector: Sendable {
         case "mp3": return .mp3
         case "flac": return .flac
         case "m4a": return .m4a
+        case "opus": return .opus
+        case "ogg", "oga": return .oggVorbis
         default: return nil
         }
     }

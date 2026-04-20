@@ -1,16 +1,44 @@
 import Foundation
 
-/// Metadata for MP4/MOV/M4V video files. Supports both reading and writing.
+/// Metadata for video container files (MP4, MOV, M4V, MXF, MKV, WebM, AVI, MPEG-PS/TS).
+/// Reading is supported for all container formats; writing is currently only supported
+/// for MP4/MOV/M4V (see `writeToData()` for details).
 public struct VideoMetadata: Sendable {
     public var format: VideoFormat
     public var duration: TimeInterval?
     public var creationDate: Date?
     public var modificationDate: Date?
+    /// Primary video stream width (in pixels). Populated from the first video track.
     public var videoWidth: Int?
+    /// Primary video stream height (in pixels). Populated from the first video track.
     public var videoHeight: Int?
     public var videoCodec: String?
     public var audioCodec: String?
     public var frameRate: Double?
+    /// Scan type of the primary video stream.
+    public var fieldOrder: VideoFieldOrder?
+    /// Color-space metadata for the primary video stream.
+    public var colorInfo: VideoColorInfo?
+    /// Bit depth per color component of the primary video stream.
+    public var bitDepth: Int?
+    /// Chroma subsampling notation for the primary video stream (e.g. "4:2:0").
+    public var chromaSubsampling: String?
+    /// Pixel aspect ratio of the primary video stream, expressed as (horizontal, vertical).
+    public var pixelAspectRatio: (Int, Int)?
+    /// Display width of the primary video stream (PAR-adjusted) if advertised by the container.
+    public var displayWidth: Int?
+    /// Display height of the primary video stream (PAR-adjusted) if advertised by the container.
+    public var displayHeight: Int?
+    /// Sample rate (Hz) of the primary audio stream.
+    public var audioSampleRate: Int?
+    /// Channel count of the primary audio stream.
+    public var audioChannels: Int?
+    /// Per-track video streams (for multi-track files).
+    public var videoStreams: [VideoStream]
+    /// Per-track audio streams (for multi-track files).
+    public var audioStreams: [AudioStream]
+    /// Overall container bit rate in bits/second, when the container advertises one.
+    public var bitRate: Int?
     public var title: String?
     public var artist: String?
     public var comment: String?
@@ -30,6 +58,8 @@ public struct VideoMetadata: Sendable {
     public init(format: VideoFormat) {
         self.format = format
         self.warnings = []
+        self.videoStreams = []
+        self.audioStreams = []
     }
 
     // MARK: - Reading
@@ -72,17 +102,34 @@ public struct VideoMetadata: Sendable {
         if MXFReader.isMXF(data) {
             return try MXFReader.parse(data)
         }
+        if MatroskaReader.isMatroska(data) {
+            return try MatroskaReader.parse(data)
+        }
+        if AVIReader.isAVI(data) {
+            return try AVIReader.parse(data)
+        }
+        if MPEGReader.isMPEG(data) {
+            return try MPEGReader.parse(data)
+        }
         return try MP4Parser.parse(data)
     }
 
     // MARK: - Writing
 
     /// Write updated metadata back to a new Data blob.
+    ///
+    /// Writing is only supported for ISOBMFF containers (MP4/MOV/M4V); all other
+    /// formats throw `MetadataError.writeNotSupported`.
     public func writeToData() throws -> Data {
         guard let original = originalData else {
             throw MetadataError.writeNotSupported("No original video data available for writing")
         }
-        return try MP4Writer.write(self, to: original)
+        switch format {
+        case .mp4, .mov, .m4v:
+            return try MP4Writer.write(self, to: original)
+        case .mxf, .mkv, .webm, .avi, .mpg:
+            throw MetadataError.writeNotSupported("Writing is not supported for \(format.rawValue.uppercased()) containers")
+        }
     }
 
     /// Write updated metadata to a file URL.

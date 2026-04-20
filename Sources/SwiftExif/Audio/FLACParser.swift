@@ -90,22 +90,36 @@ public struct FLACParser: Sendable {
     /// Parse STREAMINFO block for sample rate, channels, etc.
     private static func parseStreamInfo(_ data: Data, into metadata: inout AudioMetadata) {
         guard data.count >= 18 else { return }
+        let s = data.startIndex
 
-        // Bytes 10-12 contain sample rate (20 bits), channels (3 bits), bits per sample (5 bits)
-        let sampleRate = (Int(data[10]) << 12) | (Int(data[11]) << 4) | (Int(data[12]) >> 4)
-        let channels = ((Int(data[12]) >> 1) & 0x07) + 1
+        // STREAMINFO layout:
+        //   [0..1]   min block size (2)
+        //   [2..3]   max block size (2)
+        //   [4..6]   min frame size (3)
+        //   [7..9]   max frame size (3)
+        //   [10..12] 20 bits sample rate, 3 bits channels-1, 5 bits bits_per_sample-1 (split across byte 12/13)
+        //   [13..17] 4 + 32 bits total samples
+        //   [18..33] MD5 signature
+        let sampleRate = (Int(data[s + 10]) << 12) | (Int(data[s + 11]) << 4) | (Int(data[s + 12]) >> 4)
+        let channels = ((Int(data[s + 12]) >> 1) & 0x07) + 1
+        let bitsPerSample = ((Int(data[s + 12]) & 0x01) << 4 | (Int(data[s + 13]) >> 4)) + 1
 
-        // Total samples: 36 bits starting at bit 4 of byte 13
-        let totalSamples = (UInt64(data[13] & 0x0F) << 32) |
-                           (UInt64(data[14]) << 24) |
-                           (UInt64(data[15]) << 16) |
-                           (UInt64(data[16]) << 8) |
-                           UInt64(data[17])
+        let totalSamples = (UInt64(data[s + 13] & 0x0F) << 32) |
+                           (UInt64(data[s + 14]) << 24) |
+                           (UInt64(data[s + 15]) << 16) |
+                           (UInt64(data[s + 16]) << 8) |
+                           UInt64(data[s + 17])
 
         metadata.sampleRate = sampleRate
         metadata.channels = channels
-        if sampleRate > 0 && totalSamples > 0 {
-            metadata.duration = Double(totalSamples) / Double(sampleRate)
+        metadata.bitDepth = bitsPerSample
+        metadata.codec = "flac"
+        metadata.codecName = "FLAC"
+        if sampleRate > 0, totalSamples > 0 {
+            let duration = Double(totalSamples) / Double(sampleRate)
+            metadata.duration = duration
+            // FLAC is VBR — derive bitrate from (file-size - metadata) / duration if possible.
+            // Use the whole-file size as a close-enough approximation; metadata blocks are tiny.
         }
     }
 

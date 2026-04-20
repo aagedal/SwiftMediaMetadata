@@ -6,4 +6,8 @@ public enum VideoFormat: String, Sendable, Equatable {
     case mov
     case m4v
     case mxf
+    case mkv
+    case webm
+    case avi
+    case mpg
 }

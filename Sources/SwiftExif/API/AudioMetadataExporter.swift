@@ -20,6 +20,10 @@ public struct AudioMetadataExporter: Sendable {
         if let v = metadata.bitrate { dict["Bitrate"] = v }
         if let v = metadata.sampleRate { dict["SampleRate"] = v }
         if let v = metadata.channels { dict["Channels"] = v }
+        if let v = metadata.bitDepth { dict["BitDepth"] = v }
+        if let v = metadata.codec { dict["Codec"] = v }
+        if let v = metadata.codecName { dict["CodecName"] = v }
+        if let v = metadata.channelLayout { dict["ChannelLayout"] = v }
         if let v = metadata.albumArtist { dict["AlbumArtist"] = v }
         if let v = metadata.composer { dict["Composer"] = v }
         if metadata.coverArt != nil { dict["CoverArt"] = "(binary data)" }

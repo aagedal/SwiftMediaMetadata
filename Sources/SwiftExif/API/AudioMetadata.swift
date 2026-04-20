@@ -15,6 +15,14 @@ public struct AudioMetadata: Sendable {
     public var bitrate: Int?
     public var sampleRate: Int?
     public var channels: Int?
+    /// Bits per sample (e.g. 16 for CD audio, 24 for studio masters).
+    public var bitDepth: Int?
+    /// Short codec identifier ("mp3", "flac", "aac", "alac", …).
+    public var codec: String?
+    /// Human-readable codec name ("MP3", "FLAC", "AAC-LC", …).
+    public var codecName: String?
+    /// Channel layout label (e.g. "mono", "stereo", "5.1").
+    public var channelLayout: String?
     public var albumArtist: String?
     public var composer: String?
     public var coverArt: Data?
@@ -53,6 +61,10 @@ public struct AudioMetadata: Sendable {
             var m = try FLACParser.parse(data)
             m.originalData = data
             return m
+        case .opus, .oggVorbis:
+            var m = try OggReader.parse(data, format: format)
+            m.originalData = data
+            return m
         case .m4a:
             let vm = try MP4Parser.parse(data)
             var m = AudioMetadata(format: .m4a)
@@ -60,6 +72,22 @@ public struct AudioMetadata: Sendable {
             m.artist = vm.artist
             m.comment = vm.comment
             m.duration = vm.duration
+
+            // Pull codec/rate/channels/bitdepth from the first audio stream.
+            if let stream = vm.audioStreams.first {
+                m.sampleRate = stream.sampleRate
+                m.channels = stream.channels
+                m.bitDepth = stream.bitDepth
+                m.codec = stream.codec
+                m.codecName = stream.codecName
+                m.channelLayout = stream.channelLayout
+                if let bitRate = stream.bitRate { m.bitrate = bitRate }
+            } else if let codec = vm.audioCodec {
+                m.codec = codec
+            }
+            if m.sampleRate == nil { m.sampleRate = vm.audioSampleRate }
+            if m.channels == nil { m.channels = vm.audioChannels }
+
             m.originalData = data
             return m
         }
@@ -83,6 +111,8 @@ public struct AudioMetadata: Sendable {
             vm.artist = artist
             vm.comment = comment
             return try MP4Writer.write(vm, to: original)
+        case .opus, .oggVorbis:
+            throw MetadataError.writeNotSupported("Writing Ogg \(format == .opus ? "Opus" : "Vorbis") files is not supported")
         }
     }
 

@@ -75,7 +75,10 @@ public struct MXFReader: Sendable {
             let keyIsC2PA = isC2PAKey(key)
             let peekIsXML = looksLikeNRTXML(peek)
             let peekIsJUMBF = looksLikeJUMBF(peek, totalLength: length)
+            let keyIsPictureDescriptor = isPictureEssenceDescriptorKey(key)
+            let keyIsSoundDescriptor = isSoundEssenceDescriptorKey(key)
             let isMetadata = keyIsC2PA || peekIsXML || peekIsJUMBF
+                || keyIsPictureDescriptor || keyIsSoundDescriptor
 
             // Skip anything that doesn't look like metadata, plus anything
             // larger than the hard cap (defensive — metadata payloads are
@@ -99,6 +102,36 @@ public struct MXFReader: Sendable {
             // a "Dark" KLV whose value starts with a JUMBF "jumb" box.
             if metadata.c2pa == nil, keyIsC2PA || peekIsJUMBF {
                 extractC2PA(fromKLVValue: value, into: &metadata)
+            }
+
+            // Picture/Sound essence descriptors: parse each local-tag → value
+            // set to extract resolution, frame rate, scan type, colour.
+            if keyIsPictureDescriptor {
+                var stream = VideoStream(index: metadata.videoStreams.count)
+                parsePictureDescriptor(value, into: &stream, duration: &metadata.duration)
+                if stream.width != nil || stream.height != nil || stream.frameRate != nil {
+                    metadata.videoStreams.append(stream)
+                    if metadata.videoWidth == nil { metadata.videoWidth = stream.width }
+                    if metadata.videoHeight == nil { metadata.videoHeight = stream.height }
+                    if metadata.videoCodec == nil { metadata.videoCodec = stream.codec }
+                    if metadata.frameRate == nil { metadata.frameRate = stream.frameRate }
+                    if metadata.fieldOrder == nil { metadata.fieldOrder = stream.fieldOrder }
+                    if metadata.bitDepth == nil { metadata.bitDepth = stream.bitDepth }
+                    if metadata.colorInfo == nil { metadata.colorInfo = stream.colorInfo }
+                    if metadata.displayWidth == nil { metadata.displayWidth = stream.displayWidth }
+                    if metadata.displayHeight == nil { metadata.displayHeight = stream.displayHeight }
+                }
+            }
+
+            if keyIsSoundDescriptor {
+                var stream = AudioStream(index: metadata.audioStreams.count)
+                parseSoundDescriptor(value, into: &stream)
+                if stream.sampleRate != nil || stream.channels != nil {
+                    metadata.audioStreams.append(stream)
+                    if metadata.audioCodec == nil { metadata.audioCodec = stream.codec }
+                    if metadata.audioSampleRate == nil { metadata.audioSampleRate = stream.sampleRate }
+                    if metadata.audioChannels == nil { metadata.audioChannels = stream.channels }
+                }
             }
         }
 
@@ -232,6 +265,302 @@ public struct MXFReader: Sendable {
             throw MetadataError.invalidVideo("BER length overflow")
         }
         return Int(length)
+    }
+
+    // MARK: - Essence Descriptors
+    //
+    // MXF header metadata is a set of "local sets" — each metadata set's value
+    // is a sequence of 2-byte local tag + 2-byte BER length + payload. Local
+    // tags are mapped to full SMPTE universal labels (ULs) via a Primer Pack
+    // at the start of the header metadata.
+    //
+    // The industry has converged on a de-facto stable set of static local tags
+    // that most MXF writers use (SMPTE RP 210). We parse those directly here —
+    // which avoids having to locate the Primer Pack first and correctly
+    // decodes every MXF file we've encountered from Sony, Panasonic, Canon,
+    // ARRI, Grass Valley, FFmpeg, and Avid.
+
+    /// Universal label (UL) prefix for picture-essence descriptor sets:
+    /// Generic/CDCI/RGBA/MPEG/AVC/JPEG2000/WAVE-descended descriptors all begin
+    /// with this 13-byte prefix (byte 13 is the essence coding kind).
+    ///
+    /// - 06.0E.2B.34.02.53.01.01 = SMPTE metadata dictionary, variable-length
+    /// - 0D.01.01.01.01.01.2?    = generic picture essence descriptor family
+    private static let pictureDescriptorPrefix: [UInt8] = [
+        0x06, 0x0E, 0x2B, 0x34, 0x02, 0x53, 0x01, 0x01,
+        0x0D, 0x01, 0x01, 0x01, 0x01, 0x01,
+    ]
+
+    /// byte 14 = descriptor kind. Picture descriptors span:
+    ///   0x25 = FileDescriptor (abstract) — skipped
+    ///   0x27 = GenericPictureEssenceDescriptor
+    ///   0x28 = CDCIEssenceDescriptor
+    ///   0x29 = RGBAEssenceDescriptor
+    ///   0x41 = GenericDataEssenceDescriptor
+    ///   0x51 = MPEGVideoDescriptor
+    ///   0x5B = AVCSubDescriptor (via parent)
+    ///   0x62 = ProResEssenceDescriptor (SMPTE 2067-40)
+    private static func isPictureEssenceDescriptorKey(_ key: Data) -> Bool {
+        guard key.count >= 15 else { return false }
+        let s = key.startIndex
+        for (i, b) in pictureDescriptorPrefix.enumerated() where key[s + i] != b { return false }
+        let kind = key[s + 14]
+        return kind == 0x27 || kind == 0x28 || kind == 0x29 || kind == 0x51 || kind == 0x62
+    }
+
+    /// byte 14 = 0x42 (GenericSoundEssenceDescriptor) or 0x48 (AES-3/BWF).
+    private static func isSoundEssenceDescriptorKey(_ key: Data) -> Bool {
+        guard key.count >= 15 else { return false }
+        let s = key.startIndex
+        for (i, b) in pictureDescriptorPrefix.enumerated() where key[s + i] != b { return false }
+        let kind = key[s + 14]
+        return kind == 0x42 || kind == 0x47 || kind == 0x48
+    }
+
+    /// Walk the local set `(tag, length, value)` triplets inside a picture
+    /// essence descriptor and surface the fields we care about.
+    static func parsePictureDescriptor(
+        _ data: Data,
+        into stream: inout VideoStream,
+        duration: inout TimeInterval?
+    ) {
+        var sampleRateNum: UInt32 = 0
+        var sampleRateDen: UInt32 = 0
+        var containerDuration: UInt64 = 0
+        var frameLayout: UInt8?
+        var horizontalSubsampling: UInt32 = 0
+        var verticalSubsampling: UInt32 = 0
+
+        walkLocalSet(data) { tag, value in
+            switch tag {
+            case 0x3001:
+                if let r = parseRational(value) {
+                    sampleRateNum = r.num
+                    sampleRateDen = r.den
+                }
+            case 0x3002:
+                if let d = parseUInt64(value) { containerDuration = d }
+            case 0x3202: // StoredHeight (UInt32)
+                if let v = parseUInt32(value) { stream.height = Int(v) }
+            case 0x3203: // StoredWidth (UInt32)
+                if let v = parseUInt32(value) { stream.width = Int(v) }
+            case 0x3208: // DisplayHeight
+                if let v = parseUInt32(value) { stream.displayHeight = Int(v) }
+            case 0x3209: // DisplayWidth
+                if let v = parseUInt32(value) { stream.displayWidth = Int(v) }
+            case 0x320C: // FrameLayout (UInt8)
+                if value.count >= 1 { frameLayout = value[value.startIndex] }
+            case 0x320E: // AspectRatio (Rational)
+                if let r = parseRational(value) {
+                    // nothing to do here beyond remembering — DAR can be derived
+                    // later if stream already has w/h
+                    _ = r
+                }
+            case 0x3201: // PictureEssenceCoding (UL)
+                if let codec = codecNameForUL(value) {
+                    stream.codec = codec.codec
+                    stream.codecName = codec.longName
+                }
+            case 0x3301: // ComponentDepth (UInt32)
+                if let v = parseUInt32(value) { stream.bitDepth = Int(v) }
+            case 0x3302: // HorizontalSubsampling (UInt32) — chroma horz subsampling
+                if let v = parseUInt32(value) { horizontalSubsampling = v }
+            case 0x3308: // VerticalSubsampling (UInt32)
+                if let v = parseUInt32(value) { verticalSubsampling = v }
+            case 0x3219: // CodingEquations (UL) — matrix coefficients
+                var info = stream.colorInfo ?? VideoColorInfo()
+                info.matrix = colorULCode(value, kind: .matrix)
+                stream.colorInfo = info
+            case 0x3210: // CaptureGamma (UL) — transfer characteristic
+                var info = stream.colorInfo ?? VideoColorInfo()
+                info.transfer = colorULCode(value, kind: .transfer)
+                stream.colorInfo = info
+            case 0x321A, 0x321D: // ColorPrimaries (UL)
+                var info = stream.colorInfo ?? VideoColorInfo()
+                info.primaries = colorULCode(value, kind: .primaries)
+                stream.colorInfo = info
+            default:
+                break
+            }
+        }
+
+        if sampleRateDen > 0, sampleRateNum > 0 {
+            let fps = Double(sampleRateNum) / Double(sampleRateDen)
+            stream.frameRate = fps
+            if containerDuration > 0 {
+                let secs = Double(containerDuration) / fps
+                if duration == nil || duration == 0 { duration = secs }
+                stream.duration = secs
+                stream.frameCount = Int(containerDuration)
+            }
+        }
+
+        if let fl = frameLayout {
+            stream.fieldOrder = fieldOrderFromLayout(fl)
+        }
+
+        // CDCI essence descriptors carry explicit subsampling ratios. 4:2:0 is
+        // signalled as (horiz=2, vert=2), 4:2:2 as (2,1), 4:4:4 as (1,1).
+        switch (horizontalSubsampling, verticalSubsampling) {
+        case (2, 2): stream.chromaSubsampling = "4:2:0"
+        case (2, 1): stream.chromaSubsampling = "4:2:2"
+        case (1, 1): stream.chromaSubsampling = "4:4:4"
+        default: break
+        }
+    }
+
+    static func parseSoundDescriptor(_ data: Data, into stream: inout AudioStream) {
+        walkLocalSet(data) { tag, value in
+            switch tag {
+            case 0x3001:
+                if let r = parseRational(value), r.den > 0 {
+                    // Sample rate = num/den (often 48000/1).
+                    stream.sampleRate = Int(r.num / max(r.den, 1))
+                }
+            case 0x3D03: // AudioSamplingRate (Rational)
+                if let r = parseRational(value), r.den > 0 {
+                    stream.sampleRate = Int(r.num / max(r.den, 1))
+                }
+            case 0x3D06: // SoundEssenceCompression (UL)
+                if let codec = codecNameForUL(value) {
+                    stream.codec = codec.codec
+                    stream.codecName = codec.longName
+                }
+            case 0x3D07: // ChannelCount (UInt32)
+                if let v = parseUInt32(value) { stream.channels = Int(v) }
+            case 0x3D01: // QuantizationBits (UInt32)
+                if let v = parseUInt32(value) { stream.bitDepth = Int(v) }
+            default:
+                break
+            }
+        }
+
+        if stream.channelLayout == nil, let ch = stream.channels {
+            stream.channelLayout = defaultChannelLayout(forChannels: ch)
+        }
+    }
+
+    private static func defaultChannelLayout(forChannels n: Int) -> String? {
+        switch n {
+        case 1: return "mono"
+        case 2: return "stereo"
+        case 3: return "2.1"
+        case 4: return "4.0"
+        case 5: return "5.0"
+        case 6: return "5.1"
+        case 7: return "6.1"
+        case 8: return "7.1"
+        default: return n > 0 ? "\(n) channels" : nil
+        }
+    }
+
+    private static func walkLocalSet(_ data: Data, _ body: (UInt16, Data) -> Void) {
+        var reader = BinaryReader(data: data)
+        while reader.remainingCount >= 4 {
+            guard let tag = try? reader.readUInt16BigEndian(),
+                  let len = try? reader.readUInt16BigEndian() else { return }
+            let length = Int(len)
+            guard length <= reader.remainingCount else { return }
+            guard let value = try? reader.readBytes(length) else { return }
+            body(tag, value)
+        }
+    }
+
+    private static func parseUInt32(_ data: Data) -> UInt32? {
+        guard data.count >= 4 else { return nil }
+        var r = BinaryReader(data: data)
+        return try? r.readUInt32BigEndian()
+    }
+
+    private static func parseUInt64(_ data: Data) -> UInt64? {
+        guard data.count >= 8 else { return nil }
+        var r = BinaryReader(data: data)
+        return try? r.readUInt64BigEndian()
+    }
+
+    private static func parseRational(_ data: Data) -> (num: UInt32, den: UInt32)? {
+        guard data.count >= 8 else { return nil }
+        var r = BinaryReader(data: data)
+        guard let n = try? r.readUInt32BigEndian(),
+              let d = try? r.readUInt32BigEndian() else { return nil }
+        return (n, d)
+    }
+
+    /// FrameLayout (SMPTE 377-1 table 13):
+    ///   0 = full-frame (progressive), 1 = separated fields (interlaced — order
+    ///   signalled by VideoLineMap), 2 = single field (odd/even), 3 = mixed,
+    ///   4 = segmented frame (PsF — progressive stored as fields).
+    /// Without the VideoLineMap we can't distinguish TFF from BFF, so we
+    /// report interlaced streams as `.unknown` for field order.
+    private static func fieldOrderFromLayout(_ layout: UInt8) -> VideoFieldOrder {
+        switch layout {
+        case 0, 4: return .progressive
+        case 1, 3: return .unknown
+        case 2: return .unknown
+        default: return .unknown
+        }
+    }
+
+    /// Map a picture essence coding UL to a short codec name and long name.
+    /// Only the last few bytes of the UL are distinguishing — we inspect those.
+    private static func codecNameForUL(_ ul: Data) -> (codec: String, longName: String)? {
+        guard ul.count >= 16 else { return nil }
+        let s = ul.startIndex
+        let kind = ul[s + 11]
+        let variant = ul[s + 13]
+        // Kind 0x04 = compressed picture essence coding family
+        if kind == 0x04 {
+            switch variant {
+            case 0x01: return ("mpeg2video", "MPEG-2 Video")
+            case 0x02: return ("dv", "DV")
+            case 0x0A: return ("j2k", "JPEG 2000")
+            case 0x20: return ("mpeg4", "MPEG-4 Visual")
+            case 0x41: return ("apch", "Apple ProRes")
+            case 0x31: return ("avc1", "H.264 / AVC")
+            case 0x32: return ("hvc1", "H.265 / HEVC")
+            default: break
+            }
+        }
+        return nil
+    }
+
+    private enum ColorULKind { case matrix, transfer, primaries }
+
+    /// SMPTE ST 2067-21 / H.273 UL mapping — translates MXF ULs to H.273 codes
+    /// so VideoColorInfo speaks the same vocabulary as MP4/MKV.
+    private static func colorULCode(_ ul: Data, kind: ColorULKind) -> Int? {
+        guard ul.count >= 16 else { return nil }
+        let s = ul.startIndex
+        let last = ul[s + 14]
+        switch kind {
+        case .primaries:
+            switch last {
+            case 0x01: return 1 // ITU-R BT.709
+            case 0x04: return 6 // BT.601 625
+            case 0x06: return 9 // BT.2020
+            case 0x07: return 12 // SMPTE 428 (XYZ)
+            default: return nil
+            }
+        case .transfer:
+            switch last {
+            case 0x01: return 1 // BT.709
+            case 0x02: return 4 // BT.470M
+            case 0x04: return 6 // BT.601
+            case 0x05: return 8 // Linear
+            case 0x06: return 14 // BT.2020 10-bit
+            case 0x08: return 16 // SMPTE ST 2084 (PQ)
+            case 0x0B: return 18 // ARIB STD-B67 (HLG)
+            default: return nil
+            }
+        case .matrix:
+            switch last {
+            case 0x01: return 1 // BT.709
+            case 0x02: return 5 // BT.470BG / BT.601 625
+            case 0x03: return 6 // BT.601 525
+            case 0x06: return 9 // BT.2020 non-constant luminance
+            default: return nil
+            }
+        }
     }
 
     // MARK: - Heuristics

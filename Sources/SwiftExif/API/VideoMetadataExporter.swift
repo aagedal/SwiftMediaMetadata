@@ -27,6 +27,33 @@ public struct VideoMetadataExporter: Sendable {
         if let c = metadata.videoCodec { dict["VideoCodec"] = c }
         if let c = metadata.audioCodec { dict["AudioCodec"] = c }
         if let r = metadata.frameRate { dict["FrameRate"] = r }
+        if let f = metadata.fieldOrder { dict["FieldOrder"] = f.rawValue }
+        if let depth = metadata.bitDepth { dict["BitDepth"] = depth }
+        if let chroma = metadata.chromaSubsampling { dict["ChromaSubsampling"] = chroma }
+        if let par = metadata.pixelAspectRatio {
+            dict["PixelAspectRatio"] = "\(par.0):\(par.1)"
+        }
+        if let dw = metadata.displayWidth { dict["DisplayWidth"] = dw }
+        if let dh = metadata.displayHeight { dict["DisplayHeight"] = dh }
+        if let sr = metadata.audioSampleRate { dict["AudioSampleRate"] = sr }
+        if let ch = metadata.audioChannels { dict["AudioChannels"] = ch }
+        if let layout = metadata.audioStreams.first?.channelLayout { dict["AudioChannelLayout"] = layout }
+        if let audioBR = metadata.audioStreams.first?.bitRate { dict["AudioBitRate"] = audioBR }
+        if let videoBR = metadata.videoStreams.first?.bitRate { dict["VideoBitRate"] = videoBR }
+        if let br = metadata.bitRate { dict["BitRate"] = br }
+        if let color = metadata.colorInfo {
+            if let p = color.primaries { dict["ColorPrimaries"] = p }
+            if let t = color.transfer { dict["TransferCharacteristics"] = t }
+            if let m = color.matrix { dict["MatrixCoefficients"] = m }
+            if let full = color.fullRange { dict["ColorRange"] = full ? "full" : "limited" }
+            if let label = color.label { dict["ColorSpace"] = label }
+        }
+        if !metadata.videoStreams.isEmpty {
+            dict["VideoStreamCount"] = metadata.videoStreams.count
+        }
+        if !metadata.audioStreams.isEmpty {
+            dict["AudioStreamCount"] = metadata.audioStreams.count
+        }
         if let t = metadata.title { dict["Title"] = t }
         if let a = metadata.artist { dict["Artist"] = a }
         if let c = metadata.comment { dict["Comment"] = c }

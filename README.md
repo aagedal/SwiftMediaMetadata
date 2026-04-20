@@ -14,8 +14,17 @@ A native Swift library for reading and writing image and video metadata — Exif
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
 | WebP | Yes | Yes | Exif, XMP, ICC |
-| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata |
-| MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18) camera metadata |
+| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, fps, field order, bit depth, chroma subsampling, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) |
+| MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
+| Matroska (.mkv) | Yes | — | Stream info (codec, fps, dimensions, bit depth, chroma, color), audio tracks |
+| WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) |
+| AVI (RIFF) | Yes | — | Stream info (codec, fps, dimensions, bit depth) + audio (codec, sample rate, channels), INFO tags |
+| MPEG-PS / MPEG-TS / M2TS | Yes | — | Sequence-header stream facts (resolution, fps, aspect, bit rate), PMT elementary-stream inventory; M2TS (Blu-ray BDAV, 192-byte packets) auto-detected |
+| MP3 (ID3v1 / ID3v2) | Yes | Yes | Tags + codec, sample rate, channels, bit rate, duration |
+| FLAC | Yes | Yes | Tags + sample rate, channels, bit depth, duration |
+| M4A | Yes | Yes | Tags + codec, sample rate, channels, bit depth, channel layout, bit rate, duration |
+| Ogg Opus (.opus) | Yes | — | Vorbis comments + channels, sample rate, channel layout, duration |
+| Ogg Vorbis (.ogg / .oga) | Yes | — | Vorbis comments + channels, sample rate, bit rate, duration |
 | XMP sidecar (.xmp) | Yes | Yes | XMP |
 | Sony NRT sidecar (.XML) | Yes | — | Camera metadata auto-probed next to MP4/MXF |
 
@@ -112,20 +121,54 @@ metadata.syncXMPToIPTC()
 
 ### Video Metadata
 
-Read metadata from MP4, MOV, M4V, and MXF files:
+Read rich stream-level metadata from MP4, MOV, M4V, MXF, MKV, WebM, AVI, and
+MPEG-PS/TS files — enough to replace `ffprobe` in editorial/pipeline tooling:
 
 ```swift
 let video = try VideoMetadata.read(from: videoURL)
 
-print(video.duration)       // TimeInterval?
-print(video.creationDate)   // Date?
-print(video.videoWidth)     // Int?
-print(video.videoHeight)    // Int?
-print(video.videoCodec)     // String?
-print(video.gpsLatitude)    // Double?
+// Container-level facts
+print(video.format)          // .mp4, .mov, .m4v, .mxf, .mkv, .webm, .avi, .mpg
+print(video.duration)        // TimeInterval?
+print(video.bitRate)         // Int? — overall container bitrate in bps
+
+// Primary video stream
+print(video.videoWidth)      // 3840
+print(video.videoHeight)     // 2160
+print(video.videoCodec)      // "hvc1"
+print(video.frameRate)       // 59.94
+print(video.fieldOrder)      // .progressive / .topFieldFirst / .bottomFieldFirst
+print(video.bitDepth)        // 10
+print(video.chromaSubsampling) // "4:2:0"
+print(video.colorInfo?.label) // "bt2020-hlg" / "bt2020-pq" / "bt709" …
+print(video.pixelAspectRatio)   // (1, 1)
+print(video.displayWidth / displayHeight)
+
+// Primary audio stream
+print(video.audioCodec)      // "mp4a"
+print(video.audioSampleRate) // 48000
+print(video.audioChannels)   // 6
+print(video.audioStreams.first?.channelLayout) // "5.1"
+
+// Per-track details for multi-track files
+for stream in video.videoStreams { … }
+for stream in video.audioStreams { … }
 
 // Export as JSON
 let json = VideoMetadataExporter.toJSONString(video)
+```
+
+### Audio Metadata
+
+Standalone MP3, FLAC, M4A, Ogg Opus (.opus) and Ogg Vorbis (.ogg/.oga) files
+expose codec, sample rate, channel count, channel layout, bit depth, and bit
+rate alongside ID3/Vorbis tags:
+
+```swift
+let audio = try AudioMetadata.read(from: mp3URL)
+print(audio.codec, audio.codecName)  // "mp3", "MP3"
+print(audio.sampleRate, audio.channels, audio.bitrate, audio.bitDepth)
+print(audio.title, audio.artist, audio.album)
 ```
 
 #### Async video API
