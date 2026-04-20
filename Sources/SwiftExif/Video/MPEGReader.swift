@@ -221,6 +221,7 @@ public struct MPEGReader: Sendable {
             stream.codec = info.codec
             stream.codecName = info.codecName
             stream.language = info.language
+            stream.isHearingImpaired = info.isHearingImpaired
             metadata.subtitleStreams.append(stream)
         }
     }
@@ -235,6 +236,7 @@ public struct MPEGReader: Sendable {
         var displayWidth: Int?
         var displayHeight: Int?
         var language: String?
+        var isHearingImpaired: Bool?
         var sequenceHeaderParsed: Bool = false
     }
 
@@ -401,6 +403,9 @@ public struct MPEGReader: Sendable {
                         continue
                     }
                     info.language = esDescriptors.language
+                    if esDescriptors.isHearingImpaired == true {
+                        info.isHearingImpaired = true
+                    }
                     subtitlePIDs[pid] = info
                 }
             default:
@@ -415,6 +420,7 @@ public struct MPEGReader: Sendable {
     private struct ESDescriptorInfo {
         var language: String?
         var privateKind: PrivateStreamKind?
+        var isHearingImpaired: Bool?
     }
 
     private enum PrivateStreamKind {
@@ -426,8 +432,13 @@ public struct MPEGReader: Sendable {
     /// Walk the descriptor loop that follows every ES entry in the PMT.
     /// Recognises:
     ///   - ISO 639 language descriptor (tag 0x0A) — 3-byte ISO code per entry.
-    ///   - DVB subtitle descriptor (tag 0x59) — marks subtitle streams.
-    ///   - Teletext descriptor (tag 0x56) — marks teletext streams.
+    ///   - DVB subtitle descriptor (tag 0x59) — marks subtitle streams; the
+    ///     per-language `subtitling_type` byte distinguishes SDH variants
+    ///     (0x20-0x24 hard-of-hearing, 0x30-0x31 sign-language) from the
+    ///     plain subtitle types (0x01-0x06).
+    ///   - Teletext descriptor (tag 0x56) — marks teletext streams; each
+    ///     entry's `teletext_type` nibble flags value 0x05 as the
+    ///     hearing-impaired subtitle page.
     ///   - AC-3 descriptor (tag 0x6A) — present on DVB private-stream AC-3.
     private static func parseESDescriptors(_ data: Data, from start: Int, end: Int) -> ESDescriptorInfo {
         var info = ESDescriptorInfo()
@@ -451,18 +462,38 @@ public struct MPEGReader: Sendable {
                         info.language = lang
                     }
                 }
-            case 0x56: // Teletext descriptor
+            case 0x56: // Teletext descriptor — 5-byte entries.
                 info.privateKind = .teletext
-                // First 3 bytes of each 5-byte entry are a language code.
                 if length >= 3, info.language == nil {
                     let bytes = data[data.startIndex + valueStart ..< data.startIndex + valueStart + 3]
                     info.language = String(data: bytes, encoding: .ascii)?.lowercased()
                 }
-            case 0x59: // DVB subtitling descriptor
+                var entryOff = valueStart
+                while entryOff + 5 <= valueEnd {
+                    // Top 5 bits of byte 3 are the teletext_type. 0x05 = subtitle
+                    // page for the hearing impaired (ETSI EN 300 468 §6.2.42).
+                    let teletextType = data[data.startIndex + entryOff + 3] >> 3
+                    if teletextType == 0x05 {
+                        info.isHearingImpaired = true
+                    }
+                    entryOff += 5
+                }
+            case 0x59: // DVB subtitling descriptor — 8-byte entries.
                 info.privateKind = .dvbSubtitle
                 if length >= 3, info.language == nil {
                     let bytes = data[data.startIndex + valueStart ..< data.startIndex + valueStart + 3]
                     info.language = String(data: bytes, encoding: .ascii)?.lowercased()
+                }
+                var entryOff = valueStart
+                while entryOff + 8 <= valueEnd {
+                    // Byte 3 is subtitling_type. 0x20-0x24 mark hard-of-hearing
+                    // subtitles; 0x30/0x31 mark sign-language interpretation
+                    // (ETSI EN 300 468 §6.2.41, table 26).
+                    let subType = data[data.startIndex + entryOff + 3]
+                    if (0x20...0x24).contains(subType) || subType == 0x30 || subType == 0x31 {
+                        info.isHearingImpaired = true
+                    }
+                    entryOff += 8
                 }
             case 0x6A: // DVB AC-3 descriptor
                 info.privateKind = .ac3
