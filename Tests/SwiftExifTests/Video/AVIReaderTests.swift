@@ -19,6 +19,28 @@ final class AVIReaderTests: XCTestCase {
         XCTAssertEqual(m.audioStreams[0].bitRate, 128_000)
     }
 
+    /// AVI `txts` streams carry optional subtitle tracks. The reader lifts the
+    /// codec from strh.fccHandler (here "DXSB" = DivX XSUB bitmap subtitles)
+    /// and the duration from dwLength * dwScale / dwRate.
+    func testAVISubtitleTrackFromTxtsStream() throws {
+        let data = buildAVIWithSubtitle(fccHandler: "DXSB",
+                                        dwScale: 1,
+                                        dwRate: 10,
+                                        dwLength: 50) // 5 seconds at 10 Hz timebase
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("swiftexif-avi-sub-\(UUID().uuidString).avi")
+        try data.write(to: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+
+        let m = try VideoMetadata.read(from: url)
+        XCTAssertEqual(m.format, .avi)
+        XCTAssertEqual(m.subtitleStreams.count, 1)
+        let sub = m.subtitleStreams[0]
+        XCTAssertEqual(sub.codec, "DXSB")
+        XCTAssertEqual(sub.codecName, "DivX Subtitles (XSUB)")
+        XCTAssertEqual(sub.duration ?? 0, 5.0, accuracy: 0.001)
+    }
+
     // MARK: - Fixtures
 
     private func generateAVIWithPCMAudio(sampleRate: Int, channels: Int) throws -> URL {
@@ -60,5 +82,68 @@ final class AVIReaderTests: XCTestCase {
         }
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
+    }
+
+    /// Build a minimal RIFF AVI byte stream with a single `txts` subtitle
+    /// stream. No movi chunk — the reader only walks hdrl for stream metadata.
+    private func buildAVIWithSubtitle(fccHandler: String,
+                                      dwScale: UInt32,
+                                      dwRate: UInt32,
+                                      dwLength: UInt32) -> Data {
+        // strh payload (56 bytes): fccType + fccHandler + dwFlags + wPriority +
+        // wLanguage + dwInitialFrames + dwScale + dwRate + dwStart + dwLength + …
+        var strh = Data(count: 56)
+        strh.replaceSubrange(0..<4, with: Array("txts".utf8))
+        strh.replaceSubrange(4..<8, with: Array(fccHandler.padding(toLength: 4, withPad: " ", startingAt: 0).utf8))
+        writeLE32(&strh, at: 20, dwScale)
+        writeLE32(&strh, at: 24, dwRate)
+        writeLE32(&strh, at: 32, dwLength)
+        let strhChunk = riffChunk(id: "strh", payload: strh)
+
+        // Empty strf — the reader only requires its presence.
+        let strfChunk = riffChunk(id: "strf", payload: Data())
+
+        var strlBody = Data()
+        strlBody.append(Array("strl".utf8), count: 4)
+        strlBody.append(strhChunk)
+        strlBody.append(strfChunk)
+        let strlChunk = riffChunk(id: "LIST", payload: strlBody)
+
+        // Minimal avih (40 bytes all-zero — widths, fps, frame count all 0).
+        let avihChunk = riffChunk(id: "avih", payload: Data(count: 40))
+
+        var hdrlBody = Data()
+        hdrlBody.append(Array("hdrl".utf8), count: 4)
+        hdrlBody.append(avihChunk)
+        hdrlBody.append(strlChunk)
+        let hdrlChunk = riffChunk(id: "LIST", payload: hdrlBody)
+
+        var riffBody = Data()
+        riffBody.append(Array("AVI ".utf8), count: 4)
+        riffBody.append(hdrlChunk)
+
+        var riff = Data()
+        riff.append(Array("RIFF".utf8), count: 4)
+        var size = UInt32(riffBody.count)
+        riff.append(Data(bytes: &size, count: 4))
+        riff.append(riffBody)
+        return riff
+    }
+
+    private func riffChunk(id: String, payload: Data) -> Data {
+        var chunk = Data()
+        chunk.append(Array(id.utf8), count: 4)
+        var size = UInt32(payload.count)
+        chunk.append(Data(bytes: &size, count: 4))
+        chunk.append(payload)
+        if payload.count & 1 == 1 { chunk.append(0x00) } // RIFF pad
+        return chunk
+    }
+
+    private func writeLE32(_ data: inout Data, at offset: Int, _ value: UInt32) {
+        data[offset] = UInt8(value & 0xFF)
+        data[offset + 1] = UInt8((value >> 8) & 0xFF)
+        data[offset + 2] = UInt8((value >> 16) & 0xFF)
+        data[offset + 3] = UInt8((value >> 24) & 0xFF)
     }
 }

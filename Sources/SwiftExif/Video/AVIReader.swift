@@ -263,6 +263,19 @@ public struct AVIReader: Sendable {
                 stream.channelLayout = defaultChannelLayout(forChannels: ch)
             }
             metadata.audioStreams.append(stream)
+        } else if fccType == "txts" {
+            // Text / subtitle stream. Codec comes from strh.fccHandler — common
+            // values are "DXSB" (XSUB bitmap subtitles) and "UTF8" (plain text).
+            var stream = SubtitleStream(index: metadata.subtitleStreams.count)
+            let handler = fccHandler.trimmingCharacters(in: CharacterSet(charactersIn: "\0 "))
+            if !handler.isEmpty {
+                stream.codec = handler
+                stream.codecName = subtitleCodecNameAVI(handler)
+            }
+            if dwScale > 0, dwRate > 0, dwLength > 0 {
+                stream.duration = Double(dwLength) * Double(dwScale) / Double(dwRate)
+            }
+            metadata.subtitleStreams.append(stream)
         }
     }
 
@@ -393,6 +406,15 @@ public struct AVIReader: Sendable {
         case "VP90": return "VP9"
         case "AV01": return "AV1"
         case "": return "Uncompressed"
+        default: return nil
+        }
+    }
+
+    private static func subtitleCodecNameAVI(_ fourCC: String) -> String? {
+        let clean = fourCC.trimmingCharacters(in: CharacterSet(charactersIn: "\0 ")).uppercased()
+        switch clean {
+        case "DXSB": return "DivX Subtitles (XSUB)"
+        case "UTF8": return "Plain UTF-8 Text"
         default: return nil
         }
     }
