@@ -122,46 +122,182 @@ metadata.syncXMPToIPTC()
 ### Video Metadata
 
 Read rich stream-level metadata from MP4, MOV, M4V, MXF, MKV, WebM, AVI, and
-MPEG-PS/TS files — enough to replace `ffprobe` in editorial/pipeline tooling:
+MPEG-PS/TS/M2TS files — enough to replace `ffprobe` in editorial and
+media-pipeline tooling. Container essence (mdat / MXF KLV body / Matroska
+clusters) is never fully materialised; parsers only touch the header
+metadata, so reading a multi-gigabyte MXF or ProRes file is a sub-millisecond
+operation on memory-mapped data.
 
 ```swift
 let video = try VideoMetadata.read(from: videoURL)
+```
 
-// Container-level facts
-print(video.format)          // .mp4, .mov, .m4v, .mxf, .mkv, .webm, .avi, .mpg
-print(video.duration)        // TimeInterval?
-print(video.bitRate)         // Int? — overall container bitrate in bps
+Everything below is populated from the container header — no decoding,
+no AVFoundation, no external dependencies.
 
-// Primary video stream
-print(video.videoWidth)      // 3840
-print(video.videoHeight)     // 2160
-print(video.videoCodec)      // "hvc1"
-print(video.frameRate)       // 59.94
-print(video.fieldOrder)      // .progressive / .topFieldFirst / .bottomFieldFirst
-print(video.bitDepth)        // 10
-print(video.chromaSubsampling) // "4:2:0"
-print(video.colorInfo?.label) // "bt2020-hlg" / "bt2020-pq" / "bt709" …
-print(video.pixelAspectRatio)   // (1, 1)
-print(video.displayWidth / displayHeight)
+#### Container-level facts
 
-// Primary audio stream
-print(video.audioCodec)      // "mp4a"
-print(video.audioSampleRate) // 48000
-print(video.audioChannels)   // 6
-print(video.audioStreams.first?.channelLayout) // "5.1"
+| Property | Type | Description |
+|----------|------|-------------|
+| `format` | `VideoFormat` | `.mp4`, `.mov`, `.m4v`, `.mxf`, `.mkv`, `.webm`, `.avi`, `.mpg` |
+| `duration` | `TimeInterval?` | Total playback duration in seconds |
+| `creationDate` | `Date?` | Capture / mux time (ISOBMFF `mvhd`, Matroska `DateUTC`, etc.) |
+| `modificationDate` | `Date?` | Last modification time |
+| `bitRate` | `Int?` | Overall container bitrate in bits/second |
+| `title` / `artist` / `comment` | `String?` | QuickTime `©nam` / `©ART` / `©cmt`, Matroska Info/Title, RIFF INFO |
+| `gpsLatitude` / `gpsLongitude` / `gpsAltitude` | `Double?` | QuickTime `©xyz` / ISO 6709 |
+| `c2pa` | `C2PAData?` | Parsed C2PA manifest store (MP4/MOV uuid or top-level `jumb`, MXF SMPTE UL or Dark KLV) |
+| `camera` | `CameraMetadata?` | Sony NonRealTimeMeta (RDD-18) from MXF header or sidecar XML |
+| `xmp` | `XMPData?` | XMP packet embedded in uuid box or `xml ` meta |
 
-// Per-track details for multi-track files
-for stream in video.videoStreams { … }
-for stream in video.audioStreams { … }
+#### Per-stream: video
 
-// Subtitle / closed-caption tracks with language + flags
+`VideoMetadata.videoStreams: [VideoStream]` exposes one entry per video track,
+plus convenience accessors that mirror the first video stream at the top level
+(`videoWidth`, `videoHeight`, `videoCodec`, `frameRate`, `fieldOrder`,
+`colorInfo`, `bitDepth`, `chromaSubsampling`, `pixelAspectRatio`,
+`displayWidth`, `displayHeight`).
+
+| `VideoStream` property | Description |
+|------------------------|-------------|
+| `index` | Track index within the container |
+| `codec` | 4CC / ID — `"hvc1"`, `"av01"`, `"avc1"`, `"apch"`, `"V_VP9"`, `"V_MPEGH/ISO/HEVC"`, … |
+| `codecName` | Human-readable — `"H.265 / HEVC"`, `"Apple ProRes"`, `"AV1"`, `"VP9"`, `"MPEG-2 Video"` |
+| `width` / `height` | Coded luma dimensions |
+| `displayWidth` / `displayHeight` | PAR-adjusted display dimensions (when advertised) |
+| `pixelAspectRatio` | `(Int, Int)` — e.g. `(40, 33)` for anamorphic 1440×1080 |
+| `bitDepth` | 8 / 10 / 12 from `hvcC` / `av1C` / CDCI / Matroska Video |
+| `chromaSubsampling` | `"4:2:0"`, `"4:2:2"`, `"4:4:4"`, `"4:0:0"`, `"4:1:1"` |
+| `frameRate` | fps — from `stsz`/`stts` for ISOBMFF, Matroska `DefaultDuration`, MXF `SampleRate`, AVI `dwRate`/`dwScale`, MPEG-2 sequence header |
+| `duration` | Per-track duration in seconds |
+| `frameCount` | Container-advertised frame count |
+| `fieldOrder` | `.progressive`, `.topFieldFirst`, `.bottomFieldFirst`, `.mixed`, `.unknown` |
+| `colorInfo` | `VideoColorInfo?` — primaries / transfer / matrix / range (H.273 codes) with readable `label` |
+| `bitRate` | Per-stream bits/second (ISOBMFF `btrt`) |
+
+`VideoColorInfo.label` returns canonical names: `"bt709"`, `"bt601"`,
+`"bt2020"`, `"bt2020-pq"` (HDR10 / SMPTE ST 2084), `"bt2020-hlg"` (Hybrid
+Log-Gamma), … — the same vocabulary `ffprobe -show_streams` uses.
+
+#### Per-stream: audio
+
+`VideoMetadata.audioStreams: [AudioStream]` plus top-level `audioCodec`,
+`audioSampleRate`, `audioChannels`.
+
+| `AudioStream` property | Description |
+|------------------------|-------------|
+| `codec` / `codecName` | `"mp4a"` / `"AAC"`, `"ac-3"` / `"Dolby Digital (AC-3)"`, `"A_OPUS"` / `"Opus"`, `"lpcm"` / `"Linear PCM"`, `"alac"` / `"ALAC"`, … |
+| `sampleRate` | Hz |
+| `channels` | Channel count |
+| `channelLayout` | `"mono"`, `"stereo"`, `"stereo-headphones"`, `"5.1"`, `"7.1"`, … (from QuickTime `chan` box or synthesised from the channel count) |
+| `bitDepth` | Bits per sample |
+| `bitRate` | Bits/second (ISOBMFF `btrt` or MPEG-4 ES descriptor) |
+| `duration` | Per-track duration |
+| `language` | ISO 639-2/T code (`"eng"`, `"nor"`, `"swe"`, …) |
+
+QuickTime Sound Description **V2** is handled correctly, so 24-bit LPCM and
+Float64-sample-rate ProRes/APV audio tracks report accurate channels and
+rate.
+
+#### Per-stream: subtitles & closed captions
+
+`VideoMetadata.subtitleStreams: [SubtitleStream]`:
+
+```swift
 for sub in video.subtitleStreams {
-    print(sub.codecName, sub.language, sub.title, sub.isForced, sub.isHearingImpaired)
+    print(sub.codecName)         // "SubRip (SRT)", "PGS (Blu-ray)", "3GPP Timed Text", "WebVTT"
+    print(sub.language)          // "eng", "nor", "swe" — ISO 639-2/T
+    print(sub.title)             // Matroska track name, when set
+    print(sub.isDefault)         // Matroska FlagDefault
+    print(sub.isForced)          // FlagForced — foreign-audio burn-in
+    print(sub.isHearingImpaired) // SDH flag
 }
+```
 
-// Export as JSON
+Codec coverage:
+
+- **MP4/MOV/M4V**: `tx3g` (3GPP Timed Text), `wvtt` (WebVTT), `stpp` (TTML),
+  `c608` / `c708` (CEA-608/708 closed captions), `text` (QuickTime Text);
+  handler types `subt`, `text`, `sbtl`, `clcp`.
+- **Matroska / WebM**: `S_TEXT/UTF8` (SRT), `S_TEXT/ASS`, `S_TEXT/SSA`,
+  `S_TEXT/WEBVTT`, `S_HDMV/PGS` (Blu-ray), `S_VOBSUB`, `S_HDMV/TEXTST`.
+- **MPEG-TS**: DVB subtitles (stream type `0x06` + descriptor `0x59`),
+  DVB teletext (descriptor `0x56`), Blu-ray PGS (stream type `0x82`).
+
+#### Format-specific highlights
+
+- **MP4 / MOV / M4V**: per-track `mdhd` timescale + language, visual sample
+  entry walk (`fiel`, `pasp`, `colr` for `nclx`/`nclc`, `hvcC`, `av1C`,
+  `avcC`, `btrt`), QuickTime `chan` channel layouts, V0/V1/V2 Sound
+  Description. Also: embedded XMP (uuid `BE7ACFCB-…`), GPS (`©xyz`), C2PA
+  manifests, and Sony NRT sidecar auto-discovery.
+- **MXF (SMPTE 377-1)**: picture and sound essence descriptors parsed from
+  header metadata — `StoredWidth`/`StoredHeight`, `DisplayWidth`/`DisplayHeight`,
+  `FrameLayout` (scan type), `ComponentDepth`,
+  `HorizontalSubsampling`/`VerticalSubsampling`, `SampleRate` (frame rate),
+  `ContainerDuration`, colour ULs → H.273 codes. KLV essence is skipped by
+  seek, so gigabyte files parse cheaply.
+- **Matroska / WebM**: EBML/VINT walker over Segment `Info` + `Tracks`.
+  Colour master element (primaries / transfer / matrix / range) +
+  `ChromaSubsamplingHorz`/`Vert`, `DefaultDuration` → fps, `FlagInterlaced`
+  + `FieldOrder`, subtitle `FlagDefault` / `FlagForced` /
+  `FlagHearingImpaired`.
+- **AVI**: RIFF/LIST walker, `avih` (width/height/microSecPerFrame) +
+  `strl/strh/strf` (BITMAPINFOHEADER + WAVEFORMATEX), OpenDML `dmlh` for
+  >4 GB frame counts, `INFO` tags (`INAM`/`IART`/`ICMT`).
+- **MPEG-PS / MPEG-TS / M2TS**: MPEG-1/2 sequence header decode
+  (resolution, fps, aspect ratio, bit rate), PAT → PMT walk for
+  elementary-stream inventory, ES descriptor loop for language + subtitle
+  type. M2TS (Blu-ray BDAV, 192-byte packets with `TP_extra_header`)
+  auto-detected via magic-byte sniff.
+
+#### Export
+
+```swift
+// Flat dictionary for CSV/table output
+let dict = VideoMetadataExporter.buildDictionary(video)
+
+// JSON string matching ffprobe's general shape
 let json = VideoMetadataExporter.toJSONString(video)
 ```
+
+The CLI surfaces all of the above:
+
+```shell
+$ swift-exif read --format json path/to/clip.mov
+```
+
+#### Example output
+
+A 4K HEVC HLG clip straight out of an iPhone:
+
+```json
+{
+  "FileFormat": "MOV",
+  "VideoCodec": "hvc1",
+  "VideoWidth": 3840,
+  "VideoHeight": 2160,
+  "FrameRate": 59.9568655643422,
+  "FieldOrder": "progressive",
+  "BitDepth": 10,
+  "ChromaSubsampling": "4:2:0",
+  "ColorSpace": "bt2020-hlg",
+  "ColorPrimaries": 9,
+  "TransferCharacteristics": 18,
+  "MatrixCoefficients": 9,
+  "PixelAspectRatio": "1:1",
+  "Duration": 2.317,
+  "AudioCodec": "mp4a",
+  "AudioSampleRate": 48000,
+  "AudioChannels": 2,
+  "AudioChannelLayout": "stereo",
+  "CreationDate": "2025-12-09T14:56:44Z"
+}
+```
+
+A Blu-ray MKV remux with 31 PGS subtitle tracks and 14 audio streams
+returns each track individually under `videoStreams` / `audioStreams` /
+`subtitleStreams`, with language tags, flags, and codec IDs preserved.
 
 ### Audio Metadata
 
