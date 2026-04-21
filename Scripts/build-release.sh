@@ -67,7 +67,23 @@ build_linux_static() {
   local src=".build/${triple}/release/swift-exif"
   local out="$DIST/swift-exif-linux-${arch}"
   cp "$src" "$out"
-  if command -v llvm-strip >/dev/null; then llvm-strip "$out" || true; fi
+
+  # Strip debug info first; UPX needs a clean ELF.
+  local llvm_strip
+  if command -v llvm-strip >/dev/null; then
+    llvm_strip=llvm-strip
+  elif [ -x /opt/homebrew/opt/llvm/bin/llvm-strip ]; then
+    llvm_strip=/opt/homebrew/opt/llvm/bin/llvm-strip
+  fi
+  if [ -n "${llvm_strip:-}" ]; then "$llvm_strip" "$out"; fi
+
+  # UPX shrinks the binary from ~70 MB to ~25 MB at the cost of a few
+  # hundred milliseconds of one-time decompression at startup. Skip
+  # silently if UPX isn't installed.
+  if command -v upx >/dev/null; then
+    upx --best --no-progress "$out" >/dev/null 2>&1 || true
+  fi
+
   file "$out"
 }
 
@@ -76,13 +92,6 @@ rm -f "$DIST"/swift-exif-*
 
 build_mac arm64
 build_mac x86_64
-
-echo "==> Universal macOS binary"
-lipo -create \
-  "$DIST/swift-exif-macos-arm64" \
-  "$DIST/swift-exif-macos-x86_64" \
-  -output "$DIST/swift-exif-macos-universal"
-file "$DIST/swift-exif-macos-universal"
 
 build_linux_static x86_64
 build_linux_static aarch64
