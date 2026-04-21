@@ -52,19 +52,30 @@ private func isMatchingFile(_ url: URL, extFilter: Set<String>) -> Bool {
     return extFilter.contains(url.pathExtension.lowercased())
 }
 
-/// Check if a URL has a supported image or video extension.
+/// Check if a URL has a supported image, video, or audio extension.
 func isSupportedFile(_ url: URL) -> Bool {
-    let ext = url.pathExtension.lowercased()
-    let supported: Set<String> = [
-        "jpg", "jpeg", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw",
-        "raf", "rw2", "orf", "pef",
-        "jxl", "png", "avif", "heic", "heif", "webp",
-        "gif", "bmp", "dib", "svg",
-        "mp4", "mov", "m4v",
-        "mp3", "flac", "m4a",
-    ]
-    return supported.contains(ext)
+    supportedImageExtensions.contains(url.pathExtension.lowercased())
+        || supportedVideoExtensions.contains(url.pathExtension.lowercased())
+        || supportedAudioExtensions.contains(url.pathExtension.lowercased())
 }
+
+let supportedImageExtensions: Set<String> = [
+    "jpg", "jpeg", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw",
+    "raf", "rw2", "orf", "pef",
+    "jxl", "png", "avif", "heic", "heif", "webp",
+    "gif", "bmp", "dib", "svg", "psd", "pdf",
+]
+
+let supportedVideoExtensions: Set<String> = [
+    "mp4", "mov", "m4v", "mxf",
+    "mkv", "webm", "avi",
+    "mpg", "mpeg", "vob",
+    "ts", "m2ts", "mts",
+]
+
+let supportedAudioExtensions: Set<String> = [
+    "mp3", "flac", "m4a", "ogg", "oga", "opus",
+]
 
 /// Print an error message to stderr.
 func printError(_ message: String) {

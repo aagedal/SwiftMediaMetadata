@@ -37,6 +37,9 @@ struct ReadCommand: ParsableCommand {
     @Flag(name: .long, help: "Compute File:MD5 and File:SHA256 hashes (slow on large files).")
     var hash = false
 
+    @Flag(name: .long, help: "For video/audio files, emit per-stream detail (ffprobe-style).")
+    var streams = false
+
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
@@ -45,32 +48,28 @@ struct ReadCommand: ParsableCommand {
         let tagFilter = (!tags.isEmpty || !excludeTags.isEmpty)
             ? TagFilter(tags: tags, excludeTags: excludeTags) : nil
 
-        let videoExtensions: Set<String> = [
-            "mp4", "mov", "m4v", "mxf",
-            "mkv", "webm", "avi",
-            "mpg", "mpeg", "vob",
-            "ts", "m2ts", "mts",
-        ]
-        let audioExtensions: Set<String> = ["mp3", "flac", "m4a", "ogg", "oga", "opus"]
-
         var imageDicts: [[String: String]] = []
         var videoDicts: [[String: String]] = []
         var audioDicts: [[String: String]] = []
         var imageNames: [String] = []
         var videoNames: [String] = []
         var audioNames: [String] = []
+        var perStreamReports: [(String, [[String: String]])] = []
 
         for url in urls {
-            if audioExtensions.contains(url.pathExtension.lowercased()) {
+            if supportedAudioExtensions.contains(url.pathExtension.lowercased()) {
                 let am = try AudioMetadata.read(from: url)
                 let dict = AudioMetadataExporter.buildDictionary(am).mapValues { String(describing: $0) }
                 audioDicts.append(dict)
                 audioNames.append(url.lastPathComponent)
-            } else if videoExtensions.contains(url.pathExtension.lowercased()) {
+            } else if supportedVideoExtensions.contains(url.pathExtension.lowercased()) {
                 let vm = try VideoMetadata.read(from: url)
                 let dict = VideoMetadataExporter.buildDictionary(vm).mapValues { String(describing: $0) }
                 videoDicts.append(dict)
                 videoNames.append(url.lastPathComponent)
+                if streams {
+                    perStreamReports.append((url.lastPathComponent, buildStreamDicts(vm)))
+                }
             } else {
                 let metadata = try ImageMetadata.read(from: url)
                 if let condition, !condition.matches(metadata) { continue }
@@ -97,7 +96,9 @@ struct ReadCommand: ParsableCommand {
 
         switch format {
         case .json:
-            if let data = try? JSONSerialization.data(withJSONObject: allDicts, options: [.prettyPrinted, .sortedKeys]) {
+            if streams && !perStreamReports.isEmpty {
+                printStreamsJSON(perStreamReports)
+            } else if let data = try? JSONSerialization.data(withJSONObject: allDicts, options: [.prettyPrinted, .sortedKeys]) {
                 print(String(data: data, encoding: .utf8) ?? "[]")
             }
         case .csv:
@@ -113,6 +114,82 @@ struct ReadCommand: ParsableCommand {
                 }
                 printTable(dict)
             }
+            if streams {
+                for (name, streamDicts) in perStreamReports {
+                    printSeparator("\(name) — streams")
+                    for (i, sd) in streamDicts.enumerated() {
+                        if streamDicts.count > 1 { print("--- Stream #\(i) ---") }
+                        printTable(sd)
+                    }
+                }
+            }
+        }
+    }
+
+    private func buildStreamDicts(_ vm: VideoMetadata) -> [[String: String]] {
+        var rows: [[String: String]] = []
+        for stream in vm.videoStreams {
+            var d: [String: String] = ["StreamType": "video", "Index": String(stream.index)]
+            if let v = stream.codec          { d["Codec"]            = v }
+            if let v = stream.codecName      { d["CodecName"]        = v }
+            if let v = stream.width          { d["Width"]            = String(v) }
+            if let v = stream.height         { d["Height"]           = String(v) }
+            if let v = stream.displayWidth   { d["DisplayWidth"]     = String(v) }
+            if let v = stream.displayHeight  { d["DisplayHeight"]    = String(v) }
+            if let p = stream.pixelAspectRatio { d["PixelAspectRatio"] = "\(p.0):\(p.1)" }
+            if let v = stream.bitDepth       { d["BitDepth"]         = String(v) }
+            if let v = stream.bitRate        { d["BitRate"]          = String(v) }
+            if let v = stream.frameRate      { d["FrameRate"]        = String(v) }
+            if let v = stream.duration       { d["Duration"]         = String(v) }
+            if let v = stream.fieldOrder     { d["FieldOrder"]       = v.rawValue }
+            if let v = stream.chromaSubsampling { d["ChromaSubsampling"] = v }
+            if let v = stream.frameCount     { d["FrameCount"]       = String(v) }
+            if let v = stream.title          { d["Title"]            = v }
+            if let c = stream.colorInfo {
+                if let p = c.primaries { d["ColorPrimaries"] = String(p) }
+                if let t = c.transfer  { d["TransferCharacteristics"] = String(t) }
+                if let m = c.matrix    { d["MatrixCoefficients"] = String(m) }
+                if let r = c.fullRange { d["ColorRange"] = r ? "full" : "limited" }
+                if let l = c.label     { d["ColorSpace"] = l }
+            }
+            rows.append(d)
+        }
+        for stream in vm.audioStreams {
+            var d: [String: String] = ["StreamType": "audio", "Index": String(stream.index)]
+            if let v = stream.codec         { d["Codec"]         = v }
+            if let v = stream.codecName     { d["CodecName"]     = v }
+            if let v = stream.sampleRate    { d["SampleRate"]    = String(v) }
+            if let v = stream.channels      { d["Channels"]      = String(v) }
+            if let v = stream.channelLayout { d["ChannelLayout"] = v }
+            if let v = stream.bitDepth      { d["BitDepth"]      = String(v) }
+            if let v = stream.bitRate       { d["BitRate"]       = String(v) }
+            if let v = stream.duration      { d["Duration"]      = String(v) }
+            if let v = stream.language      { d["Language"]      = v }
+            if let v = stream.title         { d["Title"]         = v }
+            rows.append(d)
+        }
+        for stream in vm.subtitleStreams {
+            var d: [String: String] = ["StreamType": "subtitle", "Index": String(stream.index)]
+            if let v = stream.codec             { d["Codec"]     = v }
+            if let v = stream.codecName         { d["CodecName"] = v }
+            if let v = stream.language          { d["Language"]  = v }
+            if let v = stream.title             { d["Title"]     = v }
+            if let v = stream.isDefault         { d["Default"]   = String(v) }
+            if let v = stream.isForced          { d["Forced"]    = String(v) }
+            if let v = stream.isHearingImpaired { d["HearingImpaired"] = String(v) }
+            if let v = stream.duration          { d["Duration"]  = String(v) }
+            rows.append(d)
+        }
+        return rows
+    }
+
+    private func printStreamsJSON(_ reports: [(String, [[String: String]])]) {
+        var out: [[String: Any]] = []
+        for (name, streams) in reports {
+            out.append(["file": name, "streams": streams])
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]) {
+            print(String(data: data, encoding: .utf8) ?? "[]")
         }
     }
 
