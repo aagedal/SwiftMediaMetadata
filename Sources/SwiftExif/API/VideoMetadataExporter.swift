@@ -20,16 +20,25 @@ public struct VideoMetadataExporter: Sendable {
         var dict: [String: Any] = [:]
 
         dict["FileFormat"] = metadata.format.rawValue.uppercased()
+        if let longName = metadata.formatLongName { dict["FormatLongName"] = longName }
+        if let size = metadata.fileSize { dict["FileSize"] = size }
+        if let tc = metadata.timecode { dict["Timecode"] = tc }
 
         if let d = metadata.duration { dict["Duration"] = d }
         if let w = metadata.videoWidth { dict["VideoWidth"] = w }
         if let h = metadata.videoHeight { dict["VideoHeight"] = h }
         if let c = metadata.videoCodec { dict["VideoCodec"] = c }
+        if let profile = metadata.videoStreams.first?.profile { dict["VideoProfile"] = profile }
         if let c = metadata.audioCodec { dict["AudioCodec"] = c }
+        if let profile = metadata.audioStreams.first?.profile { dict["AudioProfile"] = profile }
         if let r = metadata.frameRate { dict["FrameRate"] = r }
+        if let r = metadata.videoStreams.first?.avgFrameRate { dict["AvgFrameRate"] = r }
+        if let r = metadata.videoStreams.first?.rFrameRate { dict["RFrameRate"] = r }
         if let f = metadata.fieldOrder { dict["FieldOrder"] = f.rawValue }
         if let depth = metadata.bitDepth { dict["BitDepth"] = depth }
         if let chroma = metadata.chromaSubsampling { dict["ChromaSubsampling"] = chroma }
+        if let loc = metadata.videoStreams.first?.chromaLocation { dict["ChromaLocation"] = loc }
+        if let pix = metadata.videoStreams.first?.pixelFormat { dict["PixelFormat"] = pix }
         if let par = metadata.pixelAspectRatio {
             dict["PixelAspectRatio"] = "\(par.0):\(par.1)"
         }

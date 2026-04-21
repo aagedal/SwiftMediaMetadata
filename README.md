@@ -14,9 +14,9 @@ A native Swift library for reading and writing image and video metadata — Exif
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
 | WebP | Yes | Yes | Exif, XMP, ICC |
-| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, fps, field order, bit depth, chroma subsampling, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language |
+| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, profile, fps, field order, bit depth, chroma subsampling, pixel format, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language, QuickTime `tmcd` timecode |
 | MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
-| Matroska (.mkv) | Yes | — | Stream info (codec, fps, dimensions, bit depth, chroma, color), audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
+| Matroska (.mkv) | Yes | — | Stream info (codec, profile, fps, dimensions, bit depth, chroma, chroma location, color, pixel format) decoded from both `Tracks` and `CodecPrivate` (hvcC/av1C/avcC), Segment-level `COMMENT`/`DESCRIPTION` tags, audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
 | WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) + subtitle tracks |
 | AVI (RIFF) | Yes | — | Stream info (codec, fps, dimensions, bit depth) + audio (codec, sample rate, channels), INFO tags |
 | MPEG-PS / MPEG-TS / M2TS | Yes | — | Sequence-header stream facts (resolution, fps, aspect, bit rate), PMT elementary-stream inventory (DVB subtitles / teletext / PGS with language), M2TS (Blu-ray BDAV, 192-byte packets) auto-detected |
@@ -140,11 +140,14 @@ no AVFoundation, no external dependencies.
 | Property | Type | Description |
 |----------|------|-------------|
 | `format` | `VideoFormat` | `.mp4`, `.mov`, `.m4v`, `.mxf`, `.mkv`, `.webm`, `.avi`, `.mpg` |
+| `formatLongName` | `String?` | Human-readable container name (`"QuickTime / MOV"`, `"MP4 (MPEG-4 Part 14)"`, `"Matroska"`, `"WebM"`, …) — matches ffprobe `format_long_name` |
+| `fileSize` | `Int64?` | File size in bytes |
 | `duration` | `TimeInterval?` | Total playback duration in seconds |
 | `creationDate` | `Date?` | Capture / mux time (ISOBMFF `mvhd`, Matroska `DateUTC`, etc.) |
 | `modificationDate` | `Date?` | Last modification time |
 | `bitRate` | `Int?` | Overall container bitrate in bits/second |
-| `title` / `artist` / `comment` | `String?` | QuickTime `©nam` / `©ART` / `©cmt`, Matroska Info/Title, RIFF INFO |
+| `timecode` | `String?` | Clip start timecode `HH:MM:SS:FF` (or `HH:MM:SS;FF` for drop-frame) from a QuickTime `tmcd` track |
+| `title` / `artist` / `comment` | `String?` | QuickTime `©nam` / `©ART` / `©cmt`, Matroska Info/Title + Segment-level `COMMENT`/`DESCRIPTION`, RIFF INFO |
 | `gpsLatitude` / `gpsLongitude` / `gpsAltitude` | `Double?` | QuickTime `©xyz` / ISO 6709 |
 | `c2pa` | `C2PAData?` | Parsed C2PA manifest store (MP4/MOV uuid or top-level `jumb`, MXF SMPTE UL or Dark KLV) |
 | `camera` | `CameraMetadata?` | Sony NonRealTimeMeta (RDD-18) from MXF header or sidecar XML |
@@ -163,17 +166,23 @@ plus convenience accessors that mirror the first video stream at the top level
 | `index` | Track index within the container |
 | `codec` | 4CC / ID — `"hvc1"`, `"av01"`, `"avc1"`, `"apch"`, `"V_VP9"`, `"V_MPEGH/ISO/HEVC"`, … |
 | `codecName` | Human-readable — `"H.265 / HEVC"`, `"Apple ProRes"`, `"AV1"`, `"VP9"`, `"MPEG-2 Video"` |
+| `profile` | Codec profile — `"Main"`, `"Main 10"`, `"High"`, `"Main 4:4:4 12"`, `"Professional"` — from `hvcC` / `av1C` / `avcC` or Matroska `CodecPrivate` |
 | `width` / `height` | Coded luma dimensions |
 | `displayWidth` / `displayHeight` | PAR-adjusted display dimensions (when advertised) |
 | `pixelAspectRatio` | `(Int, Int)` — e.g. `(40, 33)` for anamorphic 1440×1080 |
-| `bitDepth` | 8 / 10 / 12 from `hvcC` / `av1C` / CDCI / Matroska Video |
+| `bitDepth` | 8 / 10 / 12 from `hvcC` / `av1C` / CDCI / Matroska `BitsPerChannel` or `CodecPrivate` |
 | `chromaSubsampling` | `"4:2:0"`, `"4:2:2"`, `"4:4:4"`, `"4:0:0"`, `"4:1:1"` |
+| `chromaLocation` | `"left"`, `"center"`, `"topleft"`, `"top"`, `"bottomleft"`, `"bottom"` — matches ffprobe `chroma_location` |
+| `pixelFormat` | ffprobe-style `pix_fmt` string — `"yuv420p"`, `"yuv420p10le"`, `"yuvj420p"`, `"yuv444p12le"`, `"gray10le"`, derived from codec + chroma + depth + range |
 | `frameRate` | fps — from `stsz`/`stts` for ISOBMFF, Matroska `DefaultDuration`, MXF `SampleRate`, AVI `dwRate`/`dwScale`, MPEG-2 sequence header |
+| `avgFrameRate` / `rFrameRate` | ffprobe-compatible pair — `avg_frame_rate` (average) and `r_frame_rate` (raw cadence) |
 | `duration` | Per-track duration in seconds |
-| `frameCount` | Container-advertised frame count |
+| `frameCount` | Container-advertised frame count (ISOBMFF `stsz`, AVI `dwLength`, Matroska `NUMBER_OF_FRAMES` tag) |
 | `fieldOrder` | `.progressive`, `.topFieldFirst`, `.bottomFieldFirst`, `.mixed`, `.unknown` |
 | `colorInfo` | `VideoColorInfo?` — primaries / transfer / matrix / range (H.273 codes) with readable `label` |
 | `bitRate` | Per-stream bits/second (ISOBMFF `btrt`) |
+| `timecode` | Per-stream timecode (when the track carries one) |
+| `isAttachedPic` | `true` when the track is a cover-art / attached-picture track |
 
 `VideoColorInfo.label` returns canonical names: `"bt709"`, `"bt601"`,
 `"bt2020"`, `"bt2020-pq"` (HDR10 / SMPTE ST 2084), `"bt2020-hlg"` (Hybrid
@@ -187,6 +196,7 @@ Log-Gamma), … — the same vocabulary `ffprobe -show_streams` uses.
 | `AudioStream` property | Description |
 |------------------------|-------------|
 | `codec` / `codecName` | `"mp4a"` / `"AAC"`, `"ac-3"` / `"Dolby Digital (AC-3)"`, `"A_OPUS"` / `"Opus"`, `"lpcm"` / `"Linear PCM"`, `"alac"` / `"ALAC"`, … |
+| `profile` | Codec profile (`"LC"`, `"HE-AAC"`, `"HE-AACv2"`, …) where the container carries one |
 | `sampleRate` | Hz |
 | `channels` | Channel count |
 | `channelLayout` | `"mono"`, `"stereo"`, `"stereo-headphones"`, `"5.1"`, `"7.1"`, … (from QuickTime `chan` box or synthesised from the channel count) |
@@ -194,6 +204,7 @@ Log-Gamma), … — the same vocabulary `ffprobe -show_streams` uses.
 | `bitRate` | Bits/second (ISOBMFF `btrt` or MPEG-4 ES descriptor) |
 | `duration` | Per-track duration |
 | `language` | ISO 639-2/T code (`"eng"`, `"nor"`, `"swe"`, …) |
+| `isDefault` | Default-track flag if the container signals one |
 
 QuickTime Sound Description **V2** is handled correctly, so 24-bit LPCM and
 Float64-sample-rate ProRes/APV audio tracks report accurate channels and
@@ -228,20 +239,28 @@ Codec coverage:
 
 - **MP4 / MOV / M4V**: per-track `mdhd` timescale + language, visual sample
   entry walk (`fiel`, `pasp`, `colr` for `nclx`/`nclc`, `hvcC`, `av1C`,
-  `avcC`, `btrt`), QuickTime `chan` channel layouts, V0/V1/V2 Sound
-  Description. Also: embedded XMP (uuid `BE7ACFCB-…`), GPS (`©xyz`), C2PA
-  manifests, and Sony NRT sidecar auto-discovery.
+  `avcC`, `btrt`) including codec profile extraction, QuickTime `chan`
+  channel layouts, V0/V1/V2 Sound Description. QuickTime `tmcd` timecode
+  tracks: frame counter read from `mdat` via `stco`/`co64`, formatted
+  `HH:MM:SS:FF` with SMPTE 12M drop-frame arithmetic. Also: embedded XMP
+  (uuid `BE7ACFCB-…`), GPS (`©xyz`), C2PA manifests, and Sony NRT sidecar
+  auto-discovery.
 - **MXF (SMPTE 377-1)**: picture and sound essence descriptors parsed from
   header metadata — `StoredWidth`/`StoredHeight`, `DisplayWidth`/`DisplayHeight`,
   `FrameLayout` (scan type), `ComponentDepth`,
   `HorizontalSubsampling`/`VerticalSubsampling`, `SampleRate` (frame rate),
   `ContainerDuration`, colour ULs → H.273 codes. KLV essence is skipped by
   seek, so gigabyte files parse cheaply.
-- **Matroska / WebM**: EBML/VINT walker over Segment `Info` + `Tracks`.
-  Colour master element (primaries / transfer / matrix / range) +
-  `ChromaSubsamplingHorz`/`Vert`, `DefaultDuration` → fps, `FlagInterlaced`
-  + `FieldOrder`, subtitle `FlagDefault` / `FlagForced` /
-  `FlagHearingImpaired`.
+- **Matroska / WebM**: EBML/VINT walker over Segment `Info` + `Tracks` +
+  `Tags`. Colour master element (primaries / transfer / matrix / range) +
+  `ChromaSubsamplingHorz`/`Vert` + `ChromaSitingHorz`/`Vert` →
+  `chroma_location`, `BitsPerChannel`, `DefaultDuration` → fps,
+  `FlagInterlaced` + `FieldOrder`, subtitle `FlagDefault` / `FlagForced` /
+  `FlagHearingImpaired`. `CodecPrivate` is decoded for HEVC / AV1 / AVC
+  tracks (same layout as `hvcC` / `av1C` / `avcC`) to surface profile +
+  bit depth even when the `Video` master doesn't. Segment-level
+  `COMMENT` / `DESCRIPTION` / `TITLE` and per-track `BPS` /
+  `NUMBER_OF_FRAMES` SimpleTags are surfaced as container / stream facts.
 - **AVI**: RIFF/LIST walker, `avih` (width/height/microSecPerFrame) +
   `strl/strh/strf` (BITMAPINFOHEADER + WAVEFORMATEX), OpenDML `dmlh` for
   >4 GB frame counts, `INFO` tags (`INAM`/`IART`/`ICMT`).
@@ -274,19 +293,23 @@ A 4K HEVC HLG clip straight out of an iPhone:
 ```json
 {
   "FileFormat": "MOV",
+  "FormatLongName": "QuickTime / MOV",
+  "FileSize": 16309447,
   "VideoCodec": "hvc1",
+  "VideoProfile": "Main 10",
   "VideoWidth": 3840,
   "VideoHeight": 2160,
   "FrameRate": 59.9568655643422,
-  "FieldOrder": "progressive",
+  "AvgFrameRate": 59.9568655643422,
+  "RFrameRate": 59.9568655643422,
   "BitDepth": 10,
   "ChromaSubsampling": "4:2:0",
+  "PixelFormat": "yuv420p10le",
   "ColorSpace": "bt2020-hlg",
   "ColorPrimaries": 9,
   "TransferCharacteristics": 18,
   "MatrixCoefficients": 9,
-  "PixelAspectRatio": "1:1",
-  "Duration": 2.317,
+  "Duration": 2.316666666666667,
   "AudioCodec": "mp4a",
   "AudioSampleRate": 48000,
   "AudioChannels": 2,
