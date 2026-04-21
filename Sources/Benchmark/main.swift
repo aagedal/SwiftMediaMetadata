@@ -55,10 +55,9 @@ func cleanup(_ dir: URL) {
 }
 
 func measureTime(_ label: String, block: () throws -> Void) rethrows -> Double {
-    let start = CFAbsoluteTimeGetCurrent()
+    let start = Date().timeIntervalSinceReferenceDate
     try block()
-    let elapsed = CFAbsoluteTimeGetCurrent() - start
-    return elapsed
+    return Date().timeIntervalSinceReferenceDate - start
 }
 
 // MARK: - Benchmarks

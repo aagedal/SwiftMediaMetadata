@@ -1147,8 +1147,8 @@ public struct ImageMetadata: Sendable {
         var payload = Data(name.utf8)
         payload.append(0x00) // null terminator
         payload.append(0x00) // compression method: zlib deflate
-        if let compressed = try? (profile.data as NSData).compressed(using: .zlib) {
-            payload.append(Data(referencing: compressed))
+        if let compressed = ZlibInflate.deflate(profile.data) {
+            payload.append(compressed)
         } else {
             payload.append(profile.data)
         }
@@ -1357,8 +1357,8 @@ public struct ImageMetadata: Sendable {
         guard let nullIndex = bytes.firstIndex(of: 0), nullIndex + 2 < bytes.count else { return nil }
         // Skip profile name + null + compression method byte
         let compressedData = Data(bytes[(nullIndex + 2)...])
-        guard let decompressed = try? (compressedData as NSData).decompressed(using: .zlib) else { return nil }
-        return ICCProfile(data: Data(referencing: decompressed))
+        guard let decompressed = ZlibInflate.inflate(compressedData) else { return nil }
+        return ICCProfile(data: decompressed)
     }
 
     private static func readAVIF(from data: Data) throws -> ImageMetadata {

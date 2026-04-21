@@ -6,3 +6,12 @@ xcuserdata/
 DerivedData/
 .claude/
 TestImages/
+
+# Release artifacts produced by Scripts/build-release.sh
+/dist/
+
+# Editor / OS cruft
+*.swp
+*.swo
+.idea/
+.vscode/

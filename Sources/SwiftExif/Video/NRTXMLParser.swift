@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// Parser for Sony NonRealTimeMeta (NRT / RDD-18) XML.
 ///

@@ -497,14 +497,8 @@ public struct PDFParser: Sendable {
         return nil
     }
 
-    /// Decompress FlateDecode data using zlib.
     private static func decompress(_ data: Data) -> Data? {
-        // Use NSData's decompression
-        let nsData = data as NSData
-        // Try raw deflate first (most common in PDF), then zlib
-        if let result = try? nsData.decompressed(using: .zlib) {
-            return result as Data
-        }
-        return nil
+        if let result = ZlibInflate.inflate(data) { return result }
+        return ZlibInflate.inflate(data, rawDeflate: true)
     }
 }

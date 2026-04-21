@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// Parse XMP XML from an APP1 segment or raw XML data.
 public struct XMPReader: Sendable {

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// Parses GPX XML files into GPXTrack structures.
 /// Uses Foundation XMLParser (SAX-style) for zero-dependency XML parsing.

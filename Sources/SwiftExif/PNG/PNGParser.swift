@@ -111,9 +111,7 @@ public struct PNGParser: Sendable {
         }
     }
 
-    /// Decompress zlib-compressed data using Foundation's built-in support.
     private static func decompress(_ data: Data) -> Data? {
-        // Use NSData's decompression if available (macOS 10.15+, iOS 13+)
-        return try? (data as NSData).decompressed(using: .zlib) as Data
+        ZlibInflate.inflate(data)
     }
 }
