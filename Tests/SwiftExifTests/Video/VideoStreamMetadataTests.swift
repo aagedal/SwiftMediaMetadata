@@ -23,12 +23,17 @@ final class VideoStreamMetadataTests: XCTestCase {
         let url = try fixtureURL("IMG_0151.MOV")
         let m = try VideoMetadata.read(from: url)
         XCTAssertEqual(m.format, .mov)
+        XCTAssertEqual(m.formatLongName, "QuickTime / MOV")
+        XCTAssertNotNil(m.fileSize)
         XCTAssertEqual(m.videoCodec, "hvc1")
         XCTAssertEqual(m.videoWidth, 3840)
         XCTAssertEqual(m.videoHeight, 2160)
         XCTAssertEqual(m.bitDepth, 10)
         XCTAssertEqual(m.chromaSubsampling, "4:2:0")
         XCTAssertEqual(m.colorInfo?.label, "bt2020-hlg")
+        XCTAssertEqual(m.videoStreams.first?.profile, "Main 10")
+        XCTAssertEqual(m.videoStreams.first?.pixelFormat, "yuv420p10le")
+        XCTAssertEqual(m.videoStreams.first?.avgFrameRate, m.frameRate)
         XCTAssertEqual(m.audioCodec, "mp4a")
         XCTAssertEqual(m.audioSampleRate, 48000)
         XCTAssertEqual(m.audioChannels, 2)
@@ -52,6 +57,10 @@ final class VideoStreamMetadataTests: XCTestCase {
         XCTAssertEqual(m.audioCodec, "lpcm")
         XCTAssertEqual(m.audioSampleRate, 48000)
         XCTAssertEqual(m.audioChannels, 1)
+        // tmcd timecode track present — should produce HH:MM:SS:FF.
+        if let tc = m.timecode {
+            XCTAssertTrue(tc.count == 11, "timecode should be HH:MM:SS:FF, got \(tc)")
+        }
     }
 
     // MARK: - AV1 HDR
@@ -63,6 +72,7 @@ final class VideoStreamMetadataTests: XCTestCase {
         XCTAssertEqual(m.bitDepth, 10)
         XCTAssertEqual(m.chromaSubsampling, "4:2:0")
         XCTAssertEqual(m.colorInfo?.label, "bt2020-pq")
+        XCTAssertEqual(m.videoStreams.first?.pixelFormat, "yuv420p10le")
     }
 
     // MARK: - Matroska / WebM
@@ -82,11 +92,15 @@ final class VideoStreamMetadataTests: XCTestCase {
         let url = try fixtureURL("Interstellar_2014_copy.mkv")
         let m = try VideoMetadata.read(from: url)
         XCTAssertEqual(m.format, .mkv)
+        XCTAssertEqual(m.formatLongName, "Matroska")
+        XCTAssertNotNil(m.fileSize)
         XCTAssertEqual(m.videoWidth, 3840)
         XCTAssertEqual(m.videoHeight, 2160)
         XCTAssertEqual(m.colorInfo?.primaries, 9)
         XCTAssertEqual(m.colorInfo?.transfer, 16)
         XCTAssertEqual(m.colorInfo?.matrix, 9)
+        // HEVC PQ → pixel format should land at yuv420p10le.
+        XCTAssertEqual(m.videoStreams.first?.pixelFormat, "yuv420p10le")
 
         // Blu-ray remux carries PGS subtitles (S_HDMV/PGS, TrackType 17).
         XCTAssertFalse(m.subtitleStreams.isEmpty)

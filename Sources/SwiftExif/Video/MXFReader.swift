@@ -148,6 +148,24 @@ public struct MXFReader: Sendable {
             }
         }
 
+        for i in 0..<metadata.videoStreams.count {
+            if metadata.videoStreams[i].pixelFormat == nil {
+                metadata.videoStreams[i].pixelFormat = PixelFormatDerivation.derive(
+                    chromaSubsampling: metadata.videoStreams[i].chromaSubsampling,
+                    bitDepth: metadata.videoStreams[i].bitDepth,
+                    fullRange: metadata.videoStreams[i].colorInfo?.fullRange,
+                    codec: metadata.videoStreams[i].codec
+                )
+            }
+            if metadata.videoStreams[i].avgFrameRate == nil,
+               let fps = metadata.videoStreams[i].frameRate {
+                metadata.videoStreams[i].avgFrameRate = fps
+                if metadata.videoStreams[i].rFrameRate == nil {
+                    metadata.videoStreams[i].rFrameRate = fps
+                }
+            }
+        }
+
         return metadata
     }
 

@@ -5,6 +5,15 @@ import Foundation
 /// for MP4/MOV/M4V (see `writeToData()` for details).
 public struct VideoMetadata: Sendable {
     public var format: VideoFormat
+    /// Human-readable container name, ffprobe-compatible (e.g. "QuickTime / MOV",
+    /// "MP4 (MPEG-4 Part 14)", "Matroska / WebM", "AVI (Audio Video Interleave)",
+    /// "MXF (Material eXchange Format)", "MPEG-TS (MPEG-2 Transport Stream)").
+    public var formatLongName: String?
+    /// File size in bytes (when read from a file or data blob).
+    public var fileSize: Int64?
+    /// Clip-level timecode (HH:MM:SS:FF) when the container embeds a dedicated
+    /// timecode track (e.g. QuickTime `tmcd`).
+    public var timecode: String?
     public var duration: TimeInterval?
     public var creationDate: Date?
     public var modificationDate: Date?
@@ -80,6 +89,8 @@ public struct VideoMetadata: Sendable {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         var metadata = try parseContainer(data)
         metadata.originalData = data
+        if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
+        if metadata.formatLongName == nil { metadata.formatLongName = defaultFormatLongName(metadata.format) }
 
         // Auto-probe NRT sidecar if no embedded camera metadata is present.
         if metadata.camera == nil || metadata.camera?.isEmpty == true {
@@ -98,7 +109,22 @@ public struct VideoMetadata: Sendable {
     public static func read(from data: Data) throws -> VideoMetadata {
         var metadata = try parseContainer(data)
         metadata.originalData = data
+        if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
+        if metadata.formatLongName == nil { metadata.formatLongName = defaultFormatLongName(metadata.format) }
         return metadata
+    }
+
+    private static func defaultFormatLongName(_ format: VideoFormat) -> String {
+        switch format {
+        case .mp4: return "MP4 (MPEG-4 Part 14)"
+        case .mov: return "QuickTime / MOV"
+        case .m4v: return "Apple iTunes Video (M4V)"
+        case .mxf: return "MXF (Material eXchange Format)"
+        case .mkv: return "Matroska"
+        case .webm: return "WebM"
+        case .avi: return "AVI (Audio Video Interleave)"
+        case .mpg: return "MPEG-PS / MPEG-TS"
+        }
     }
 
     private static func parseContainer(_ data: Data) throws -> VideoMetadata {

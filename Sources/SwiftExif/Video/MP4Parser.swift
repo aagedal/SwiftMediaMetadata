@@ -42,6 +42,19 @@ public struct MP4Parser: Sendable {
             parseTrak(trak.data, into: &metadata)
         }
 
+        // QuickTime timecode track (`tmcd`): the sample entry in stsd gives
+        // the frame rate + drop-frame flag and the first media sample in mdat
+        // is a 32-bit frame counter. Needs the original data blob for the
+        // mdat read, so we walk the trak list here rather than in parseTrak.
+        if metadata.timecode == nil {
+            for trak in moovChildren.filter({ $0.type == "trak" }) {
+                if let tc = parseTmcdTrackTimecode(trak.data, fullData: data) {
+                    metadata.timecode = tc
+                    break
+                }
+            }
+        }
+
         // Parse udta -> meta -> ilst (QuickTime metadata)
         if let udta = moovChildren.first(where: { $0.type == "udta" }) {
             parseUDTA(udta.data, into: &metadata)
@@ -65,6 +78,26 @@ public struct MP4Parser: Sendable {
                 }
             } catch {
                 metadata.warnings.append("C2PA parse error: \(error)")
+            }
+        }
+
+        // Derive ffprobe-compatible fields the parser can't read directly:
+        // pixelFormat, avg/rFrameRate.
+        for i in 0..<metadata.videoStreams.count {
+            if metadata.videoStreams[i].pixelFormat == nil {
+                metadata.videoStreams[i].pixelFormat = PixelFormatDerivation.derive(
+                    chromaSubsampling: metadata.videoStreams[i].chromaSubsampling,
+                    bitDepth: metadata.videoStreams[i].bitDepth,
+                    fullRange: metadata.videoStreams[i].colorInfo?.fullRange,
+                    codec: metadata.videoStreams[i].codec
+                )
+            }
+            if metadata.videoStreams[i].avgFrameRate == nil,
+               let fps = metadata.videoStreams[i].frameRate {
+                metadata.videoStreams[i].avgFrameRate = fps
+                if metadata.videoStreams[i].rFrameRate == nil {
+                    metadata.videoStreams[i].rFrameRate = fps
+                }
             }
         }
 
@@ -422,6 +455,155 @@ public struct MP4Parser: Sendable {
         }
     }
 
+    /// QuickTime timecode (`tmcd`) track extraction. The trak's stsd sample
+    /// entry describes the frame rate + drop-frame/wrap flags; the first
+    /// media sample in mdat is a 32-bit frame counter. We locate the sample
+    /// via stco (32-bit chunk offsets) or co64 (64-bit) and reach into the
+    /// full file blob to read those 4 bytes.
+    ///
+    /// QuickTime File Format § "Timecode Media Information" — see
+    /// https://developer.apple.com/documentation/quicktime-file-format/timecode_sample_description
+    private static func parseTmcdTrackTimecode(_ trakData: Data, fullData: Data) -> String? {
+        guard let trakChildren = try? ISOBMFFBoxReader.parseBoxes(from: trakData),
+              let mdia = trakChildren.first(where: { $0.type == "mdia" }),
+              let mdiaChildren = try? ISOBMFFBoxReader.parseBoxes(from: mdia.data),
+              let hdlr = mdiaChildren.first(where: { $0.type == "hdlr" }),
+              hdlr.data.count >= 12 else { return nil }
+
+        let handlerType = String(
+            data: hdlr.data[hdlr.data.startIndex + 8 ..< hdlr.data.startIndex + 12],
+            encoding: .ascii
+        ) ?? ""
+        guard handlerType == "tmcd" else { return nil }
+
+        guard let minf = mdiaChildren.first(where: { $0.type == "minf" }),
+              let minfChildren = try? ISOBMFFBoxReader.parseBoxes(from: minf.data),
+              let stbl = minfChildren.first(where: { $0.type == "stbl" }),
+              let stblChildren = try? ISOBMFFBoxReader.parseBoxes(from: stbl.data) else { return nil }
+
+        guard let stsd = stblChildren.first(where: { $0.type == "stsd" }),
+              let entry = parseTmcdSampleEntry(stsd.data) else { return nil }
+
+        // Find first chunk offset. Prefer co64 (64-bit) when present.
+        let chunkOffset: UInt64? = {
+            if let co64 = stblChildren.first(where: { $0.type == "co64" }),
+               let off = parseCO64First(co64.data) {
+                return off
+            }
+            if let stco = stblChildren.first(where: { $0.type == "stco" }),
+               let off = parseSTCOFirst(stco.data) {
+                return UInt64(off)
+            }
+            return nil
+        }()
+        guard let offset = chunkOffset,
+              offset + 4 <= UInt64(fullData.count) else { return nil }
+
+        let s = fullData.startIndex + Int(offset)
+        let counter = (UInt32(fullData[s]) << 24)
+            | (UInt32(fullData[s + 1]) << 16)
+            | (UInt32(fullData[s + 2]) << 8)
+            | UInt32(fullData[s + 3])
+
+        return formatTimecode(
+            frameCounter: counter,
+            numFrames: entry.numFrames,
+            dropFrame: entry.dropFrame
+        )
+    }
+
+    private struct TmcdSampleEntry {
+        let dropFrame: Bool
+        let numFrames: Int // frames per second (rounded up: 30 for 29.97, 24 for 23.98)
+    }
+
+    /// Decode a `tmcd` SampleEntry from stsd. Layout:
+    ///   FullBox header (8 bytes: size + type)
+    ///   Reserved(6) + data_reference_index(2)           // SampleEntry
+    ///   Reserved(4)                                     // TimeCodeSampleEntry
+    ///   Flags(4)  — bit 0 = drop frame, bit 1 = 24h max, bit 2 = negative ok,
+    ///               bit 3 = counter
+    ///   TimeScale(4)
+    ///   FrameDuration(4)
+    ///   NumberOfFrames(1)
+    ///   Reserved(1)
+    private static func parseTmcdSampleEntry(_ stsdData: Data) -> TmcdSampleEntry? {
+        guard stsdData.count >= 8 + 8 + 4 + 4 + 4 + 4 + 2 else { return nil }
+        var reader = BinaryReader(data: stsdData)
+        _ = try? reader.readBytes(4) // FullBox flags/version
+        _ = try? reader.readUInt32BigEndian() // entry_count
+        // Skip the SampleEntry size+type (8 bytes) and the 8 bytes of
+        // reserved+data_reference_index + extra reserved.
+        guard let entrySize = try? reader.readUInt32BigEndian(),
+              let typeBytes = try? reader.readBytes(4),
+              let fourCC = String(data: typeBytes, encoding: .ascii),
+              fourCC == "tmcd",
+              entrySize >= 34 else { return nil }
+        _ = try? reader.readBytes(6) // reserved
+        _ = try? reader.readUInt16BigEndian() // data_reference_index
+        _ = try? reader.readUInt32BigEndian() // reserved
+
+        guard let flags = try? reader.readUInt32BigEndian(),
+              let _ = try? reader.readUInt32BigEndian(), // timescale (unused — numFrames is enough)
+              let _ = try? reader.readUInt32BigEndian(), // frame duration
+              let numFrames = try? reader.readUInt8() else { return nil }
+        let dropFrame = (flags & 0x01) != 0
+        return TmcdSampleEntry(dropFrame: dropFrame, numFrames: Int(numFrames))
+    }
+
+    /// `stco`: FullBox header(4) + entry_count(4) + entry_count × 32-bit offsets.
+    private static func parseSTCOFirst(_ data: Data) -> UInt32? {
+        guard data.count >= 12 else { return nil }
+        var reader = BinaryReader(data: data)
+        _ = try? reader.readBytes(4) // flags+version
+        guard let count = try? reader.readUInt32BigEndian(), count > 0,
+              let first = try? reader.readUInt32BigEndian() else { return nil }
+        return first
+    }
+
+    /// `co64`: FullBox header(4) + entry_count(4) + entry_count × 64-bit offsets.
+    private static func parseCO64First(_ data: Data) -> UInt64? {
+        guard data.count >= 16 else { return nil }
+        var reader = BinaryReader(data: data)
+        _ = try? reader.readBytes(4)
+        guard let count = try? reader.readUInt32BigEndian(), count > 0,
+              let first = try? reader.readUInt64BigEndian() else { return nil }
+        return first
+    }
+
+    /// Format a tmcd frame counter to HH:MM:SS:FF (or HH:MM:SS;FF for
+    /// drop-frame). Drop-frame arithmetic per SMPTE 12M: skip two frames at
+    /// the start of every minute except every tenth minute, for 29.97 fps.
+    private static func formatTimecode(frameCounter: UInt32, numFrames: Int, dropFrame: Bool) -> String? {
+        guard numFrames > 0 else { return nil }
+        var frames = Int(frameCounter)
+        let fps = numFrames
+
+        if dropFrame {
+            // Drop-frame: commonly 29.97 (numFrames=30) or 59.94 (numFrames=60).
+            // Drop `dropCount` frames at the top of every minute except every 10th.
+            let dropCount = fps / 15 // 30fps → 2 drops, 60fps → 4 drops
+            let framesPer10Min = fps * 60 * 10 - dropCount * 9
+            let framesPerMin = fps * 60 - dropCount
+            let d = frames / framesPer10Min
+            let m = frames % framesPer10Min
+            if m > dropCount {
+                frames = frames + dropCount * 9 * d + dropCount * ((m - dropCount) / framesPerMin)
+            } else {
+                frames = frames + dropCount * 9 * d
+            }
+        }
+
+        let totalSeconds = frames / fps
+        let ff = frames % fps
+        let ss = totalSeconds % 60
+        let mm = (totalSeconds / 60) % 60
+        let hh = (totalSeconds / 3600) % 24
+
+        let sep = dropFrame ? ";" : ":"
+        return String(format: "%02d:%02d:%02d%@%02d", hh, mm, ss, sep, ff)
+    }
+
     private static func parseTKHDDimensions(_ data: Data) -> (width: Int, height: Int)? {
         guard data.count >= 4 else { return nil }
         var reader = BinaryReader(data: data)
@@ -615,10 +797,18 @@ public struct MP4Parser: Sendable {
         case "av1C":
             parseAV1C(box.data, into: &stream)
         case "avcC":
-            // AVC decoder config stores chroma/bit_depth in the SPS, which
-            // requires variable-length decoding beyond our scope. Every AVC
-            // profile shipped by Apple/Adobe/NVENC defaults to 4:2:0 8-bit —
-            // fill those in for display only.
+            // AVCDecoderConfigurationRecord (ISO/IEC 14496-15 §5.2.4.1.1):
+            //   byte 0 : configurationVersion (1)
+            //   byte 1 : AVCProfileIndication  (profile_idc from SPS)
+            //   byte 2 : profile_compatibility
+            //   byte 3 : AVCLevelIndication
+            // Chroma/bit_depth live in the SPS (variable-length decode beyond
+            // scope); every AVC profile shipped by Apple/Adobe/NVENC defaults
+            // to 4:2:0 8-bit, so surface that.
+            if box.data.count >= 2 {
+                let profileIDC = box.data[box.data.startIndex + 1]
+                stream.profile = avcProfileName(profileIDC)
+            }
             if stream.bitDepth == nil { stream.bitDepth = 8 }
             if stream.chromaSubsampling == nil { stream.chromaSubsampling = "4:2:0" }
         case "btrt":
@@ -717,9 +907,63 @@ public struct MP4Parser: Sendable {
     private static func parseHVCC(_ data: Data, into stream: inout VideoStream) {
         guard data.count >= 23 else { return }
         let s = data.startIndex
-        let chromaFormatIDC = data[s + 16] & 0x03
-        stream.chromaSubsampling = chromaSubsamplingLabel(forIDC: Int(chromaFormatIDC))
-        stream.bitDepth = Int(data[s + 17] & 0x07) + 8
+        // Byte 1 low 5 bits are profile_idc (0-31). 2=Main10, 1=Main, 3=Main
+        // Still Picture, 4=Range Extensions (with chroma_format_idc deciding
+        // "Main 4:2:2 10", "Main 4:4:4 12" etc.).
+        let profileIDC = Int(data[s + 1] & 0x1F)
+        let chromaFormatIDC = Int(data[s + 16] & 0x03)
+        let bitDepthLuma = Int(data[s + 17] & 0x07) + 8
+        stream.chromaSubsampling = chromaSubsamplingLabel(forIDC: chromaFormatIDC)
+        stream.bitDepth = bitDepthLuma
+        stream.profile = hevcProfileName(
+            profileIDC: profileIDC,
+            chromaFormatIDC: chromaFormatIDC,
+            bitDepth: bitDepthLuma
+        )
+    }
+
+    /// Map H.264 / AVC profile_idc (ISO/IEC 14496-10 Annex A.2) to the
+    /// ffprobe-compatible label. Covers the common profiles encoders actually
+    /// ship — rarer ones (Multiview, Stereo High) fall through to nil.
+    private static func avcProfileName(_ profileIDC: UInt8) -> String? {
+        switch profileIDC {
+        case 66: return "Constrained Baseline"
+        case 77: return "Main"
+        case 88: return "Extended"
+        case 100: return "High"
+        case 110: return "High 10"
+        case 122: return "High 4:2:2"
+        case 244: return "High 4:4:4 Predictive"
+        case 44: return "CAVLC 4:4:4 Intra"
+        case 83: return "Scalable Baseline"
+        case 86: return "Scalable High"
+        case 118: return "Multiview High"
+        case 128: return "Stereo High"
+        default: return nil
+        }
+    }
+
+    /// Map HEVC profile_idc → ffprobe-style profile string. Range-Extensions
+    /// profile names depend on chroma_format_idc and bit depth, so they're
+    /// composed here rather than via a flat table.
+    private static func hevcProfileName(profileIDC: Int, chromaFormatIDC: Int, bitDepth: Int) -> String? {
+        switch profileIDC {
+        case 1: return "Main"
+        case 2: return "Main 10"
+        case 3: return "Main Still Picture"
+        case 4:
+            let chromaLabel: String
+            switch chromaFormatIDC {
+            case 0: return "Monochrome \(bitDepth)"
+            case 1: chromaLabel = "4:2:0"
+            case 2: chromaLabel = "4:2:2"
+            case 3: chromaLabel = "4:4:4"
+            default: return "Range Extensions"
+            }
+            return "Main \(chromaLabel) \(bitDepth)"
+        default:
+            return nil
+        }
     }
 
     /// AV1CodecConfigurationRecord (AV1 in ISOBMFF spec, §2.3.3).
@@ -733,7 +977,12 @@ public struct MP4Parser: Sendable {
     ///   bits 0-1 chroma_sample_position
     private static func parseAV1C(_ data: Data, into stream: inout VideoStream) {
         guard data.count >= 3 else { return }
+        let byte1 = data[data.startIndex + 1]
         let byte2 = data[data.startIndex + 2]
+        // Byte 1: marker(1) + version(7), but AV1 actually uses top 3 bits as
+        // seq_profile (0=Main, 1=High, 2=Professional). Seven bits would waste
+        // 4 bits; ffmpeg reads byte[1] & 0xE0 >> 5.
+        let seqProfile = Int((byte1 & 0xE0) >> 5)
         let highBitDepth = (byte2 >> 6) & 0x01
         let twelveBit = (byte2 >> 5) & 0x01
         let monochrome = (byte2 >> 4) & 0x01
@@ -749,6 +998,12 @@ public struct MP4Parser: Sendable {
             stream.chromaSubsampling = "4:2:2"
         } else if ssx == 0 && ssy == 0 {
             stream.chromaSubsampling = "4:4:4"
+        }
+        switch seqProfile {
+        case 0: stream.profile = "Main"
+        case 1: stream.profile = "High"
+        case 2: stream.profile = "Professional"
+        default: break
         }
     }
 

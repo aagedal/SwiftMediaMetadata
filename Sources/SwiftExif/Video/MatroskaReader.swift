@@ -155,6 +155,21 @@ public struct MatroskaReader: Sendable {
                let depth = defaultBitDepth(forCodec: codec) {
                 metadata.videoStreams[i].bitDepth = depth
             }
+            if metadata.videoStreams[i].pixelFormat == nil {
+                metadata.videoStreams[i].pixelFormat = PixelFormatDerivation.derive(
+                    chromaSubsampling: metadata.videoStreams[i].chromaSubsampling,
+                    bitDepth: metadata.videoStreams[i].bitDepth,
+                    fullRange: metadata.videoStreams[i].colorInfo?.fullRange,
+                    codec: codec
+                )
+            }
+            if metadata.videoStreams[i].avgFrameRate == nil,
+               let fps = metadata.videoStreams[i].frameRate {
+                metadata.videoStreams[i].avgFrameRate = fps
+                if metadata.videoStreams[i].rFrameRate == nil {
+                    metadata.videoStreams[i].rFrameRate = fps
+                }
+            }
         }
         if metadata.chromaSubsampling == nil {
             metadata.chromaSubsampling = metadata.videoStreams.first?.chromaSubsampling
@@ -317,6 +332,7 @@ public struct MatroskaReader: Sendable {
         var trackType: UInt64 = 0
         var trackUID: UInt64 = 0
         var codecID: String?
+        var codecPrivate: Data?
         var defaultDurationNs: UInt64 = 0
         var language: String?
         var trackName: String?
@@ -346,6 +362,12 @@ public struct MatroskaReader: Sendable {
                 }
             case 0x86: // CodecID
                 codecID = readStringPayload(data, offset: vStart, size: vSize)
+            case 0x63A2: // CodecPrivate — codec-specific decoder config
+                if vSize > 0, vStart + vSize <= data.count {
+                    codecPrivate = Data(
+                        data[data.startIndex + vStart ..< data.startIndex + vStart + vSize]
+                    )
+                }
             case 0x23E383: // DefaultDuration (uint, ns)
                 if let v = readUIntPayload(data, offset: vStart, size: vSize) {
                     defaultDurationNs = v
@@ -381,6 +403,9 @@ public struct MatroskaReader: Sendable {
             stream.title = trackName
             if let s = videoBlockStart, let e = videoBlockEnd {
                 parseVideoBlock(data, from: s, end: e, into: &stream)
+            }
+            if let priv = codecPrivate, let id = codecID {
+                applyMatroskaCodecPrivate(id: id, data: priv, into: &stream)
             }
             // Store DefaultDuration as ns for now; parseSegment converts to fps
             // after this finishes so we know the Segment's TimestampScale.
@@ -488,15 +513,42 @@ public struct MatroskaReader: Sendable {
             if (try? reader.seek(to: vStart + vSize)) == nil { return }
         }
 
-        // A Tag without a TagTrackUID targets the Segment itself; we have no
-        // per-segment tag fields to fill, so skip.
-        guard !targetUIDs.isEmpty else { return }
+        // A Tag without a TagTrackUID targets the Segment itself — apply its
+        // COMMENT/DESCRIPTION/TITLE pairs to the top-level metadata.
+        if targetUIDs.isEmpty {
+            for (name, value) in simpleTags {
+                applySegmentTag(name: name, value: value, in: &metadata)
+            }
+            return
+        }
 
         for uid in targetUIDs {
             guard let ref = refs.first(where: { $0.uid == uid }) else { continue }
             for (name, value) in simpleTags {
                 applyTrackTag(name: name, value: value, to: ref, in: &metadata)
             }
+        }
+    }
+
+    /// Segment-level SimpleTag → top-level `VideoMetadata` field mapping.
+    /// `COMMENT`/`COMMENTS`/`DESCRIPTION` all carry long-form free text;
+    /// Matroska muxers use whichever one they feel like, so accept all three.
+    private static func applySegmentTag(
+        name: String,
+        value: String,
+        in metadata: inout VideoMetadata
+    ) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        switch name.uppercased() {
+        case "COMMENT", "COMMENTS", "DESCRIPTION":
+            if metadata.comment == nil { metadata.comment = trimmed }
+        case "TITLE":
+            if metadata.title == nil { metadata.title = trimmed }
+        case "ARTIST", "AUTHOR":
+            if metadata.artist == nil { metadata.artist = trimmed }
+        default:
+            break
         }
     }
 
@@ -558,10 +610,10 @@ public struct MatroskaReader: Sendable {
         to ref: TrackRef,
         in metadata: inout VideoMetadata
     ) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         switch name.uppercased() {
         case "BPS":
-            guard let bps = Int(value.trimmingCharacters(in: .whitespaces)),
-                  bps > 0 else { return }
+            guard let bps = Int(trimmed), bps > 0 else { return }
             switch ref.kind {
             case .video:
                 guard ref.index < metadata.videoStreams.count else { return }
@@ -576,8 +628,138 @@ public struct MatroskaReader: Sendable {
             case .subtitle:
                 break // SubtitleStream has no bitRate.
             }
+        case "NUMBER_OF_FRAMES":
+            guard let n = Int(trimmed), n > 0 else { return }
+            if ref.kind == .video, ref.index < metadata.videoStreams.count,
+               metadata.videoStreams[ref.index].frameCount == nil {
+                metadata.videoStreams[ref.index].frameCount = n
+            }
         default:
             break
+        }
+    }
+
+    /// Apply Matroska `CodecPrivate` bytes to a video stream when the codec
+    /// carries a known decoder-configuration record. The bytes are identical
+    /// to the corresponding ISOBMFF boxes (hvcC / avcC / av1C), so we read the
+    /// same offsets here — profile/bit-depth/chroma surface without pulling
+    /// in the full MP4 parser.
+    private static func applyMatroskaCodecPrivate(
+        id: String,
+        data: Data,
+        into stream: inout VideoStream
+    ) {
+        switch id {
+        case "V_MPEGH/ISO/HEVC":
+            // Same bytes as MP4 hvcC.
+            guard data.count >= 23 else { return }
+            let s = data.startIndex
+            let profileIDC = Int(data[s + 1] & 0x1F)
+            let chromaFormatIDC = Int(data[s + 16] & 0x03)
+            let bitDepth = Int(data[s + 17] & 0x07) + 8
+            if stream.profile == nil {
+                stream.profile = hevcProfileLabel(
+                    profileIDC: profileIDC,
+                    chromaFormatIDC: chromaFormatIDC,
+                    bitDepth: bitDepth
+                )
+            }
+            if stream.bitDepth == nil {
+                stream.bitDepth = bitDepth
+            }
+            if stream.chromaSubsampling == nil {
+                switch chromaFormatIDC {
+                case 0: stream.chromaSubsampling = "4:0:0"
+                case 1: stream.chromaSubsampling = "4:2:0"
+                case 2: stream.chromaSubsampling = "4:2:2"
+                case 3: stream.chromaSubsampling = "4:4:4"
+                default: break
+                }
+            }
+
+        case "V_MPEG4/ISO/AVC":
+            // Same bytes as MP4 avcC — profile lives at byte 1.
+            guard data.count >= 4 else { return }
+            let profileIDC = data[data.startIndex + 1]
+            if stream.profile == nil {
+                stream.profile = avcProfileLabel(profileIDC)
+            }
+            if stream.bitDepth == nil { stream.bitDepth = 8 }
+            if stream.chromaSubsampling == nil { stream.chromaSubsampling = "4:2:0" }
+
+        case "V_AV1":
+            // Same bytes as MP4 av1C.
+            guard data.count >= 3 else { return }
+            let byte1 = data[data.startIndex + 1]
+            let byte2 = data[data.startIndex + 2]
+            let seqProfile = Int((byte1 & 0xE0) >> 5)
+            let highBitDepth = (byte2 >> 6) & 0x01
+            let twelveBit = (byte2 >> 5) & 0x01
+            let monochrome = (byte2 >> 4) & 0x01
+            let ssx = (byte2 >> 3) & 0x01
+            let ssy = (byte2 >> 2) & 0x01
+
+            if stream.bitDepth == nil {
+                stream.bitDepth = twelveBit == 1 ? 12 : (highBitDepth == 1 ? 10 : 8)
+            }
+            if stream.chromaSubsampling == nil {
+                if monochrome == 1 {
+                    stream.chromaSubsampling = "4:0:0"
+                } else if ssx == 1 && ssy == 1 {
+                    stream.chromaSubsampling = "4:2:0"
+                } else if ssx == 1 && ssy == 0 {
+                    stream.chromaSubsampling = "4:2:2"
+                } else if ssx == 0 && ssy == 0 {
+                    stream.chromaSubsampling = "4:4:4"
+                }
+            }
+            if stream.profile == nil {
+                switch seqProfile {
+                case 0: stream.profile = "Main"
+                case 1: stream.profile = "High"
+                case 2: stream.profile = "Professional"
+                default: break
+                }
+            }
+
+        default:
+            break
+        }
+    }
+
+    /// HEVC profile_idc → label. Mirrors MP4Parser.hevcProfileName — duplicated
+    /// here to keep MatroskaReader self-contained rather than depending on
+    /// ISOBMFF internals.
+    private static func hevcProfileLabel(profileIDC: Int, chromaFormatIDC: Int, bitDepth: Int) -> String? {
+        switch profileIDC {
+        case 1: return "Main"
+        case 2: return "Main 10"
+        case 3: return "Main Still Picture"
+        case 4:
+            let chroma: String
+            switch chromaFormatIDC {
+            case 0: return "Monochrome \(bitDepth)"
+            case 1: chroma = "4:2:0"
+            case 2: chroma = "4:2:2"
+            case 3: chroma = "4:4:4"
+            default: return "Range Extensions"
+            }
+            return "Main \(chroma) \(bitDepth)"
+        default: return nil
+        }
+    }
+
+    /// AVC profile_idc → label. Mirrors MP4Parser.avcProfileName.
+    private static func avcProfileLabel(_ profileIDC: UInt8) -> String? {
+        switch profileIDC {
+        case 66: return "Constrained Baseline"
+        case 77: return "Main"
+        case 88: return "Extended"
+        case 100: return "High"
+        case 110: return "High 10"
+        case 122: return "High 4:2:2"
+        case 244: return "High 4:4:4 Predictive"
+        default: return nil
         }
     }
 
@@ -631,6 +813,10 @@ public struct MatroskaReader: Sendable {
                         stream.fieldOrder = (v == 2) ? .progressive : (v == 1) ? .unknown : nil
                     }
                 }
+            case 0x55B2: // BitsPerChannel (per-component bit depth, matches ffprobe bits_per_raw_sample)
+                if let v = readUIntPayload(data, offset: vStart, size: vSize), v > 0 {
+                    stream.bitDepth = Int(v)
+                }
             case 0x9D: // FieldOrder (0=progressive,1=tff,6=bff,9=tff(swapped),14=bff(swapped))
                 if let v = readUIntPayload(data, offset: vStart, size: vSize) {
                     switch v {
@@ -643,11 +829,15 @@ public struct MatroskaReader: Sendable {
             case 0x55B0: // Colour (master)
                 var info = stream.colorInfo ?? VideoColorInfo()
                 var chroma: (x: UInt64, y: UInt64)?
+                var siting: (h: UInt64?, v: UInt64?) = (nil, nil)
                 parseMatroskaColour(data, from: vStart, end: vStart + vSize,
-                                    info: &info, chroma: &chroma)
+                                    info: &info, chroma: &chroma, siting: &siting)
                 stream.colorInfo = info
                 if let ch = chroma {
                     stream.chromaSubsampling = chromaLabelFor(x: ch.x, y: ch.y)
+                }
+                if let loc = chromaLocationLabel(horz: siting.h, vert: siting.v) {
+                    stream.chromaLocation = loc
                 }
             case 0x2383E3: // FrameRate (deprecated float fps; keep only if nothing better)
                 if stream.frameRate == nil,
@@ -669,7 +859,8 @@ public struct MatroskaReader: Sendable {
         from start: Int,
         end: Int,
         info: inout VideoColorInfo,
-        chroma: inout (x: UInt64, y: UInt64)?
+        chroma: inout (x: UInt64, y: UInt64)?,
+        siting: inout (h: UInt64?, v: UInt64?)
     ) {
         var reader = BinaryReader(data: data)
         (try? reader.seek(to: start)) ?? ()
@@ -710,10 +901,39 @@ public struct MatroskaReader: Sendable {
                     c.y = v
                     chroma = c
                 }
+            case 0x55B7: // ChromaSitingHorz
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    siting.h = v
+                }
+            case 0x55B8: // ChromaSitingVert
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    siting.v = v
+                }
             default:
                 break
             }
             if (try? reader.seek(to: vStart + vSize)) == nil { return }
+        }
+    }
+
+    /// Matroska ChromaSitingHorz/Vert values map to ffprobe chroma_location:
+    ///   Horz 1 + Vert 1  → left
+    ///   Horz 1 + Vert 2  → topleft
+    ///   Horz 1 + Vert 3  → bottomleft (rare)
+    ///   Horz 2 + Vert 1  → center
+    ///   Horz 2 + Vert 2  → top
+    ///   Horz 2 + Vert 3  → bottom
+    /// Values of 0 are "unspecified" and we treat them as unknown.
+    private static func chromaLocationLabel(horz: UInt64?, vert: UInt64?) -> String? {
+        guard let h = horz, let v = vert, h != 0, v != 0 else { return nil }
+        switch (h, v) {
+        case (1, 1): return "left"
+        case (1, 2): return "topleft"
+        case (1, 3): return "bottomleft"
+        case (2, 1): return "center"
+        case (2, 2): return "top"
+        case (2, 3): return "bottom"
+        default: return nil
         }
     }
 

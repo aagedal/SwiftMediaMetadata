@@ -82,6 +82,36 @@ public struct MPEGReader: Sendable {
             if metadata.frameRate == nil { metadata.frameRate = v.frameRate }
         }
 
+        // MPEG-1/2 is always 4:2:0 8-bit. H.264/H.265 TS streams are typically
+        // 4:2:0 8-bit too (the few 10-bit streams out there would need SPS
+        // parsing to be sure) — mark those as unknown for now.
+        for i in 0..<metadata.videoStreams.count {
+            let codec = metadata.videoStreams[i].codec ?? ""
+            if codec == "mpeg2video" || codec == "mpeg1video" {
+                if metadata.videoStreams[i].chromaSubsampling == nil {
+                    metadata.videoStreams[i].chromaSubsampling = "4:2:0"
+                }
+                if metadata.videoStreams[i].bitDepth == nil {
+                    metadata.videoStreams[i].bitDepth = 8
+                }
+            }
+            if metadata.videoStreams[i].pixelFormat == nil {
+                metadata.videoStreams[i].pixelFormat = PixelFormatDerivation.derive(
+                    chromaSubsampling: metadata.videoStreams[i].chromaSubsampling,
+                    bitDepth: metadata.videoStreams[i].bitDepth,
+                    fullRange: metadata.videoStreams[i].colorInfo?.fullRange,
+                    codec: codec
+                )
+            }
+            if metadata.videoStreams[i].avgFrameRate == nil,
+               let fps = metadata.videoStreams[i].frameRate {
+                metadata.videoStreams[i].avgFrameRate = fps
+                if metadata.videoStreams[i].rFrameRate == nil {
+                    metadata.videoStreams[i].rFrameRate = fps
+                }
+            }
+        }
+
         return metadata
     }
 

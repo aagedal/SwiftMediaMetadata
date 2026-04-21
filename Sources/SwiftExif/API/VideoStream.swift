@@ -56,6 +56,10 @@ public struct VideoStream: Sendable, Equatable {
     public var index: Int
     public var codec: String?
     public var codecName: String?
+    /// Codec profile name (e.g. "Main", "Main 10", "High", "Main 4:4:4 12",
+    /// "Constrained Baseline"). Populated where the codec's decoder-config
+    /// record carries an unambiguous profile_idc (HEVC, AV1, AVC).
+    public var profile: String?
     public var width: Int?
     public var height: Int?
     public var displayWidth: Int?
@@ -65,14 +69,34 @@ public struct VideoStream: Sendable, Equatable {
     public var bitDepth: Int?
     /// Stream bitrate in bits per second (if advertised by the container).
     public var bitRate: Int?
+    /// Single frame-rate figure (kept for backwards compatibility — equals
+    /// `avgFrameRate` when available, else `rFrameRate`).
     public var frameRate: Double?
+    /// Average frame rate across the stream (ffprobe `avg_frame_rate`).
+    public var avgFrameRate: Double?
+    /// "Real" frame rate — the base cadence the decoder ticks at, typically
+    /// equal to the inverse of DefaultDuration / sample delta (ffprobe
+    /// `r_frame_rate`).
+    public var rFrameRate: Double?
     public var duration: TimeInterval?
     public var fieldOrder: VideoFieldOrder?
     public var colorInfo: VideoColorInfo?
     /// Chroma subsampling notation (e.g. "4:2:0", "4:2:2", "4:4:4", "4:0:0").
     public var chromaSubsampling: String?
+    /// Chroma sample location (e.g. "left", "center", "topleft", "top",
+    /// "bottomleft", "bottom"). Matches ffprobe `chroma_location`.
+    public var chromaLocation: String?
+    /// ffprobe-style pixel format string (e.g. "yuv420p", "yuv420p10le",
+    /// "yuvj420p", "yuv444p12le"). Derived from codec + bit depth + chroma
+    /// subsampling + color range when the container doesn't name one directly.
+    public var pixelFormat: String?
     /// Number of video frames (from container metadata).
     public var frameCount: Int?
+    /// True when the track is a cover-art / attached-picture track rather
+    /// than a timed video track (ffprobe `DISPOSITION:attached_pic`).
+    public var isAttachedPic: Bool?
+    /// Per-stream timecode (HH:MM:SS:FF) where available.
+    public var timecode: String?
     /// Optional human-readable track title / label set by the muxer.
     public var title: String?
 
@@ -84,6 +108,7 @@ public struct VideoStream: Sendable, Equatable {
         lhs.index == rhs.index
             && lhs.codec == rhs.codec
             && lhs.codecName == rhs.codecName
+            && lhs.profile == rhs.profile
             && lhs.width == rhs.width
             && lhs.height == rhs.height
             && lhs.displayWidth == rhs.displayWidth
@@ -93,11 +118,17 @@ public struct VideoStream: Sendable, Equatable {
             && lhs.bitDepth == rhs.bitDepth
             && lhs.bitRate == rhs.bitRate
             && lhs.frameRate == rhs.frameRate
+            && lhs.avgFrameRate == rhs.avgFrameRate
+            && lhs.rFrameRate == rhs.rFrameRate
             && lhs.duration == rhs.duration
             && lhs.fieldOrder == rhs.fieldOrder
             && lhs.colorInfo == rhs.colorInfo
             && lhs.chromaSubsampling == rhs.chromaSubsampling
+            && lhs.chromaLocation == rhs.chromaLocation
+            && lhs.pixelFormat == rhs.pixelFormat
             && lhs.frameCount == rhs.frameCount
+            && lhs.isAttachedPic == rhs.isAttachedPic
+            && lhs.timecode == rhs.timecode
             && lhs.title == rhs.title
     }
 }
@@ -134,6 +165,8 @@ public struct AudioStream: Sendable, Equatable {
     public var index: Int
     public var codec: String?
     public var codecName: String?
+    /// Codec profile (e.g. "LC", "HE-AAC", "HE-AACv2", "Main", "LTP").
+    public var profile: String?
     public var sampleRate: Int?
     public var channels: Int?
     public var channelLayout: String?
@@ -141,6 +174,8 @@ public struct AudioStream: Sendable, Equatable {
     public var bitRate: Int?
     public var duration: TimeInterval?
     public var language: String?
+    /// Default-track flag if the container signals one.
+    public var isDefault: Bool?
     /// Optional human-readable track title / label set by the muxer.
     public var title: String?
 
