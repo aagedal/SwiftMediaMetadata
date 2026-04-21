@@ -132,6 +132,7 @@ struct ReadCommand: ParsableCommand {
             var d: [String: String] = ["StreamType": "video", "Index": String(stream.index)]
             if let v = stream.codec          { d["Codec"]            = v }
             if let v = stream.codecName      { d["CodecName"]        = v }
+            if let v = stream.profile        { d["Profile"]          = v }
             if let v = stream.width          { d["Width"]            = String(v) }
             if let v = stream.height         { d["Height"]           = String(v) }
             if let v = stream.displayWidth   { d["DisplayWidth"]     = String(v) }
@@ -140,10 +141,16 @@ struct ReadCommand: ParsableCommand {
             if let v = stream.bitDepth       { d["BitDepth"]         = String(v) }
             if let v = stream.bitRate        { d["BitRate"]          = String(v) }
             if let v = stream.frameRate      { d["FrameRate"]        = String(v) }
+            if let v = stream.avgFrameRate   { d["AvgFrameRate"]     = String(v) }
+            if let v = stream.rFrameRate     { d["RFrameRate"]       = String(v) }
             if let v = stream.duration       { d["Duration"]         = String(v) }
             if let v = stream.fieldOrder     { d["FieldOrder"]       = v.rawValue }
             if let v = stream.chromaSubsampling { d["ChromaSubsampling"] = v }
+            if let v = stream.chromaLocation { d["ChromaLocation"]   = v }
+            if let v = stream.pixelFormat    { d["PixelFormat"]      = v }
             if let v = stream.frameCount     { d["FrameCount"]       = String(v) }
+            if let v = stream.isAttachedPic  { d["AttachedPic"]      = String(v) }
+            if let v = stream.timecode       { d["Timecode"]         = v }
             if let v = stream.title          { d["Title"]            = v }
             if let c = stream.colorInfo {
                 if let p = c.primaries { d["ColorPrimaries"] = String(p) }
@@ -158,6 +165,7 @@ struct ReadCommand: ParsableCommand {
             var d: [String: String] = ["StreamType": "audio", "Index": String(stream.index)]
             if let v = stream.codec         { d["Codec"]         = v }
             if let v = stream.codecName     { d["CodecName"]     = v }
+            if let v = stream.profile       { d["Profile"]       = v }
             if let v = stream.sampleRate    { d["SampleRate"]    = String(v) }
             if let v = stream.channels      { d["Channels"]      = String(v) }
             if let v = stream.channelLayout { d["ChannelLayout"] = v }
@@ -165,6 +173,7 @@ struct ReadCommand: ParsableCommand {
             if let v = stream.bitRate       { d["BitRate"]       = String(v) }
             if let v = stream.duration      { d["Duration"]      = String(v) }
             if let v = stream.language      { d["Language"]      = v }
+            if let v = stream.isDefault     { d["Default"]       = String(v) }
             if let v = stream.title         { d["Title"]         = v }
             rows.append(d)
         }

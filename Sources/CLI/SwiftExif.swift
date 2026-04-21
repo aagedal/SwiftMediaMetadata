@@ -6,7 +6,7 @@ struct SwiftExifCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "swift-exif",
         abstract: "Read, write, and manipulate image/video metadata.",
-        version: "1.0.0",
+        version: "1.2.0",
         subcommands: [
             ReadCommand.self,
             WriteCommand.self,
