@@ -54,18 +54,24 @@ public struct VideoMetadataExporter: Sendable {
             if let p = color.primaries { dict["ColorPrimaries"] = p }
             if let t = color.transfer { dict["TransferCharacteristics"] = t }
             if let m = color.matrix { dict["MatrixCoefficients"] = m }
-            if let full = color.fullRange { dict["ColorRange"] = full ? "full" : "limited" }
+            if let full = color.fullRange { dict["ColorRange"] = full ? "pc" : "tv" }
             if let label = color.label { dict["ColorSpace"] = label }
         }
         if !metadata.videoStreams.isEmpty {
             dict["VideoStreamCount"] = metadata.videoStreams.count
             let titles = metadata.videoStreams.compactMap(\.title)
             if !titles.isEmpty { dict["VideoStreamTitles"] = titles }
+            let attached = metadata.videoStreams.map { $0.isAttachedPic ?? false }
+            dict["VideoAttachedPicFlags"] = attached
+            let defaults = metadata.videoStreams.map { $0.isDefault ?? true }
+            dict["VideoDefaultFlags"] = defaults
         }
         if !metadata.audioStreams.isEmpty {
             dict["AudioStreamCount"] = metadata.audioStreams.count
             let titles = metadata.audioStreams.compactMap(\.title)
             if !titles.isEmpty { dict["AudioStreamTitles"] = titles }
+            let defaults = metadata.audioStreams.map { $0.isDefault ?? true }
+            dict["AudioDefaultFlags"] = defaults
         }
         if !metadata.subtitleStreams.isEmpty {
             dict["SubtitleStreamCount"] = metadata.subtitleStreams.count
@@ -76,15 +82,13 @@ public struct VideoMetadataExporter: Sendable {
             if !languages.isEmpty { dict["SubtitleLanguages"] = languages }
             let titles = metadata.subtitleStreams.compactMap { $0.title }
             if !titles.isEmpty { dict["SubtitleTitles"] = titles }
-            // Disposition flags (default / forced / SDH). Only emit when the
-            // container actually signaled something so absent flags aren't
-            // reported as `false`.
-            let defaults = metadata.subtitleStreams.compactMap(\.isDefault)
-            if !defaults.isEmpty { dict["SubtitleDefaultFlags"] = defaults }
-            let forced = metadata.subtitleStreams.compactMap(\.isForced)
-            if !forced.isEmpty { dict["SubtitleForcedFlags"] = forced }
-            let sdh = metadata.subtitleStreams.compactMap(\.isHearingImpaired)
-            if !sdh.isEmpty { dict["SubtitleHearingImpairedFlags"] = sdh }
+            // Disposition flags (default / forced / SDH). Always emit per-track
+            // arrays so consumers can index by stream position; missing values
+            // default per Matroska spec (FlagDefault=1, FlagForced=0,
+            // FlagHearingImpaired=0).
+            dict["SubtitleDefaultFlags"]         = metadata.subtitleStreams.map { $0.isDefault ?? true }
+            dict["SubtitleForcedFlags"]          = metadata.subtitleStreams.map { $0.isForced ?? false }
+            dict["SubtitleHearingImpairedFlags"] = metadata.subtitleStreams.map { $0.isHearingImpaired ?? false }
         }
         if let t = metadata.title { dict["Title"] = t }
         if let a = metadata.artist { dict["Artist"] = a }

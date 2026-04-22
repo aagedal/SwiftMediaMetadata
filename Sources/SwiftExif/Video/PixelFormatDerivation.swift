@@ -46,9 +46,9 @@ enum PixelFormatDerivation {
             }
         }
 
-        // Full-range YUV for 4:2:0 8-bit gets the `yuvj420p` label (used by
-        // JPEG-sourced MJPEG and some MPEG-4 ASP variants). Other depths
-        // ffprobe leaves as plain yuv420p + a separate color_range flag.
+        // Full-range YUV for 8-bit 4:2:0/4:2:2/4:4:4 gets the `yuvjXXXp` label
+        // (ffprobe's MJPEG path; matches yuvj420p/yuvj422p/yuvj444p). Other
+        // depths ffprobe leaves as plain yuv420p + a separate color_range flag.
         let suffix: String
         switch chroma {
         case "4:2:0": suffix = "420p"
@@ -58,7 +58,8 @@ enum PixelFormatDerivation {
         }
 
         let base: String
-        if depth == 8, chroma == "4:2:0", fullRange == true {
+        if depth == 8, fullRange == true,
+           chroma == "4:2:0" || chroma == "4:2:2" || chroma == "4:4:4" {
             base = "yuvj\(suffix)"
         } else {
             base = "yuv\(suffix)"

@@ -34,6 +34,45 @@ final class MatroskaReaderTests: XCTestCase {
         XCTAssertEqual(m.audioStreams[0].bitRate, 96_000)
     }
 
+    /// MakeMKV → ffmpeg-trim pipelines leave the original `BPS` SimpleTag on
+    /// every track (statistics weren't refreshed after the lossless cut). A
+    /// 50 Mbps video bitrate copied verbatim onto a DTS audio track is
+    /// nonsense, so the reader must drop the duplicated values rather than
+    /// surface them as audio bitrates.
+    func testMKVStaleSharedBPSIsDropped() throws {
+        // Same value on both tracks — the stale-stats guard should clear the
+        // audio bitrate (and the stream-count > 1 invariant means we keep the
+        // video's, since dropping it loses real information).
+        let url = try generateMKVWithBPSTags(videoBPS: 51_669_696, audioBPS: 51_669_696)
+        let m = try VideoMetadata.read(from: url)
+        XCTAssertEqual(m.videoStreams.count, 1)
+        XCTAssertEqual(m.audioStreams.count, 1)
+        XCTAssertNil(m.audioStreams[0].bitRate,
+                     "shared BPS across video+audio must be treated as stale")
+    }
+
+    /// MKV containers without explicit DisplayWidth/Height should still report
+    /// a DAR/PAR — square pixels are the implicit default.
+    func testMKVDerivedSquarePixelAspectRatio() throws {
+        let url = try generateMKVWithTitles(videoTitle: "v", audioTitle: "a")
+        let m = try VideoMetadata.read(from: url)
+        let v = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(v.displayWidth, v.width)
+        XCTAssertEqual(v.displayHeight, v.height)
+        XCTAssertEqual(v.pixelAspectRatio?.0, 1)
+        XCTAssertEqual(v.pixelAspectRatio?.1, 1)
+    }
+
+    /// Container `bit_rate` should fall back to file-size × 8 / duration when
+    /// the EBML stream doesn't expose one explicitly — matches ffprobe's
+    /// `format.bit_rate` column.
+    func testMKVContainerBitRateFallback() throws {
+        let url = try generateMKVWithTitles(videoTitle: "v", audioTitle: "a")
+        let m = try VideoMetadata.read(from: url)
+        XCTAssertNotNil(m.bitRate)
+        XCTAssertGreaterThan(m.bitRate ?? 0, 0)
+    }
+
     // MARK: - Fixtures
 
     private func generateMKVWithTitles(videoTitle: String, audioTitle: String) throws -> URL {

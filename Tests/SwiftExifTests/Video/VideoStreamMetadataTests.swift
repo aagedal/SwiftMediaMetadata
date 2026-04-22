@@ -92,7 +92,7 @@ final class VideoStreamMetadataTests: XCTestCase {
         let url = try fixtureURL("Interstellar_2014_copy.mkv")
         let m = try VideoMetadata.read(from: url)
         XCTAssertEqual(m.format, .mkv)
-        XCTAssertEqual(m.formatLongName, "Matroska")
+        XCTAssertEqual(m.formatLongName, "Matroska / WebM")
         XCTAssertNotNil(m.fileSize)
         XCTAssertEqual(m.videoWidth, 3840)
         XCTAssertEqual(m.videoHeight, 2160)
@@ -116,9 +116,20 @@ final class VideoStreamMetadataTests: XCTestCase {
         let url = try fixtureURL("n-intervju_249165_multitrack.mxf")
         let m = try VideoMetadata.read(from: url)
         XCTAssertEqual(m.format, .mxf)
+        // Interlaced HD: StoredHeight in the CDCI descriptor is the field
+        // height (540); ffprobe reports the frame height (1080). The reader
+        // doubles it whenever FrameLayout == SeparateFields.
         XCTAssertEqual(m.videoWidth, 1440)
-        XCTAssertEqual(m.videoHeight, 540)
+        XCTAssertEqual(m.videoHeight, 1080)
         XCTAssertEqual(m.frameRate, 25.0)
+        // AspectRatio (0x320E) = 16:9, so PAR = (16/9 × 1080)/1440 = 4:3.
+        XCTAssertEqual(m.videoStreams.first?.pixelAspectRatio?.0, 4)
+        XCTAssertEqual(m.videoStreams.first?.pixelAspectRatio?.1, 3)
+        // AVC-Intra class discriminator (UL byte 14 = 0x21 → Class 100, 10-bit).
+        XCTAssertEqual(m.videoStreams.first?.profile, "High 10 Intra")
+        // Sequence/Material Package Duration fallback: 79.76 s at 25 fps.
+        XCTAssertNotNil(m.duration)
+        XCTAssertEqual(m.duration ?? 0, 79.76, accuracy: 0.1)
         XCTAssertEqual(m.audioSampleRate, 48000)
         XCTAssertEqual(m.audioChannels, 1)
     }

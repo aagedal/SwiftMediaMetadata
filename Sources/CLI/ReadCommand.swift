@@ -132,12 +132,17 @@ struct ReadCommand: ParsableCommand {
             var d: [String: String] = ["StreamType": "video", "Index": String(stream.index)]
             if let v = stream.codec          { d["Codec"]            = v }
             if let v = stream.codecName      { d["CodecName"]        = v }
+            if let v = stream.codec, let s = ffprobeShortVideoCodec(v) { d["CodecShort"] = s }
             if let v = stream.profile        { d["Profile"]          = v }
             if let v = stream.width          { d["Width"]            = String(v) }
             if let v = stream.height         { d["Height"]           = String(v) }
             if let v = stream.displayWidth   { d["DisplayWidth"]     = String(v) }
             if let v = stream.displayHeight  { d["DisplayHeight"]    = String(v) }
             if let p = stream.pixelAspectRatio { d["PixelAspectRatio"] = "\(p.0):\(p.1)" }
+            if let w = stream.displayWidth, let h = stream.displayHeight, w > 0, h > 0 {
+                let g = gcdInt(w, h)
+                d["DisplayAspectRatio"] = "\(w / g):\(h / g)"
+            }
             if let v = stream.bitDepth       { d["BitDepth"]         = String(v) }
             if let v = stream.bitRate        { d["BitRate"]          = String(v) }
             if let v = stream.frameRate      { d["FrameRate"]        = String(v) }
@@ -149,14 +154,18 @@ struct ReadCommand: ParsableCommand {
             if let v = stream.chromaLocation { d["ChromaLocation"]   = v }
             if let v = stream.pixelFormat    { d["PixelFormat"]      = v }
             if let v = stream.frameCount     { d["FrameCount"]       = String(v) }
-            if let v = stream.isAttachedPic  { d["AttachedPic"]      = String(v) }
+            // Disposition flags — always emit so JSON consumers can read a
+            // stable shape rather than guess at missing keys.
+            d["IsAttachedPic"]    = String(stream.isAttachedPic ?? false)
+            d["IsDefault"]        = String(stream.isDefault ?? true)
+            d["IsForced"]         = String(stream.isForced ?? false)
             if let v = stream.timecode       { d["Timecode"]         = v }
             if let v = stream.title          { d["Title"]            = v }
             if let c = stream.colorInfo {
                 if let p = c.primaries { d["ColorPrimaries"] = String(p) }
                 if let t = c.transfer  { d["TransferCharacteristics"] = String(t) }
                 if let m = c.matrix    { d["MatrixCoefficients"] = String(m) }
-                if let r = c.fullRange { d["ColorRange"] = r ? "full" : "limited" }
+                if let r = c.fullRange { d["ColorRange"] = r ? "pc" : "tv" }
                 if let l = c.label     { d["ColorSpace"] = l }
             }
             rows.append(d)
@@ -165,6 +174,9 @@ struct ReadCommand: ParsableCommand {
             var d: [String: String] = ["StreamType": "audio", "Index": String(stream.index)]
             if let v = stream.codec         { d["Codec"]         = v }
             if let v = stream.codecName     { d["CodecName"]     = v }
+            if let v = stream.codec, let s = ffprobeShortAudioCodec(v, bitDepth: stream.bitDepth) {
+                d["CodecShort"] = s
+            }
             if let v = stream.profile       { d["Profile"]       = v }
             if let v = stream.sampleRate    { d["SampleRate"]    = String(v) }
             if let v = stream.channels      { d["Channels"]      = String(v) }
@@ -173,7 +185,7 @@ struct ReadCommand: ParsableCommand {
             if let v = stream.bitRate       { d["BitRate"]       = String(v) }
             if let v = stream.duration      { d["Duration"]      = String(v) }
             if let v = stream.language      { d["Language"]      = v }
-            if let v = stream.isDefault     { d["Default"]       = String(v) }
+            d["IsDefault"] = String(stream.isDefault ?? true)
             if let v = stream.title         { d["Title"]         = v }
             rows.append(d)
         }
@@ -181,15 +193,114 @@ struct ReadCommand: ParsableCommand {
             var d: [String: String] = ["StreamType": "subtitle", "Index": String(stream.index)]
             if let v = stream.codec             { d["Codec"]     = v }
             if let v = stream.codecName         { d["CodecName"] = v }
+            if let v = stream.codec, let s = ffprobeShortSubtitleCodec(v) { d["CodecShort"] = s }
             if let v = stream.language          { d["Language"]  = v }
             if let v = stream.title             { d["Title"]     = v }
-            if let v = stream.isDefault         { d["Default"]   = String(v) }
-            if let v = stream.isForced          { d["Forced"]    = String(v) }
-            if let v = stream.isHearingImpaired { d["HearingImpaired"] = String(v) }
+            d["IsDefault"]         = String(stream.isDefault ?? true)
+            d["IsForced"]          = String(stream.isForced ?? false)
+            d["IsHearingImpaired"] = String(stream.isHearingImpaired ?? false)
             if let v = stream.duration          { d["Duration"]  = String(v) }
             rows.append(d)
         }
         return rows
+    }
+
+    private func gcdInt(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a), y = abs(b)
+        while y != 0 { (x, y) = (y, x % y) }
+        return max(x, 1)
+    }
+
+    /// Map container-native video codec ids onto ffmpeg's short codec names
+    /// (e.g. "hvc1" / "V_MPEGH/ISO/HEVC" → "hevc"). Consumers that already key
+    /// off ffprobe output can drop SwiftExif in without a translation table.
+    private func ffprobeShortVideoCodec(_ codec: String) -> String? {
+        switch codec {
+        case "V_MPEG4/ISO/AVC", "avc1", "avc3": return "h264"
+        case "V_MPEGH/ISO/HEVC", "hvc1", "hev1", "hev2", "dvh1", "dvhe": return "hevc"
+        case "V_AV1", "av01": return "av1"
+        case "V_VP8", "vp08": return "vp8"
+        case "V_VP9", "vp09": return "vp9"
+        case "V_MPEG4/ISO/ASP", "mp4v": return "mpeg4"
+        case "V_MPEG2": return "mpeg2video"
+        case "V_MPEG1": return "mpeg1video"
+        case "V_PRORES", "apch", "apcn", "apcs", "apco", "ap4h", "ap4x": return "prores"
+        case "aprh", "aprn": return "prores_raw"
+        case "apv1": return "apv"
+        case "V_THEORA": return "theora"
+        case "V_MJPEG", "mjpa", "mjpb", "jpeg": return "mjpeg"
+        case "vvc1", "vvi1": return "vvc"
+        default: return nil
+        }
+    }
+
+    /// Map container-native audio codec ids onto ffmpeg's short codec names.
+    /// PCM short names depend on bit depth and endianness (e.g. `pcm_s24le`,
+    /// `pcm_s16be`) — ISOBMFF spells endianness in the FourCC (`sowt`/`twos`),
+    /// Matroska in the codec id, and bit depth comes from the audio sample
+    /// entry. We mirror ffprobe's naming convention so downstream tooling can
+    /// pattern-match a single string.
+    private func ffprobeShortAudioCodec(_ codec: String, bitDepth: Int?) -> String? {
+        switch codec {
+        case "A_AAC", "A_AAC/MPEG4/LC", "A_AAC/MPEG4/LC/SBR", "mp4a": return "aac"
+        case "A_AC3", "ac-3": return "ac3"
+        case "A_EAC3", "ec-3": return "eac3"
+        case "A_DTS", "A_DTS/EXPRESS", "A_DTS/LOSSLESS": return "dts"
+        case "A_FLAC", "fLaC": return "flac"
+        case "A_OPUS", "Opus": return "opus"
+        case "A_VORBIS": return "vorbis"
+        case "A_MPEG/L3": return "mp3"
+        case "A_MPEG/L2": return "mp2"
+        case "A_TRUEHD": return "truehd"
+        case "alac": return "alac"
+        // PCM family — ffprobe encodes bit depth + endianness in the codec
+        // name. Match that so consumers can parse a single string.
+        case "lpcm":
+            return pcmShortName(bitDepth: bitDepth, endian: .little, signed: true)
+        case "ipcm":
+            return pcmShortName(bitDepth: bitDepth, endian: .big, signed: true)
+        case "sowt":
+            return pcmShortName(bitDepth: bitDepth, endian: .little, signed: true)
+        case "twos":
+            return pcmShortName(bitDepth: bitDepth, endian: .big, signed: true)
+        case "in24":
+            return pcmShortName(bitDepth: 24, endian: .big, signed: true)
+        case "in32":
+            return pcmShortName(bitDepth: 32, endian: .big, signed: true)
+        case "fl32":
+            return "pcm_f32be"
+        case "fl64":
+            return "pcm_f64be"
+        case "A_PCM/INT/LIT":
+            return pcmShortName(bitDepth: bitDepth, endian: .little, signed: true)
+        case "A_PCM/INT/BIG":
+            return pcmShortName(bitDepth: bitDepth, endian: .big, signed: true)
+        case "A_PCM/FLOAT/IEEE":
+            return (bitDepth ?? 32) == 64 ? "pcm_f64le" : "pcm_f32le"
+        default: return nil
+        }
+    }
+
+    private enum PCMEndian { case little, big }
+
+    private func pcmShortName(bitDepth: Int?, endian: PCMEndian, signed: Bool) -> String {
+        let depth = bitDepth ?? 16
+        let suffix = endian == .little ? "le" : "be"
+        let prefix = signed ? "s" : "u"
+        return "pcm_\(prefix)\(depth)\(suffix)"
+    }
+
+    private func ffprobeShortSubtitleCodec(_ codec: String) -> String? {
+        switch codec {
+        case "S_TEXT/UTF8": return "subrip"
+        case "S_TEXT/ASS": return "ass"
+        case "S_TEXT/SSA": return "ssa"
+        case "S_TEXT/WEBVTT", "wvtt": return "webvtt"
+        case "S_VOBSUB": return "dvd_subtitle"
+        case "S_HDMV/PGS": return "hdmv_pgs_subtitle"
+        case "S_HDMV/TEXTST": return "hdmv_text_subtitle"
+        default: return nil
+        }
     }
 
     private func printStreamsJSON(_ reports: [(String, [[String: String]])]) {

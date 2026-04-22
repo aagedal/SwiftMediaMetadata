@@ -61,6 +61,12 @@ public struct MXFReader: Sendable {
         }
 
         var metadata = VideoMetadata(format: .mxf)
+        // Seed for fallback-duration derivation. Many MXF writers (Sony MXF
+        // OP1a, IMF) leave the picture descriptor's ContainerDuration at zero
+        // and carry the real clip length on a Sequence / Track set instead.
+        var maxSetDurationUnits: UInt64 = 0
+        var setEditRateNum: UInt32 = 0
+        var setEditRateDen: UInt32 = 0
 
         var reader = BinaryReader(data: data)
         while reader.remainingCount >= 17 {
@@ -77,8 +83,10 @@ public struct MXFReader: Sendable {
             let peekIsJUMBF = looksLikeJUMBF(peek, totalLength: length)
             let keyIsPictureDescriptor = isPictureEssenceDescriptorKey(key)
             let keyIsSoundDescriptor = isSoundEssenceDescriptorKey(key)
+            let keyIsDurationSet = isDurationBearingSetKey(key)
             let isMetadata = keyIsC2PA || peekIsXML || peekIsJUMBF
                 || keyIsPictureDescriptor || keyIsSoundDescriptor
+                || keyIsDurationSet
 
             // Skip anything that doesn't look like metadata, plus anything
             // larger than the hard cap (defensive — metadata payloads are
@@ -123,9 +131,29 @@ public struct MXFReader: Sendable {
                 }
             }
 
+            if keyIsDurationSet {
+                if let dur = parseSetDuration(value), dur > maxSetDurationUnits {
+                    maxSetDurationUnits = dur
+                }
+                if setEditRateDen == 0, let rate = parseTrackEditRate(value) {
+                    setEditRateNum = rate.num
+                    setEditRateDen = rate.den
+                }
+            }
+
             if keyIsSoundDescriptor {
                 var stream = AudioStream(index: metadata.audioStreams.count)
                 parseSoundDescriptor(value, into: &stream)
+                // BWF/AES-3/GenericSound descriptors default to PCM when no
+                // explicit codec UL was present (tag 0x3D06 absent). ffprobe
+                // reports `pcm_s<bit-depth><endianness>` here; surface the
+                // container-level codec at least, so per-stream consumers see
+                // "pcm_s16le" rather than a missing field.
+                if stream.codec == nil {
+                    let bd = stream.bitDepth ?? 16
+                    stream.codec = "pcm_s\(bd)le"
+                    stream.codecName = "Linear PCM (\(bd)-bit LE)"
+                }
                 if stream.sampleRate != nil || stream.channels != nil {
                     metadata.audioStreams.append(stream)
                     if metadata.audioCodec == nil { metadata.audioCodec = stream.codec }
@@ -149,6 +177,21 @@ public struct MXFReader: Sendable {
         }
 
         for i in 0..<metadata.videoStreams.count {
+            // ISOBMFF-style colour-range default: most broadcast MXF essence is
+            // limited-range YUV, matching ffprobe's `tv` default.
+            if metadata.videoStreams[i].colorInfo == nil {
+                metadata.videoStreams[i].colorInfo = VideoColorInfo(fullRange: false)
+            } else if metadata.videoStreams[i].colorInfo?.fullRange == nil {
+                metadata.videoStreams[i].colorInfo?.fullRange = false
+            }
+            // ffprobe's chroma_location for AVC/HEVC 4:2:0 and 4:2:2 defaults
+            // to "left" when the bitstream doesn't specify otherwise — mirror
+            // that for MXF (AVC-Intra / HEVC-Intra broadcast essence).
+            if metadata.videoStreams[i].chromaLocation == nil,
+               let sub = metadata.videoStreams[i].chromaSubsampling,
+               sub == "4:2:0" || sub == "4:2:2" {
+                metadata.videoStreams[i].chromaLocation = "left"
+            }
             if metadata.videoStreams[i].pixelFormat == nil {
                 metadata.videoStreams[i].pixelFormat = PixelFormatDerivation.derive(
                     chromaSubsampling: metadata.videoStreams[i].chromaSubsampling,
@@ -164,9 +207,83 @@ public struct MXFReader: Sendable {
                     metadata.videoStreams[i].rFrameRate = fps
                 }
             }
+            // Derive PAR/DAR per stream (square pixels when displayWidth/Height
+            // weren't set by the picture descriptor).
+            if let w = metadata.videoStreams[i].width,
+               let h = metadata.videoStreams[i].height, w > 0, h > 0 {
+                if metadata.videoStreams[i].displayWidth == nil {
+                    metadata.videoStreams[i].displayWidth = w
+                }
+                if metadata.videoStreams[i].displayHeight == nil {
+                    metadata.videoStreams[i].displayHeight = h
+                }
+                if metadata.videoStreams[i].pixelAspectRatio == nil,
+                   let dw = metadata.videoStreams[i].displayWidth,
+                   let dh = metadata.videoStreams[i].displayHeight, dw > 0, dh > 0 {
+                    let parNum = dw * h
+                    let parDen = dh * w
+                    let g = gcdMXF(parNum, parDen)
+                    metadata.videoStreams[i].pixelAspectRatio = (parNum / g, parDen / g)
+                }
+            }
+            // ffprobe's MXF demuxer marks every track as default — there is no
+            // per-track "default" bit in MXF, only per-package selection.
+            if metadata.videoStreams[i].isDefault == nil {
+                metadata.videoStreams[i].isDefault = false
+            }
+            if metadata.videoStreams[i].isAttachedPic == nil {
+                metadata.videoStreams[i].isAttachedPic = false
+            }
+        }
+        for i in 0..<metadata.audioStreams.count {
+            if metadata.audioStreams[i].isDefault == nil {
+                metadata.audioStreams[i].isDefault = false
+            }
+            // PCM audio bit-rate fallback: sample_rate × channels × bit_depth.
+            if metadata.audioStreams[i].bitRate == nil,
+               let sr = metadata.audioStreams[i].sampleRate, sr > 0,
+               let ch = metadata.audioStreams[i].channels, ch > 0,
+               let bd = metadata.audioStreams[i].bitDepth, bd > 0 {
+                metadata.audioStreams[i].bitRate = sr * ch * bd
+            }
+        }
+        if let v = metadata.videoStreams.first {
+            if metadata.pixelAspectRatio == nil { metadata.pixelAspectRatio = v.pixelAspectRatio }
+            if metadata.displayWidth == nil { metadata.displayWidth = v.displayWidth }
+            if metadata.displayHeight == nil { metadata.displayHeight = v.displayHeight }
+        }
+        // Duration fallback: convert largest MaterialPackage/Track/Sequence
+        // Duration (in edit units) into seconds using the track's EditRate.
+        // Falls back to the first video stream's frameRate when the edit rate
+        // wasn't captured, since most narrative MXF is 24/25/29.97/50 fps.
+        if metadata.duration == nil || metadata.duration == 0 {
+            if maxSetDurationUnits > 0 {
+                let editRate: Double? = {
+                    if setEditRateDen > 0, setEditRateNum > 0 {
+                        return Double(setEditRateNum) / Double(setEditRateDen)
+                    }
+                    return metadata.videoStreams.first?.frameRate
+                }()
+                if let rate = editRate, rate > 0 {
+                    metadata.duration = Double(maxSetDurationUnits) / rate
+                }
+            }
+        }
+
+        // Container bit_rate fallback (matches ffprobe `format.bit_rate`).
+        let containerBytes = metadata.fileSize ?? Int64(data.count)
+        if metadata.bitRate == nil,
+           let dur = metadata.duration, dur > 0, containerBytes > 0 {
+            metadata.bitRate = Int(Double(containerBytes) * 8.0 / dur)
         }
 
         return metadata
+    }
+
+    private static func gcdMXF(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a), y = abs(b)
+        while y != 0 { (x, y) = (y, x % y) }
+        return max(x, 1)
     }
 
     // MARK: - Embedded-NRT fallback
@@ -335,6 +452,46 @@ public struct MXFReader: Sendable {
         return kind == 0x42 || kind == 0x47 || kind == 0x48
     }
 
+    /// Header-metadata sets that carry a Duration field at local tag 0x0202.
+    /// MaterialPackage / SourcePackage / Track / Sequence all qualify. We pull
+    /// the largest Duration we find across these sets — for a sealed MXF clip
+    /// that value is the clip length in edit units of the track's edit rate.
+    private static func isDurationBearingSetKey(_ key: Data) -> Bool {
+        guard key.count >= 15 else { return false }
+        let s = key.startIndex
+        for (i, b) in pictureDescriptorPrefix.enumerated() where key[s + i] != b { return false }
+        let kind = key[s + 14]
+        // 0x0F Sequence, 0x2F Preface, 0x36 MaterialPackage, 0x37 SourcePackage
+        // 0x3A StaticTrack, 0x3B Track, 0x3C EventTrack, 0x11 SourceClip.
+        return kind == 0x0F || kind == 0x36 || kind == 0x37
+            || kind == 0x3A || kind == 0x3B || kind == 0x3C || kind == 0x11
+    }
+
+    /// Pull the largest `Duration` (local tag 0x0202, UInt64) value out of a
+    /// metadata set. Returns nil if the set carries no usable duration.
+    static func parseSetDuration(_ data: Data) -> UInt64? {
+        var best: UInt64 = 0
+        walkLocalSet(data) { tag, value in
+            guard tag == 0x0202, value.count >= 8 else { return }
+            if let v = parseUInt64(value), v > best, v < UInt64(Int.max) {
+                best = v
+            }
+        }
+        return best > 0 ? best : nil
+    }
+
+    /// EditRate (local tag 0x4B01) on a Generic Track — used together with
+    /// Sequence Duration (0x0202) to convert edit units into seconds.
+    static func parseTrackEditRate(_ data: Data) -> (num: UInt32, den: UInt32)? {
+        var rate: (num: UInt32, den: UInt32)?
+        walkLocalSet(data) { tag, value in
+            if tag == 0x4B01, let r = parseRational(value), r.den > 0 {
+                rate = r
+            }
+        }
+        return rate
+    }
+
     /// Walk the local set `(tag, length, value)` triplets inside a picture
     /// essence descriptor and surface the fields we care about.
     static func parsePictureDescriptor(
@@ -348,6 +505,8 @@ public struct MXFReader: Sendable {
         var frameLayout: UInt8?
         var horizontalSubsampling: UInt32 = 0
         var verticalSubsampling: UInt32 = 0
+        var aspectRatioNum: UInt32 = 0
+        var aspectRatioDen: UInt32 = 0
 
         walkLocalSet(data) { tag, value in
             switch tag {
@@ -368,16 +527,32 @@ public struct MXFReader: Sendable {
                 if let v = parseUInt32(value) { stream.displayWidth = Int(v) }
             case 0x320C: // FrameLayout (UInt8)
                 if value.count >= 1 { frameLayout = value[value.startIndex] }
-            case 0x320E: // AspectRatio (Rational)
-                if let r = parseRational(value) {
-                    // nothing to do here beyond remembering — DAR can be derived
-                    // later if stream already has w/h
-                    _ = r
+            case 0x320E: // AspectRatio (Rational) — display aspect ratio.
+                if let r = parseRational(value), r.num > 0, r.den > 0 {
+                    aspectRatioNum = r.num
+                    aspectRatioDen = r.den
                 }
             case 0x3201: // PictureEssenceCoding (UL)
                 if let codec = codecNameForUL(value) {
                     stream.codec = codec.codec
                     stream.codecName = codec.longName
+                }
+                // Profile inferred from the AVC-Intra class byte (UL byte
+                // 14), per SMPTE ST 2019-1:
+                //   0x2?   — High 10 Intra (class 50/100/200, 4:2:0 10-bit)
+                //   0x3?   — High 4:2:2 Intra (class 50/100/200, 10-bit)
+                // We fold all subclasses into the top-level ffprobe name.
+                if value.count >= 16, stream.profile == nil {
+                    let kind = value[value.startIndex + 11]
+                    let variant = value[value.startIndex + 13]
+                    let byte14 = value[value.startIndex + 14]
+                    if kind == 0x02, variant == 0x32 {
+                        switch byte14 & 0xF0 {
+                        case 0x20: stream.profile = "High 10 Intra"
+                        case 0x30: stream.profile = "High 4:2:2 Intra"
+                        default: break
+                        }
+                    }
                 }
             case 0x3301: // ComponentDepth (UInt32)
                 if let v = parseUInt32(value) { stream.bitDepth = Int(v) }
@@ -415,6 +590,15 @@ public struct MXFReader: Sendable {
 
         if let fl = frameLayout {
             stream.fieldOrder = fieldOrderFromLayout(fl)
+            // FrameLayout 1 (SeparateFields) / 2 (OneField) report StoredHeight
+            // as the *field* height. ffprobe reports the *frame* height, so
+            // double ours to match when the fields encode a full interlaced
+            // frame. DisplayHeight follows suit only when it isn't already set
+            // to the full-frame value.
+            if (fl == 1 || fl == 4), let h = stream.height, h > 0 {
+                stream.height = h * 2
+                if stream.displayHeight == h { stream.displayHeight = h * 2 }
+            }
         }
 
         // CDCI essence descriptors carry explicit subsampling ratios. 4:2:0 is
@@ -425,6 +609,32 @@ public struct MXFReader: Sendable {
         case (1, 1): stream.chromaSubsampling = "4:4:4"
         default: break
         }
+
+        // MXF AspectRatio (0x320E) is the *display* aspect ratio of the
+        // finished frame. ffprobe reports display_aspect_ratio directly from
+        // this value (e.g. "16:9" for 1440×1080 anamorphic SD, even though
+        // DisplayWidth/Height report 1440×1080). We override here so the
+        // reader's DAR reflects the authoritative anamorphic flag.
+        if aspectRatioDen > 0, aspectRatioNum > 0,
+           let w = stream.width, let h = stream.height, w > 0, h > 0 {
+            let dw = Int((Int64(h) * Int64(aspectRatioNum)) / Int64(aspectRatioDen))
+            stream.displayWidth = dw
+            stream.displayHeight = h
+            // SAR = (DAR × height) / (pixel_width). The denominator folds in
+            // DAR_den because the RHS is (DAR_num/DAR_den × height / width).
+            let sarNum = Int(aspectRatioNum) * h
+            let sarDen = Int(aspectRatioDen) * w
+            let g = gcdMXFInt(sarNum, sarDen)
+            if g > 0 {
+                stream.pixelAspectRatio = (sarNum / g, sarDen / g)
+            }
+        }
+    }
+
+    private static func gcdMXFInt(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a), y = abs(b)
+        while y != 0 { (x, y) = (y, x % y) }
+        return max(x, 1)
     }
 
     static func parseSoundDescriptor(_ data: Data, into stream: inout AudioStream) {
@@ -519,14 +729,19 @@ public struct MXFReader: Sendable {
         }
     }
 
-    /// Map a picture essence coding UL to a short codec name and long name.
-    /// Only the last few bytes of the UL are distinguishing — we inspect those.
+    /// Map a picture/sound essence coding UL to short + long codec names.
+    /// MXF codec ULs cluster around two kind bytes:
+    ///   - byte 11 == 0x04 : SMPTE 335/RP-224 compressed-video registry
+    ///   - byte 11 == 0x02 : SMPTE 2019/2067 AVC/HEVC/JPEG-2000/PCM-family
+    /// We match on the distinguishing byte (byte 13 for 0x04, byte 13-14 for
+    /// 0x02) because the surrounding octets are structural.
     private static func codecNameForUL(_ ul: Data) -> (codec: String, longName: String)? {
         guard ul.count >= 16 else { return nil }
         let s = ul.startIndex
         let kind = ul[s + 11]
         let variant = ul[s + 13]
-        // Kind 0x04 = compressed picture essence coding family
+
+        // Video registry (SMPTE 335 / RP 224 / RP 2008).
         if kind == 0x04 {
             switch variant {
             case 0x01: return ("mpeg2video", "MPEG-2 Video")
@@ -536,6 +751,28 @@ public struct MXFReader: Sendable {
             case 0x41: return ("apch", "Apple ProRes")
             case 0x31: return ("avc1", "H.264 / AVC")
             case 0x32: return ("hvc1", "H.265 / HEVC")
+            default: break
+            }
+        }
+        // SMPTE ST 2019-1 AVC-Intra / 2067-40 ProRes / JPEG-2000 (kind 0x02).
+        if kind == 0x02 {
+            let byte14 = ul[s + 14]
+            switch variant {
+            case 0x32: // AVC in MXF (SMPTE ST 381-3 / RP 2008)
+                return ("avc1", "H.264 / AVC")
+            case 0x33: // HEVC in MXF (SMPTE ST 2067-51)
+                return ("hvc1", "H.265 / HEVC")
+            case 0x0A: // JPEG 2000 in MXF (SMPTE ST 422)
+                return ("j2k", "JPEG 2000")
+            case 0x01: // MPEG-2 Video (MXF SMPTE ST 381-1)
+                return ("mpeg2video", "MPEG-2 Video")
+            case 0x41:
+                return ("apch", "Apple ProRes")
+            case 0x02: // PCM / WAVE / AES-3 sound essence family
+                _ = byte14 // reserved for future distinction
+                return ("pcm_s16le", "PCM (WAVE/AES-3)")
+            case 0x7F: // LinearPCM (another SMPTE label)
+                return ("pcm_s16le", "Linear PCM")
             default: break
             }
         }

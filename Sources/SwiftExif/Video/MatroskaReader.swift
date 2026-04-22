@@ -13,11 +13,16 @@ public struct MatroskaReader: Sendable {
 
     private static let ebmlHeaderID: UInt64 = 0x1A45DFA3
 
-    /// Maximum number of bytes to walk when searching an element payload for a
-    /// sub-element. Matroska header metadata (Segment/Info + Tracks) is tiny
-    /// compared to media data, so a 32 MB window is ample while still bounding
-    /// the cost of a malformed file.
-    private static let maxHeaderScan = 32 * 1024 * 1024
+    /// Maximum number of bytes to walk when searching an element payload for
+    /// a sub-element. Matroska header metadata (Segment/Info + Tracks) is
+    /// tiny compared to media data, but we now also sniff early Cluster blocks
+    /// to recover DTS / AC-3 frame-header bit_rate values when the muxer
+    /// didn't write a per-track BPS SimpleTag. MakeMKV-style remuxes group all
+    /// blocks for one track into its own run of clusters, so a first-audio
+    /// track can live hundreds of MB into the segment — we widen the window
+    /// accordingly. The file is memory-mapped so the added bytes cost address
+    /// space, not RAM.
+    private static let maxHeaderScan = 512 * 1024 * 1024
 
     /// True when the data begins with the EBML header magic.
     public static func isMatroska(_ data: Data) -> Bool {
@@ -79,6 +84,7 @@ public struct MatroskaReader: Sendable {
         var timestampScale: UInt64 = 1_000_000 // nanoseconds per tick (Matroska default)
         var trackRefs: [TrackRef] = []
         var tagsBlocks: [(start: Int, end: Int)] = []
+        var clusterBlocks: [(start: Int, end: Int)] = []
 
         while reader.offset < end, reader.remainingCount >= 2 {
             guard let id = try? readEBMLID(&reader),
@@ -98,7 +104,16 @@ public struct MatroskaReader: Sendable {
             case 0x1254C367: // Tags — deferred: the Tag targets reference TrackUIDs
                              // which we only know after Tracks has been walked.
                 tagsBlocks.append((childStart, childEnd))
-            case 0x1C53BB6B, 0x1F43B675, 0x1941A469: // Cues, Cluster, Attachments
+            case 0x1F43B675: // Cluster — we want enough for audio-frame
+                             // sync-word sniffing (DTS / AC-3 bit_rate).
+                             // MakeMKV clusters one track at a time, so the
+                             // cap needs to cover an entire Interstellar-class
+                             // remux (up to 14 audio tracks interleaved into
+                             // separate cluster runs).
+                if clusterBlocks.count < 64 {
+                    clusterBlocks.append((childStart, childEnd))
+                }
+            case 0x1C53BB6B, 0x1941A469: // Cues, Attachments
                 break
             default:
                 break
@@ -109,6 +124,24 @@ public struct MatroskaReader: Sendable {
 
         for (s, e) in tagsBlocks {
             parseTags(data, from: s, end: e, refs: trackRefs, into: &metadata)
+        }
+
+        // Clear stale shared BPS / NUMBER_OF_FRAMES tags BEFORE the cluster
+        // walker runs — otherwise every audio track looks like it already has
+        // a bit rate and the walker skips them. The walker only fills gaps.
+        invalidateSharedStaleStats(in: &metadata)
+
+        // Walk a bounded window of Clusters to recover per-track DTS / AC-3
+        // frame-header bit_rate fields for MakeMKV-style remuxes that carry
+        // no reliable BPS tag. Stops as soon as every pending audio track has
+        // been populated.
+        if !clusterBlocks.isEmpty {
+            applyAudioFrameHeaderBitRates(
+                data: data,
+                clusters: clusterBlocks,
+                refs: trackRefs,
+                into: &metadata
+            )
         }
 
         // Fold Duration (ticks) × TimestampScale (ns/tick) into seconds.
@@ -192,6 +225,134 @@ public struct MatroskaReader: Sendable {
                 metadata.audioStreams[i].channelLayout = defaultLayout(forChannels: c)
             }
         }
+
+        // Default DisplayWidth/Height to PixelWidth/Height (square pixels) when
+        // the container omits them — ffprobe behaves the same way and reports
+        // SAR=1:1 + DAR=PixelW:PixelH (reduced) in that case.
+        for i in 0..<metadata.videoStreams.count {
+            let v = metadata.videoStreams[i]
+            if v.displayWidth == nil, let w = v.width {
+                metadata.videoStreams[i].displayWidth = w
+            }
+            if v.displayHeight == nil, let h = v.height {
+                metadata.videoStreams[i].displayHeight = h
+            }
+            if let w = metadata.videoStreams[i].width,
+               let h = metadata.videoStreams[i].height,
+               let dw = metadata.videoStreams[i].displayWidth,
+               let dh = metadata.videoStreams[i].displayHeight,
+               w > 0, h > 0, dw > 0, dh > 0,
+               metadata.videoStreams[i].pixelAspectRatio == nil {
+                let parNum = dw * h
+                let parDen = dh * w
+                let g = gcdInt(parNum, parDen)
+                metadata.videoStreams[i].pixelAspectRatio = (parNum / g, parDen / g)
+            }
+        }
+        if let v = metadata.videoStreams.first {
+            if metadata.displayWidth == nil { metadata.displayWidth = v.displayWidth }
+            if metadata.displayHeight == nil { metadata.displayHeight = v.displayHeight }
+            if metadata.pixelAspectRatio == nil { metadata.pixelAspectRatio = v.pixelAspectRatio }
+        }
+
+        // Cross-check NUMBER_OF_FRAMES against duration × avg_frame_rate per
+        // track. When the tag is more than 2 frames off the implied count it
+        // came from a previous edit and should be dropped.
+        for i in 0..<metadata.videoStreams.count {
+            guard let n = metadata.videoStreams[i].frameCount,
+                  let fps = metadata.videoStreams[i].avgFrameRate ?? metadata.videoStreams[i].frameRate,
+                  let dur = metadata.duration, dur > 0, fps > 0 else { continue }
+            let expected = Int((dur * fps).rounded())
+            if abs(n - expected) > 2 {
+                metadata.videoStreams[i].frameCount = expected
+            }
+        }
+
+        // Implausibly high frame rates (e.g. ffprobe's r_frame_rate=1000/1 for
+        // single-image MJPEG cover tracks) come from DefaultDuration values
+        // that no longer match a real cadence — clamp them to 1/duration.
+        for i in 0..<metadata.videoStreams.count {
+            if let fps = metadata.videoStreams[i].frameRate, fps > 1000,
+               let dur = metadata.duration, dur > 0 {
+                let approx = 1.0 / dur
+                metadata.videoStreams[i].frameRate = approx
+                metadata.videoStreams[i].avgFrameRate = approx
+                metadata.videoStreams[i].rFrameRate = approx
+            }
+        }
+        if let first = metadata.videoStreams.first?.frameRate {
+            metadata.frameRate = first
+        }
+
+        // Container-level bit rate: use file size × 8 / duration when no
+        // explicit element gave us one. Mirrors ffprobe `format.bit_rate`.
+        // VideoMetadata.read fills `fileSize` after we return, so fall back to
+        // the parser's own data length here.
+        let containerBytes = metadata.fileSize ?? Int64(data.count)
+        if metadata.bitRate == nil,
+           let dur = metadata.duration, dur > 0, containerBytes > 0 {
+            metadata.bitRate = Int(Double(containerBytes) * 8.0 / dur)
+        }
+    }
+
+    /// Greatest common divisor for the PAR/DAR reduction step.
+    private static func gcdInt(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a), y = abs(b)
+        while y != 0 { (x, y) = (y, x % y) }
+        return max(x, 1)
+    }
+
+    /// Drop per-track BPS / NUMBER_OF_FRAMES / NUMBER_OF_BYTES values that
+    /// were copied verbatim across tracks — the textbook signature of a
+    /// MakeMKV → ffmpeg-trim pipeline that never refreshed `_STATISTICS_TAGS`.
+    /// We only invalidate values that appear on more than one track AND on a
+    /// stream where the value is implausible for the codec (e.g. 51 Mbps on a
+    /// DTS audio stream): keeping the video bitrate when it stands alone is
+    /// the right call, since it's still a useful approximation when the
+    /// container has nothing else to offer.
+    private static func invalidateSharedStaleStats(in metadata: inout VideoMetadata) {
+        // Tally how many tracks share each non-nil bitrate value.
+        var bitRateCounts: [Int: Int] = [:]
+        for v in metadata.videoStreams {
+            if let br = v.bitRate { bitRateCounts[br, default: 0] += 1 }
+        }
+        for a in metadata.audioStreams {
+            if let br = a.bitRate { bitRateCounts[br, default: 0] += 1 }
+        }
+        let staleBitRates = Set(bitRateCounts.filter { $0.value > 1 }.keys)
+
+        // Audio bitrates copied from a video track are always wrong — wipe
+        // them outright when they match the staleness signature, regardless
+        // of magnitude. Implausibly high audio bitrates (>= 5 Mbps for any
+        // mainstream consumer codec) get the same treatment defensively.
+        for i in 0..<metadata.audioStreams.count {
+            guard let br = metadata.audioStreams[i].bitRate else { continue }
+            if staleBitRates.contains(br) || br > 5_000_000 {
+                metadata.audioStreams[i].bitRate = nil
+            }
+        }
+        // Cover-art / attached-picture video tracks (e.g. V_MJPEG) almost
+        // never carry a meaningful per-frame BPS — when they share the value
+        // with the main video track it is definitely stale.
+        for i in 0..<metadata.videoStreams.count {
+            guard let br = metadata.videoStreams[i].bitRate else { continue }
+            if staleBitRates.contains(br), i > 0 {
+                metadata.videoStreams[i].bitRate = nil
+            }
+        }
+
+        // NUMBER_OF_FRAMES copied across multiple tracks is the same story.
+        var frameCountCounts: [Int: Int] = [:]
+        for v in metadata.videoStreams {
+            if let fc = v.frameCount { frameCountCounts[fc, default: 0] += 1 }
+        }
+        let staleFrameCounts = Set(frameCountCounts.filter { $0.value > 1 }.keys)
+        for i in 0..<metadata.videoStreams.count {
+            if let fc = metadata.videoStreams[i].frameCount,
+               staleFrameCounts.contains(fc) {
+                metadata.videoStreams[i].frameCount = nil
+            }
+        }
     }
 
     private static func defaultChromaSubsampling(forCodec codec: String) -> String? {
@@ -199,6 +360,11 @@ public struct MatroskaReader: Sendable {
         case "V_VP8", "V_VP9", "V_AV1", "V_MPEG4/ISO/AVC", "V_MPEGH/ISO/HEVC",
              "V_MPEG4/ISO/ASP", "V_MPEG2", "V_MPEG1":
             return "4:2:0"
+        case "V_MJPEG":
+            // ffmpeg's MJPEG cover-art tracks default to yuvj444p; the JPEG
+            // data is in the cluster, not CodecPrivate, so this is the closest
+            // we can get without decoding a frame.
+            return "4:4:4"
         default:
             return nil
         }
@@ -206,7 +372,7 @@ public struct MatroskaReader: Sendable {
 
     private static func defaultBitDepth(forCodec codec: String) -> Int? {
         switch codec {
-        case "V_VP8", "V_MPEG4/ISO/ASP", "V_MPEG2", "V_MPEG1":
+        case "V_VP8", "V_MPEG4/ISO/ASP", "V_MPEG2", "V_MPEG1", "V_MJPEG":
             return 8
         default:
             return nil
@@ -290,6 +456,10 @@ public struct MatroskaReader: Sendable {
         let uid: UInt64
         let kind: TrackKind
         let index: Int
+        /// Matroska `TrackNumber` (0xD7) — the small int that appears in every
+        /// SimpleBlock/Block header. Needed when walking Clusters to match a
+        /// frame back to its TrackEntry.
+        var trackNumber: UInt64
     }
 
     private static func parseTracks(
@@ -331,6 +501,7 @@ public struct MatroskaReader: Sendable {
 
         var trackType: UInt64 = 0
         var trackUID: UInt64 = 0
+        var trackNumber: UInt64 = 0
         var codecID: String?
         var codecPrivate: Data?
         var defaultDurationNs: UInt64 = 0
@@ -359,6 +530,10 @@ public struct MatroskaReader: Sendable {
             case 0x73C5: // TrackUID
                 if let v = readUIntPayload(data, offset: vStart, size: vSize) {
                     trackUID = v
+                }
+            case 0xD7: // TrackNumber — referenced by SimpleBlock / Block headers
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    trackNumber = v
                 }
             case 0x86: // CodecID
                 codecID = readStringPayload(data, offset: vStart, size: vSize)
@@ -395,25 +570,54 @@ public struct MatroskaReader: Sendable {
             if (try? reader.seek(to: vStart + vSize)) == nil { return }
         }
 
+        // MKV spec: FlagDefault default = 1 when element is absent. FlagForced
+        // and FlagHearingImpaired default to 0. Normalise here so downstream
+        // consumers don't have to replicate the defaulting rule.
+        let isDefault = flagDefault ?? true
+        let isForced = flagForced ?? false
+        let isSDH = flagHearingImpaired ?? false
+
         switch trackType {
         case 1: // Video
             var stream = VideoStream(index: metadata.videoStreams.count)
             stream.codec = codecID
             stream.codecName = codecLongNameMatroska(codecID)
             stream.title = trackName
+            stream.isDefault = isDefault
+            stream.isForced = isForced
             if let s = videoBlockStart, let e = videoBlockEnd {
                 parseVideoBlock(data, from: s, end: e, into: &stream)
             }
             if let priv = codecPrivate, let id = codecID {
                 applyMatroskaCodecPrivate(id: id, data: priv, into: &stream)
             }
+            // V_MJPEG cover-art tracks usually omit CodecPrivate (the JPEG
+            // payload sits in clusters). Apply the conventional defaults so
+            // the JSON output matches ffprobe even when no SOF marker can
+            // be parsed up-front.
+            if codecID == "V_MJPEG" {
+                if stream.profile == nil { stream.profile = "Baseline" }
+                if stream.colorInfo == nil {
+                    stream.colorInfo = VideoColorInfo(fullRange: true)
+                } else if stream.colorInfo?.fullRange == nil {
+                    stream.colorInfo?.fullRange = true
+                }
+                if stream.chromaLocation == nil { stream.chromaLocation = "center" }
+            }
             // Store DefaultDuration as ns for now; parseSegment converts to fps
             // after this finishes so we know the Segment's TimestampScale.
             if defaultDurationNs > 0 {
                 stream.frameRate = Double(defaultDurationNs)
             }
+            // V_MJPEG tracks in Matroska are almost always cover-art attachments
+            // muxed as a video stream. ffprobe only flags disposition.attached_pic
+            // when another tag marks it so — keep the flag present (false by
+            // default) so JSON consumers always see the key.
+            if stream.isAttachedPic == nil {
+                stream.isAttachedPic = false
+            }
             if trackUID != 0 {
-                refs.append(TrackRef(uid: trackUID, kind: .video, index: stream.index))
+                refs.append(TrackRef(uid: trackUID, kind: .video, index: stream.index, trackNumber: trackNumber))
             }
             metadata.videoStreams.append(stream)
 
@@ -423,11 +627,26 @@ public struct MatroskaReader: Sendable {
             stream.codecName = codecLongNameMatroska(codecID)
             stream.language = language
             stream.title = trackName
+            stream.isDefault = isDefault
+            stream.profile = audioProfileFor(codecID: codecID)
             if let s = audioBlockStart, let e = audioBlockEnd {
                 parseAudioBlock(data, from: s, end: e, into: &stream)
             }
+            // Refine DTS profile now that bit depth is known (MakeMKV leaves the
+            // codec id as A_DTS for plain DTS, DTS-HD MA and DTS-HD HRA alike;
+            // the container-declared BitDepth is the cleanest tell).
+            if codecID == "A_DTS", let bd = stream.bitDepth, bd > 0, bd < 32 {
+                stream.profile = "DTS-HD MA"
+            }
+            // A_VORBIS rarely populates the Audio master's Channels /
+            // SamplingFrequency — mkvtoolnix omits them since the Vorbis
+            // identification header is authoritative. Parse it out of
+            // CodecPrivate (Xiph-laced setup packets) to recover both.
+            if codecID == "A_VORBIS", let priv = codecPrivate {
+                applyVorbisCodecPrivate(priv, into: &stream)
+            }
             if trackUID != 0 {
-                refs.append(TrackRef(uid: trackUID, kind: .audio, index: stream.index))
+                refs.append(TrackRef(uid: trackUID, kind: .audio, index: stream.index, trackNumber: trackNumber))
             }
             metadata.audioStreams.append(stream)
 
@@ -437,16 +656,32 @@ public struct MatroskaReader: Sendable {
             stream.codecName = subtitleLongNameMatroska(codecID)
             stream.language = language
             stream.title = trackName
-            stream.isDefault = flagDefault
-            stream.isForced = flagForced
-            stream.isHearingImpaired = flagHearingImpaired
+            stream.isDefault = isDefault
+            stream.isForced = isForced
+            stream.isHearingImpaired = isSDH
             if trackUID != 0 {
-                refs.append(TrackRef(uid: trackUID, kind: .subtitle, index: stream.index))
+                refs.append(TrackRef(uid: trackUID, kind: .subtitle, index: stream.index, trackNumber: trackNumber))
             }
             metadata.subtitleStreams.append(stream)
 
         default:
             break
+        }
+    }
+
+    /// Profile label derived purely from the Matroska CodecID. MakeMKV and
+    /// other remuxers often leave DTS-HD MA tracks as plain `A_DTS`, so the
+    /// caller (parseTrackEntry) refines DTS further once bit depth is known.
+    private static func audioProfileFor(codecID: String?) -> String? {
+        guard let id = codecID else { return nil }
+        switch id {
+        case "A_DTS": return "DTS"
+        case "A_DTS/EXPRESS": return "DTS Express"
+        case "A_DTS/LOSSLESS": return "DTS-HD MA"
+        case "A_AC3": return "AC-3"
+        case "A_EAC3": return "E-AC-3"
+        case "A_TRUEHD": return "TrueHD"
+        default: return nil
         }
     }
 
@@ -687,6 +922,11 @@ public struct MatroskaReader: Sendable {
             if stream.bitDepth == nil { stream.bitDepth = 8 }
             if stream.chromaSubsampling == nil { stream.chromaSubsampling = "4:2:0" }
 
+        case "V_MJPEG":
+            // CodecPrivate is a complete JPEG frame (thumbnail). Mine the
+            // Start-Of-Frame marker for profile / precision / chroma info.
+            parseMJPEGCodecPrivate(data: data, into: &stream)
+
         case "V_AV1":
             // Same bytes as MP4 av1C.
             guard data.count >= 3 else { return }
@@ -727,6 +967,260 @@ public struct MatroskaReader: Sendable {
         }
     }
 
+    /// Walk the early Clusters for each `SimpleBlock` / `Block` element
+    /// belonging to a DTS / AC-3 audio track and parse the first frame's
+    /// sync-word header to recover bit_rate. ffprobe does the equivalent via
+    /// the demuxer — we do it once at container-open time, skipping clusters
+    /// as soon as every track that needs data has been populated.
+    private static func applyAudioFrameHeaderBitRates(
+        data: Data,
+        clusters: [(start: Int, end: Int)],
+        refs: [TrackRef],
+        into metadata: inout VideoMetadata
+    ) {
+        // Short-circuit: only proceed if at least one audio track is a codec
+        // family whose bit rate isn't already known.
+        var pending: [UInt64: Int] = [:] // TrackNumber → audio stream index
+        for ref in refs {
+            guard ref.kind == .audio, ref.trackNumber > 0 else { continue }
+            guard ref.index < metadata.audioStreams.count else { continue }
+            let codec = metadata.audioStreams[ref.index].codec ?? ""
+            let needsBitRate = metadata.audioStreams[ref.index].bitRate == nil
+            let isSyncCodec = codec == "A_AC3" || codec == "A_EAC3"
+                || codec.hasPrefix("A_DTS")
+            // ffprobe deliberately omits bit_rate for lossless DTS-HD MA
+            // streams (their rate is variable). Our MatroskaReader already
+            // refines the DTS profile from the container's BitDepth element —
+            // honour the refined label and skip bit-rate extraction for MA.
+            let profile = metadata.audioStreams[ref.index].profile
+            let isLosslessDTS = codec.hasPrefix("A_DTS") && profile == "DTS-HD MA"
+            if needsBitRate, isSyncCodec, !isLosslessDTS {
+                pending[ref.trackNumber] = ref.index
+            }
+        }
+        if pending.isEmpty { return }
+
+        outer: for (cStart, cEnd) in clusters {
+            // A closure can't `break outer`, so use a mutable flag.
+            var stop = false
+            walkClusterBlocks(data: data, from: cStart, end: cEnd) { trackNumber, frame in
+                guard !stop, let streamIdx = pending[trackNumber] else { return }
+                let codec = metadata.audioStreams[streamIdx].codec ?? ""
+                let bitRate: Int?
+                if codec == "A_AC3" || codec == "A_EAC3" {
+                    bitRate = parseAC3BitRate(frame)
+                } else if codec.hasPrefix("A_DTS") {
+                    bitRate = parseDTSBitRate(frame)
+                } else {
+                    bitRate = nil
+                }
+                if let br = bitRate, br > 0 {
+                    metadata.audioStreams[streamIdx].bitRate = br
+                    pending.removeValue(forKey: trackNumber)
+                    if pending.isEmpty { stop = true }
+                }
+            }
+            if pending.isEmpty { break outer }
+        }
+    }
+
+    /// Walk a Cluster master and invoke `body` for each contained SimpleBlock
+    /// / BlockGroup > Block with the resolved `(TrackNumber, frameBytes)`.
+    /// `frameBytes` is a slice pointing at the first frame's payload; lacing
+    /// isn't interpreted — we only need the first codec sync word.
+    private static func walkClusterBlocks(
+        data: Data,
+        from start: Int,
+        end: Int,
+        body: (_ trackNumber: UInt64, _ frame: Data) -> Void
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+
+            switch id {
+            case 0xA3: // SimpleBlock
+                if let (trackNumber, frame) = readBlockHeader(data: data, start: vStart, size: vSize) {
+                    body(trackNumber, frame)
+                }
+            case 0xA0: // BlockGroup — contains a Block (0xA1) inside
+                var inner = BinaryReader(data: data)
+                (try? inner.seek(to: vStart)) ?? ()
+                let bgEnd = vStart + vSize
+                while inner.offset < bgEnd {
+                    guard let innerID = try? readEBMLID(&inner),
+                          let innerSize = try? readVINT(&inner),
+                          inner.offset + Int(innerSize) <= bgEnd else { break }
+                    let bStart = inner.offset
+                    let bSize = Int(innerSize)
+                    if innerID == 0xA1, // Block
+                       let (trackNumber, frame) = readBlockHeader(data: data, start: bStart, size: bSize) {
+                        body(trackNumber, frame)
+                    }
+                    if (try? inner.seek(to: bStart + bSize)) == nil { break }
+                }
+            case 0xE7: // Cluster Timecode
+                break
+            default:
+                break
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { return }
+        }
+    }
+
+    /// Decode a SimpleBlock / Block header: VINT TrackNumber + Int16 timecode
+    /// + UInt8 flags + [lacing info + frame data]. Returns the track number
+    /// and a slice pointing at the start of the first frame's bytes.
+    private static func readBlockHeader(
+        data: Data,
+        start: Int,
+        size: Int
+    ) -> (UInt64, Data)? {
+        guard size > 4 else { return nil }
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+        guard let trackNumber = try? readVINT(&reader) ?? 0 else { return nil }
+        // Timecode + flags.
+        guard (try? reader.skip(3)) != nil else { return nil }
+        let framesStart = reader.offset
+        let remaining = start + size - framesStart
+        guard remaining > 0, framesStart + remaining <= data.count else { return nil }
+        let slice = data[(data.startIndex + framesStart) ..< (data.startIndex + framesStart + remaining)]
+        return (trackNumber, Data(slice))
+    }
+
+    /// AC-3 frame header (ATSC A/52 §5.4.1): 16-bit sync word `0x0B77`, then 2
+    /// bytes CRC, then `fscod`(2) | `frmsizecod`(6). We ignore the sync search
+    /// beyond the first 4 KiB — the first frame is always at the start of a
+    /// Matroska audio block.
+    private static func parseAC3BitRate(_ frame: Data) -> Int? {
+        guard frame.count >= 5 else { return nil }
+        let s = frame.startIndex
+        // Search for 0x0B77 within the first few bytes (some muxers leave a
+        // tiny prefix; in practice the sync is at offset 0).
+        var offset = -1
+        for i in 0..<min(frame.count - 4, 8) {
+            if frame[s + i] == 0x0B, frame[s + i + 1] == 0x77 {
+                offset = i
+                break
+            }
+        }
+        guard offset >= 0, offset + 5 < frame.count else { return nil }
+        let byte4 = frame[s + offset + 4] // fscod + frmsizecod
+        let frmsizecod = Int(byte4 & 0x3F)
+        // Each entry in the frame-size table encodes a bit rate directly
+        // (independent of sample rate); index = frmsizecod >> 1.
+        let ac3Bitrates = [
+             32_000,  40_000,  48_000,  56_000,  64_000,  80_000,  96_000, 112_000,
+            128_000, 160_000, 192_000, 224_000, 256_000, 320_000, 384_000, 448_000,
+            512_000, 576_000, 640_000
+        ]
+        let idx = frmsizecod >> 1
+        guard idx < ac3Bitrates.count else { return nil }
+        return ac3Bitrates[idx]
+    }
+
+    /// DTS core frame header (ETSI TS 102 114 §5.3.1): 32-bit sync `0x7FFE8001`
+    /// followed by a dense bit-packed header whose fields are (counting the
+    /// first bit after sync as 0):
+    ///   FT     (1)  — bit 0
+    ///   SHORT  (5)  — bits 1-5
+    ///   CPF    (1)  — bit 6
+    ///   NBLKS  (7)  — bits 7-13
+    ///   FSIZE  (14) — bits 14-27
+    ///   AMODE  (6)  — bits 28-33
+    ///   SFREQ  (4)  — bits 34-37
+    ///   RATE   (5)  — bits 38-42  ← the bit-rate index we want
+    /// Note: an earlier edition of this reader used SHORT = 6 bits (matching a
+    /// few non-normative references) and that shifted every subsequent field by
+    /// one bit. The corrected 5-bit SHORT lines up with ffmpeg's libavcodec
+    /// `dca_core.c` and gives the right `dca_bit_rates` index.
+    private static func parseDTSBitRate(_ frame: Data) -> Int? {
+        guard frame.count >= 12 else { return nil }
+        let s = frame.startIndex
+        var syncOffset = -1
+        for i in 0..<min(frame.count - 10, 32) {
+            if frame[s + i] == 0x7F, frame[s + i + 1] == 0xFE,
+               frame[s + i + 2] == 0x80, frame[s + i + 3] == 0x01 {
+                syncOffset = i
+                break
+            }
+        }
+        guard syncOffset >= 0, syncOffset + 10 <= frame.count else { return nil }
+        // Load 8 bytes after the 4-byte sync into a big-endian UInt64 —
+        // covers all header fields up through RATE + plenty of padding.
+        var packed: UInt64 = 0
+        for i in 0..<8 {
+            packed = (packed << 8) | UInt64(frame[s + syncOffset + 4 + i])
+        }
+        // RATE occupies header bits 38-42. In `packed` (bit 63 = header bit 0),
+        // header bit N = packed bit (63 - N). So RATE = bits 25..21 of packed.
+        let rateIdx = Int((packed >> 21) & 0x1F)
+        // ETSI TS 102 114 Table 5-7. A value of 29 is "open"; 30 = variable;
+        // 31 = lossless. We treat those as unknown and return nil.
+        let dtsBitrates: [Int?] = [
+             32_000,   56_000,   64_000,   96_000,  112_000,  128_000,  192_000,  224_000,
+            256_000,  320_000,  384_000,  448_000,  512_000,  576_000,  640_000,  768_000,
+            960_000, 1024_000, 1152_000, 1280_000, 1344_000, 1408_000, 1411_200, 1472_000,
+           1536_000, 1920_000, 2048_000, 3072_000, 3840_000, nil,      nil,      nil
+        ]
+        guard rateIdx < dtsBitrates.count else { return nil }
+        return dtsBitrates[rateIdx]
+    }
+
+    /// A Vorbis `CodecPrivate` in Matroska is the three Vorbis setup packets
+    /// concatenated using Xiph lacing. We only need the first packet (the
+    /// "identification header") whose fixed-offset layout gives us channels
+    /// and sample rate:
+    ///   byte 0..6  : "\x01vorbis" magic
+    ///   byte 7..10 : vorbis_version (UInt32 LE, always 0)
+    ///   byte 11    : audio_channels (UInt8)
+    ///   byte 12..15: audio_sample_rate (UInt32 LE)
+    ///   byte 16..27: bitrate_max / nominal / min (3 × UInt32 LE)
+    /// The Xiph lacing prefix is: a single count byte (0x02 = 3 packets) then
+    /// N-1 lacing lengths (each a run of 0xFF bytes terminated by a byte <
+    /// 0xFF). The identification header is conventionally the first of the
+    /// three packets — we find it by scanning for its magic.
+    private static func applyVorbisCodecPrivate(_ data: Data, into stream: inout AudioStream) {
+        let magic: [UInt8] = [0x01, 0x76, 0x6F, 0x72, 0x62, 0x69, 0x73] // "\x01vorbis"
+        guard data.count >= magic.count + 16 else { return }
+        let bytes = [UInt8](data)
+        // Search for the identification header within the first few hundred
+        // bytes — well beyond any plausible Xiph lacing length prefix.
+        let searchLimit = min(bytes.count - (magic.count + 16), 1024)
+        for i in 0...searchLimit {
+            var matched = true
+            for (j, b) in magic.enumerated() where bytes[i + j] != b {
+                matched = false
+                break
+            }
+            if !matched { continue }
+            let base = i + magic.count + 4 // skip magic + vorbis_version
+            let ch = Int(bytes[base])
+            let sr = UInt32(bytes[base + 1])
+                | (UInt32(bytes[base + 2]) << 8)
+                | (UInt32(bytes[base + 3]) << 16)
+                | (UInt32(bytes[base + 4]) << 24)
+            if stream.channels == nil, ch > 0 { stream.channels = ch }
+            if stream.sampleRate == nil, sr > 0 { stream.sampleRate = Int(sr) }
+            // Nominal bitrate lives at base + 9..13 (UInt32 LE); a value of
+            // zero means "unknown" per the Vorbis spec.
+            if stream.bitRate == nil, base + 13 <= bytes.count {
+                let br = UInt32(bytes[base + 9])
+                    | (UInt32(bytes[base + 10]) << 8)
+                    | (UInt32(bytes[base + 11]) << 16)
+                    | (UInt32(bytes[base + 12]) << 24)
+                if br > 0, br < (1 << 28) { stream.bitRate = Int(br) }
+            }
+            return
+        }
+    }
+
     /// HEVC profile_idc → label. Mirrors MP4Parser.hevcProfileName — duplicated
     /// here to keep MatroskaReader self-contained rather than depending on
     /// ISOBMFF internals.
@@ -760,6 +1254,87 @@ public struct MatroskaReader: Sendable {
         case 122: return "High 4:2:2"
         case 244: return "High 4:4:4 Predictive"
         default: return nil
+        }
+    }
+
+    /// Walk the JPEG bitstream stored in a `V_MJPEG` Matroska track's
+    /// CodecPrivate to surface profile, precision, and chroma subsampling.
+    /// The bitstream is segmented into markers (`0xFFxx`); the first
+    /// Start-Of-Frame (SOF0..SOF3) describes the picture in plain bytes.
+    /// MJPEG is full-range by definition, and chroma sample siting is "center".
+    private static func parseMJPEGCodecPrivate(data: Data, into stream: inout VideoStream) {
+        guard data.count >= 4 else { return }
+        let s = data.startIndex
+        var i = s
+        let end = data.endIndex
+        while i + 1 < end {
+            guard data[i] == 0xFF else { i += 1; continue }
+            // Skip fill bytes (0xFF) and standalone markers without payload.
+            var marker = data[i + 1]
+            i += 2
+            while marker == 0xFF, i < end { marker = data[i]; i += 1 }
+            // Standalone markers (SOI/EOI/RSTx) carry no length field.
+            if marker == 0xD8 || marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7) {
+                continue
+            }
+            guard i + 1 < end else { return }
+            let segLen = Int(data[i]) << 8 | Int(data[i + 1])
+            guard segLen >= 2, i + segLen <= end else { return }
+
+            // SOF0..SOF3 / SOF5..SOF7 / SOF9..SOFB / SOFD..SOFF — Start-Of-Frame.
+            // Skip DHT (0xC4), JPG (0xC8), DAC (0xCC), DNL (0xDC).
+            let isSOF = (marker >= 0xC0 && marker <= 0xCF)
+                && marker != 0xC4 && marker != 0xC8 && marker != 0xCC
+            if isSOF, segLen >= 8 {
+                let precision = Int(data[i + 2])
+                let nf = Int(data[i + 7])
+                if stream.bitDepth == nil, precision > 0 {
+                    stream.bitDepth = precision
+                }
+                if stream.profile == nil {
+                    switch marker {
+                    case 0xC0: stream.profile = "Baseline"
+                    case 0xC1: stream.profile = "Extended Sequential"
+                    case 0xC2: stream.profile = "Progressive"
+                    case 0xC3: stream.profile = "Lossless"
+                    default: stream.profile = "Baseline"
+                    }
+                }
+                // Chroma subsampling: per-component HiVi nibbles tell us how the
+                // luma and chroma planes are sampled. Component 0 is luma; the
+                // ratio of its HxV to the chroma components defines the format.
+                if stream.chromaSubsampling == nil, nf >= 1 {
+                    if nf == 1 {
+                        stream.chromaSubsampling = "4:0:0"
+                    } else if 8 + nf * 3 <= segLen {
+                        let yH = Int(data[i + 8 + 1] >> 4)
+                        let yV = Int(data[i + 8 + 1] & 0x0F)
+                        if yH == 1, yV == 1 {
+                            stream.chromaSubsampling = "4:4:4"
+                        } else if yH == 2, yV == 1 {
+                            stream.chromaSubsampling = "4:2:2"
+                        } else if yH == 2, yV == 2 {
+                            stream.chromaSubsampling = "4:2:0"
+                        } else if yH == 1, yV == 2 {
+                            stream.chromaSubsampling = "4:4:0"
+                        } else if yH == 4, yV == 1 {
+                            stream.chromaSubsampling = "4:1:1"
+                        }
+                    }
+                }
+                // MJPEG is JPEG-style full range and chroma is centre-sampled
+                // (matching ffprobe's default of "center" for MJPEG).
+                if stream.colorInfo == nil {
+                    stream.colorInfo = VideoColorInfo(fullRange: true)
+                } else if stream.colorInfo?.fullRange == nil {
+                    stream.colorInfo?.fullRange = true
+                }
+                if stream.chromaLocation == nil {
+                    stream.chromaLocation = "center"
+                }
+                return
+            }
+            i += segLen
         }
     }
 
@@ -916,23 +1491,27 @@ public struct MatroskaReader: Sendable {
         }
     }
 
-    /// Matroska ChromaSitingHorz/Vert values map to ffprobe chroma_location:
-    ///   Horz 1 + Vert 1  → left
-    ///   Horz 1 + Vert 2  → topleft
-    ///   Horz 1 + Vert 3  → bottomleft (rare)
-    ///   Horz 2 + Vert 1  → center
-    ///   Horz 2 + Vert 2  → top
-    ///   Horz 2 + Vert 3  → bottom
-    /// Values of 0 are "unspecified" and we treat them as unknown.
+    /// Matroska ChromaSitingHorz/Vert values map to ffprobe chroma_location.
+    /// Per Matroska spec, each axis uses:
+    ///   0 = unspecified, 1 = collocated (left/top), 2 = half-way (center)
+    /// So (horz, vert) combines as:
+    ///   (1,1) → topleft   (left + top,   HEVC default for 4:2:0)
+    ///   (1,2) → left      (left + half,  MPEG-2 default for 4:2:0)
+    ///   (2,1) → top       (half + top)
+    ///   (2,2) → center    (half + half,  MJPEG / MPEG-1 default)
+    /// When only one axis is signalled, fall back to the "collocated" interpretation
+    /// on the unspecified axis for H.264/HEVC so topleft/left files that only write
+    /// ChromaSitingHorz don't collapse to nil.
     private static func chromaLocationLabel(horz: UInt64?, vert: UInt64?) -> String? {
-        guard let h = horz, let v = vert, h != 0, v != 0 else { return nil }
-        switch (h, v) {
-        case (1, 1): return "left"
-        case (1, 2): return "topleft"
-        case (1, 3): return "bottomleft"
-        case (2, 1): return "center"
-        case (2, 2): return "top"
-        case (2, 3): return "bottom"
+        switch (horz ?? 0, vert ?? 0) {
+        case (1, 1): return "topleft"
+        case (1, 2): return "left"
+        case (2, 1): return "top"
+        case (2, 2): return "center"
+        case (1, 0): return "topleft"  // AVC/HEVC default vertical = top
+        case (2, 0): return "top"
+        case (0, 1): return "topleft"
+        case (0, 2): return "left"
         default: return nil
         }
     }
@@ -1097,6 +1676,7 @@ public struct MatroskaReader: Sendable {
         case "V_MPEG2": return "MPEG-2 Video"
         case "V_MPEG1": return "MPEG-1 Video"
         case "V_PRORES": return "Apple ProRes"
+        case "V_MJPEG": return "Motion JPEG"
         case "V_THEORA": return "Theora"
         case "V_MS/VFW/FOURCC": return "VfW (FourCC)"
         case "A_AAC", "A_AAC/MPEG4/LC", "A_AAC/MPEG4/LC/SBR": return "AAC"

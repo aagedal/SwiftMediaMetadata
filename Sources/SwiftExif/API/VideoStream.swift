@@ -95,6 +95,11 @@ public struct VideoStream: Sendable, Equatable {
     /// True when the track is a cover-art / attached-picture track rather
     /// than a timed video track (ffprobe `DISPOSITION:attached_pic`).
     public var isAttachedPic: Bool?
+    /// Default-track flag (ffprobe `DISPOSITION:default`). When the container
+    /// is Matroska and the element is absent, defaults to `true` per spec.
+    public var isDefault: Bool?
+    /// Forced-display flag (ffprobe `DISPOSITION:forced`).
+    public var isForced: Bool?
     /// Per-stream timecode (HH:MM:SS:FF) where available.
     public var timecode: String?
     /// Optional human-readable track title / label set by the muxer.
@@ -128,6 +133,8 @@ public struct VideoStream: Sendable, Equatable {
             && lhs.pixelFormat == rhs.pixelFormat
             && lhs.frameCount == rhs.frameCount
             && lhs.isAttachedPic == rhs.isAttachedPic
+            && lhs.isDefault == rhs.isDefault
+            && lhs.isForced == rhs.isForced
             && lhs.timecode == rhs.timecode
             && lhs.title == rhs.title
     }

@@ -32,14 +32,17 @@ public struct MP4Parser: Sendable {
         }
         let moovChildren = try ISOBMFFBoxReader.parseBoxes(from: moov.data)
 
-        // Parse mvhd (movie header)
+        // Parse mvhd (movie header). Returns the movie timescale, which is
+        // needed later by `edts > elst` entries (their segment_duration field
+        // is expressed in movie timescale, not media timescale).
+        var movieTimescale: UInt32 = 0
         if let mvhd = moovChildren.first(where: { $0.type == "mvhd" }) {
-            parseMVHD(mvhd.data, into: &metadata)
+            movieTimescale = parseMVHD(mvhd.data, into: &metadata)
         }
 
         // Parse tracks
         for trak in moovChildren.filter({ $0.type == "trak" }) {
-            parseTrak(trak.data, into: &metadata)
+            parseTrak(trak.data, movieTimescale: movieTimescale, into: &metadata)
         }
 
         // QuickTime timecode track (`tmcd`): the sample entry in stsd gives
@@ -82,8 +85,38 @@ public struct MP4Parser: Sendable {
         }
 
         // Derive ffprobe-compatible fields the parser can't read directly:
-        // pixelFormat, avg/rFrameRate.
+        // color range / chroma siting defaults, pixelFormat, avg/rFrameRate.
         for i in 0..<metadata.videoStreams.count {
+            // ISOBMFF color: when no `colr` box is present, ffprobe assumes
+            // limited-range YUV ("tv") for the H.264/H.265/AV1/VP9 codecs that
+            // dominate Apple/Adobe pipelines, and tv for ProRes too. Mirror
+            // that behaviour so JSON output isn't blank on every other clip.
+            if isLimitedRangeDefaultCodec(metadata.videoStreams[i].codec) {
+                if metadata.videoStreams[i].colorInfo == nil {
+                    metadata.videoStreams[i].colorInfo = VideoColorInfo(fullRange: false)
+                } else if metadata.videoStreams[i].colorInfo?.fullRange == nil {
+                    metadata.videoStreams[i].colorInfo?.fullRange = false
+                }
+            }
+            // Chroma siting: ffprobe surfaces a default for the H.264/HEVC
+            // family when the bitstream omits chroma_sample_loc_type — "left"
+            // for 4:2:0 (matches MPEG-2/AVC), "topleft" for APV. AV1/VP9
+            // routinely report nothing here, so we leave them alone rather
+            // than fabricating a value.
+            if metadata.videoStreams[i].chromaLocation == nil,
+               let codec = metadata.videoStreams[i].codec {
+                switch codec {
+                case "avc1", "avc3",
+                     "hvc1", "hev1", "hev2", "dvh1", "dvhe":
+                    if metadata.videoStreams[i].chromaSubsampling == "4:2:0" {
+                        metadata.videoStreams[i].chromaLocation = "left"
+                    }
+                case "apv1":
+                    metadata.videoStreams[i].chromaLocation = "topleft"
+                default:
+                    break
+                }
+            }
             if metadata.videoStreams[i].pixelFormat == nil {
                 metadata.videoStreams[i].pixelFormat = PixelFormatDerivation.derive(
                     chromaSubsampling: metadata.videoStreams[i].chromaSubsampling,
@@ -99,9 +132,95 @@ public struct MP4Parser: Sendable {
                     metadata.videoStreams[i].rFrameRate = fps
                 }
             }
+            // Pixel/display aspect ratio: default to square pixels when no
+            // pasp box was present and tkhd didn't override. ffprobe always
+            // emits SAR/DAR for video tracks.
+            if let w = metadata.videoStreams[i].width,
+               let h = metadata.videoStreams[i].height, w > 0, h > 0 {
+                if metadata.videoStreams[i].displayWidth == nil {
+                    metadata.videoStreams[i].displayWidth = w
+                }
+                if metadata.videoStreams[i].displayHeight == nil {
+                    metadata.videoStreams[i].displayHeight = h
+                }
+                if metadata.videoStreams[i].pixelAspectRatio == nil,
+                   let dw = metadata.videoStreams[i].displayWidth,
+                   let dh = metadata.videoStreams[i].displayHeight, dw > 0, dh > 0 {
+                    let parNum = dw * h
+                    let parDen = dh * w
+                    let g = gcdMP4(parNum, parDen)
+                    metadata.videoStreams[i].pixelAspectRatio = (parNum / g, parDen / g)
+                }
+            }
+            // Default-track flag: ISOBMFF doesn't have a per-track "default"
+            // bit the way Matroska does, so ffprobe marks only the first track
+            // of each kind as default. Match that.
+            if metadata.videoStreams[i].isDefault == nil {
+                metadata.videoStreams[i].isDefault = (i == 0)
+            }
+            if metadata.videoStreams[i].isAttachedPic == nil {
+                metadata.videoStreams[i].isAttachedPic = false
+            }
+        }
+        // Mirror per-stream PAR/DAR up to top-level metadata.
+        if let v = metadata.videoStreams.first {
+            if metadata.pixelAspectRatio == nil { metadata.pixelAspectRatio = v.pixelAspectRatio }
+            if metadata.displayWidth == nil { metadata.displayWidth = v.displayWidth }
+            if metadata.displayHeight == nil { metadata.displayHeight = v.displayHeight }
+        }
+        for i in 0..<metadata.audioStreams.count {
+            if metadata.audioStreams[i].isDefault == nil {
+                metadata.audioStreams[i].isDefault = (i == 0)
+            }
+        }
+
+        // Container bit_rate fallback (matches ffprobe `format.bit_rate`).
+        let containerBytes = metadata.fileSize ?? Int64(data.count)
+        if metadata.bitRate == nil,
+           let dur = metadata.duration, dur > 0, containerBytes > 0 {
+            metadata.bitRate = Int(Double(containerBytes) * 8.0 / dur)
         }
 
         return metadata
+    }
+
+    /// ISOBMFF audio FourCCs that carry uncompressed PCM samples. Their bit
+    /// rate is deterministic (sample_rate × channels × bit_depth), so we
+    /// prefer that formula over stsz-sum-over-duration which introduces tiny
+    /// rounding noise from the final partial sample.
+    private static func isUncompressedPCMCodec(_ codec: String) -> Bool {
+        switch codec {
+        case "sowt", "twos", "lpcm", "ipcm", "in24", "in32",
+             "fl32", "fl64", "raw ", "NONE":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func gcdMP4(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a), y = abs(b)
+        while y != 0 { (x, y) = (y, x % y) }
+        return max(x, 1)
+    }
+
+    /// Codecs that ffprobe treats as limited-range YUV ("tv") when no explicit
+    /// color_range box is present. Used to fill in `color_range` and the
+    /// "left" `chroma_location` default for plain H.264/H.265 clips.
+    private static func isLimitedRangeDefaultCodec(_ codec: String?) -> Bool {
+        guard let codec else { return false }
+        switch codec {
+        case "avc1", "avc3",
+             "hvc1", "hev1", "hev2", "dvh1", "dvhe",
+             "vvc1", "vvi1",
+             "av01",
+             "vp08", "vp09",
+             "apch", "apcn", "apcs", "apco", "ap4h", "ap4x", "apv1",
+             "mp4v":
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - Top-Level Parsing (skips mdat)
@@ -164,21 +283,22 @@ public struct MP4Parser: Sendable {
 
     // MARK: - mvhd (Movie Header)
 
-    private static func parseMVHD(_ data: Data, into metadata: inout VideoMetadata) {
-        guard data.count >= 4 else { return }
+    @discardableResult
+    private static func parseMVHD(_ data: Data, into metadata: inout VideoMetadata) -> UInt32 {
+        guard data.count >= 4 else { return 0 }
         var reader = BinaryReader(data: data)
 
         // FullBox: version (1 byte) + flags (3 bytes)
-        guard let version = try? reader.readUInt8() else { return }
+        guard let version = try? reader.readUInt8() else { return 0 }
         _ = try? reader.readBytes(3) // flags
 
         if version == 0 {
             // Version 0: 32-bit fields
-            guard data.count >= 20 else { return }
+            guard data.count >= 20 else { return 0 }
             guard let creationTime = try? reader.readUInt32BigEndian(),
                   let modTime = try? reader.readUInt32BigEndian(),
                   let timescale = try? reader.readUInt32BigEndian(),
-                  let duration = try? reader.readUInt32BigEndian() else { return }
+                  let duration = try? reader.readUInt32BigEndian() else { return 0 }
 
             if creationTime > 0 {
                 metadata.creationDate = Date(timeIntervalSince1970: Double(creationTime) - epochOffset)
@@ -189,13 +309,14 @@ public struct MP4Parser: Sendable {
             if timescale > 0 {
                 metadata.duration = Double(duration) / Double(timescale)
             }
+            return timescale
         } else {
             // Version 1: 64-bit fields
-            guard data.count >= 32 else { return }
+            guard data.count >= 32 else { return 0 }
             guard let creationTime = try? reader.readUInt64BigEndian(),
                   let modTime = try? reader.readUInt64BigEndian(),
                   let timescale = try? reader.readUInt32BigEndian(),
-                  let duration = try? reader.readUInt64BigEndian() else { return }
+                  let duration = try? reader.readUInt64BigEndian() else { return 0 }
 
             if creationTime > 0 {
                 metadata.creationDate = Date(timeIntervalSince1970: Double(creationTime) - epochOffset)
@@ -206,21 +327,45 @@ public struct MP4Parser: Sendable {
             if timescale > 0 {
                 metadata.duration = Double(duration) / Double(timescale)
             }
+            return timescale
         }
     }
 
     // MARK: - Track Parsing
 
-    private static func parseTrak(_ data: Data, into metadata: inout VideoMetadata) {
+    private static func parseTrak(
+        _ data: Data,
+        movieTimescale: UInt32,
+        into metadata: inout VideoMetadata
+    ) {
         guard let children = try? ISOBMFFBoxReader.parseBoxes(from: data) else { return }
 
         // tkhd provides track-level display dimensions and flags.
         var trackWidth: Int?
         var trackHeight: Int?
+        var tkhdIsDefault: Bool?
         if let tkhd = children.first(where: { $0.type == "tkhd" }) {
             if let dims = parseTKHDDimensions(tkhd.data) {
                 trackWidth = dims.width
                 trackHeight = dims.height
+            }
+            tkhdIsDefault = parseTKHDIsDefault(tkhd.data)
+        }
+
+        // `edts > elst` trims the visible essence window inside the mdhd
+        // duration — ffmpeg uses it to hide B-frame decoder pre-roll and to
+        // support seamless concatenation. When present, the sum of each entry's
+        // segment_duration (in *movie* timescale) is the effective track
+        // duration; ignoring it over-reports the media duration and deflates
+        // per-stream bitrate accordingly. We recover it here and plumb it as
+        // `editedDuration` below.
+        var editedDuration: TimeInterval?
+        if movieTimescale > 0,
+           let edts = children.first(where: { $0.type == "edts" }),
+           let edtsChildren = try? ISOBMFFBoxReader.parseBoxes(from: edts.data),
+           let elst = edtsChildren.first(where: { $0.type == "elst" }) {
+            if let total = parseELSTSegmentDuration(elst.data), total > 0 {
+                editedDuration = Double(total) / Double(movieTimescale)
             }
         }
 
@@ -238,12 +383,20 @@ public struct MP4Parser: Sendable {
         // mdhd: per-track timescale + duration + language.
         var trackDuration: TimeInterval?
         var language: String?
+        var trackTimescale: UInt32 = 0
         if let mdhd = mdiaChildren.first(where: { $0.type == "mdhd" }) {
             if let info = parseMDHD(mdhd.data) {
                 trackDuration = info.duration
                 language = info.language
+                trackTimescale = info.timescale
             }
         }
+
+        // `trackDuration` stays on the raw mdhd value — ffprobe reports that
+        // for a stream's `duration` field and computes `avg_frame_rate` as
+        // `samples / mdhd_duration`. Only the bitrate calc prefers
+        // `editedDuration` (mirroring ffprobe, which sums the packet bytes
+        // that land inside the edit-list window).
 
         // hdlr → track handler type ("vide", "soun").
         var handlerType = ""
@@ -267,6 +420,8 @@ public struct MP4Parser: Sendable {
 
         let frameCount = stszBox.flatMap(parseSTSZSampleCount)
         let sttsFrames = sttsBox.flatMap(parseSTTSSampleCount)
+        let trackBytes = stszBox.flatMap(parseSTSZTotalBytes)
+        let dominantSampleDelta = sttsBox.flatMap(parseSTTSDominantDelta)
 
         // Prefer stsz; stts is a sum of per-run counts but some muxers only populate one.
         let samples = frameCount ?? sttsFrames
@@ -278,12 +433,60 @@ public struct MP4Parser: Sendable {
             return Double(samples) / trackDuration
         }()
 
+        // Real (decoder cadence) frame rate: timescale / dominant sample delta.
+        // ffprobe surfaces this as `r_frame_rate` and it's stable across files
+        // with a partial trailing sample (where samples/duration would slip).
+        let rFrameRate: Double? = {
+            guard trackTimescale > 0, let delta = dominantSampleDelta, delta > 0 else { return nil }
+            return Double(trackTimescale) / Double(delta)
+        }()
+
+        // Per-stream bitrate fallback: total essence bytes × 8 / duration.
+        // Priority order matches ffprobe:
+        //   1. edit-list-corrected duration (strips B-frame pre-roll, seamless
+        //      concatenation joins, and any other explicit trim)
+        //   2. stts-derived essence duration (samples × dominant_delta /
+        //      timescale) — stable when mdhd has a partial trailing sample
+        //   3. raw mdhd duration
+        let derivedTrackBitRate: Int? = {
+            guard let bytes = trackBytes else { return nil }
+            if let edited = editedDuration, edited > 0 {
+                return Int(Double(bytes) * 8.0 / edited)
+            }
+            if let samples, samples > 0,
+               let delta = dominantSampleDelta, delta > 0,
+               trackTimescale > 0 {
+                let essenceDur = Double(samples) * Double(delta) / Double(trackTimescale)
+                if essenceDur > 0 { return Int(Double(bytes) * 8.0 / essenceDur) }
+            }
+            if let dur = trackDuration, dur > 0 {
+                return Int(Double(bytes) * 8.0 / dur)
+            }
+            return nil
+        }()
+
         if handlerType == "vide", let stsdBox {
             var stream = VideoStream(index: metadata.videoStreams.count)
             stream.duration = trackDuration
             stream.frameCount = samples
+            // Legacy `frameRate` and `avgFrameRate` both report the essence
+            // average (samples / duration). `rFrameRate` is the decoder
+            // cadence (timescale / dominant sample delta) — equal to avg when
+            // stts has a single, uniform entry.
             stream.frameRate = fps
+            stream.avgFrameRate = fps
+            stream.rFrameRate = rFrameRate ?? fps
+            stream.isDefault = tkhdIsDefault
             parseVisualSampleEntry(stsdBox.data, into: &stream)
+            // ffprobe always computes per-stream bit_rate from actual packet
+            // sizes in the edit-list window (not from the encoder-declared
+            // `btrt` value, which goes stale after lossless trim). Mirror that
+            // priority: stsz-derived over btrt whenever stsz has data. Fall
+            // back to btrt/esds only when stsz is missing (e.g. fragmented
+            // movies with no sample count we can sum).
+            if let derived = derivedTrackBitRate, derived > 0 {
+                stream.bitRate = derived
+            }
 
             if stream.width == nil, let trackWidth, trackWidth > 0 {
                 stream.width = trackWidth
@@ -320,12 +523,34 @@ public struct MP4Parser: Sendable {
             if metadata.pixelAspectRatio == nil { metadata.pixelAspectRatio = stream.pixelAspectRatio }
             if metadata.displayWidth == nil { metadata.displayWidth = stream.displayWidth }
             if metadata.displayHeight == nil { metadata.displayHeight = stream.displayHeight }
-            if metadata.bitRate == nil, let br = stream.bitRate { metadata.bitRate = br }
         } else if handlerType == "soun", let stsdBox {
             var stream = AudioStream(index: metadata.audioStreams.count)
             stream.duration = trackDuration
             stream.language = language
+            stream.isDefault = tkhdIsDefault
             parseAudioSampleEntry(stsdBox.data, into: &stream)
+            // Uncompressed PCM has a deterministic bit rate
+            // (sample_rate × channels × bit_depth) — use that verbatim
+            // regardless of what `esds` / `btrt` / stsz happen to compute,
+            // because stsz-over-duration introduces rounding noise and
+            // ffprobe reports the exact mathematical value.
+            if let codec = stream.codec, isUncompressedPCMCodec(codec),
+               let sr = stream.sampleRate, sr > 0,
+               let ch = stream.channels, ch > 0,
+               let bd = stream.bitDepth, bd > 0 {
+                stream.bitRate = sr * ch * bd
+            } else if let derived = derivedTrackBitRate, derived > 0 {
+                // Compressed audio: match ffprobe priority — packet-sum over
+                // edited duration, falling back to esds/btrt only when stsz
+                // is unusable (typical of fragmented MP4).
+                stream.bitRate = derived
+            }
+            if stream.bitRate == nil,
+               let sr = stream.sampleRate, sr > 0,
+               let ch = stream.channels, ch > 0,
+               let bd = stream.bitDepth, bd > 0 {
+                stream.bitRate = sr * ch * bd
+            }
             metadata.audioStreams.append(stream)
 
             if metadata.audioCodec == nil { metadata.audioCodec = stream.codec }
@@ -624,9 +849,21 @@ public struct MP4Parser: Sendable {
         return (Int(widthFP >> 16), Int(heightFP >> 16))
     }
 
-    /// mdhd (media header): returns duration in seconds (using this track's timescale)
-    /// and the ISO 639-2/T language code if set.
-    private static func parseMDHD(_ data: Data) -> (duration: TimeInterval?, language: String?)? {
+    /// tkhd flags live in the bottom 24 bits of the FullBox header. Bit 0 =
+    /// track_enabled (the only one ffprobe consults for `disposition.default`).
+    /// Bits 1 / 2 / 3 carry in_movie / in_preview / in_poster respectively but
+    /// don't influence ffprobe's default-track flag.
+    private static func parseTKHDIsDefault(_ data: Data) -> Bool? {
+        guard data.count >= 4 else { return nil }
+        let s = data.startIndex
+        let flags = (UInt32(data[s + 1]) << 16) | (UInt32(data[s + 2]) << 8) | UInt32(data[s + 3])
+        return (flags & 0x1) != 0
+    }
+
+    /// mdhd (media header): returns duration in seconds (using this track's timescale),
+    /// the timescale itself (so callers can compute r_frame_rate from stts), and
+    /// the ISO 639-2/T language code if set.
+    private static func parseMDHD(_ data: Data) -> (duration: TimeInterval?, language: String?, timescale: UInt32)? {
         guard data.count >= 4 else { return nil }
         var reader = BinaryReader(data: data)
         guard let version = try? reader.readUInt8() else { return nil }
@@ -668,7 +905,40 @@ public struct MP4Parser: Sendable {
         }
 
         let seconds: TimeInterval? = (timescale > 0) ? Double(duration) / Double(timescale) : nil
-        return (seconds, language)
+        return (seconds, language, timescale)
+    }
+
+    /// Sum every `segment_duration` in an `elst` FullBox and return the total
+    /// in **movie timescale** ticks. An elst can have one entry (the common
+    /// B-frame pre-roll trim) or many (ffmpeg's seamless concatenation).
+    /// Entries whose media_time is -1 are pure "empty edits" (dwell time
+    /// before the first frame) — they still count towards the visible window.
+    /// Layout per ISO/IEC 14496-12:
+    ///   version(1) + flags(3) + entry_count(4) + entries
+    ///   v0 entry: segment_duration(4) + media_time(4) + media_rate_int(2) + media_rate_frac(2)
+    ///   v1 entry: segment_duration(8) + media_time(8) + media_rate_int(2) + media_rate_frac(2)
+    private static func parseELSTSegmentDuration(_ data: Data) -> UInt64? {
+        guard data.count >= 8 else { return nil }
+        var reader = BinaryReader(data: data)
+        guard let version = try? reader.readUInt8() else { return nil }
+        _ = try? reader.readBytes(3) // flags
+        guard let entryCount = try? reader.readUInt32BigEndian() else { return nil }
+        var total: UInt64 = 0
+        for _ in 0..<min(entryCount, 1 << 16) {
+            let segDur: UInt64
+            if version == 1 {
+                guard let v = try? reader.readUInt64BigEndian() else { break }
+                segDur = v
+                guard (try? reader.readUInt64BigEndian()) != nil else { break } // media_time
+            } else {
+                guard let v = try? reader.readUInt32BigEndian() else { break }
+                segDur = UInt64(v)
+                guard (try? reader.readUInt32BigEndian()) != nil else { break } // media_time
+            }
+            guard (try? reader.readUInt32BigEndian()) != nil else { break } // media_rate
+            total &+= segDur
+        }
+        return total
     }
 
     /// stsz payload layout: version+flags(4) + sample_size(4) + sample_count(4).
@@ -679,6 +949,28 @@ public struct MP4Parser: Sendable {
         _ = try? reader.readBytes(4) // version + flags
         _ = try? reader.readUInt32BigEndian() // sample_size
         return (try? reader.readUInt32BigEndian()).map(Int.init)
+    }
+
+    /// Sum the byte lengths of every sample in a track. When `sample_size` in
+    /// the stsz header is non-zero, all samples share that size — multiply.
+    /// Otherwise iterate the per-sample table. Used to derive per-stream
+    /// bitrate when no `btrt` / `esds` field provides one.
+    private static func parseSTSZTotalBytes(_ box: ISOBMFFBox) -> Int64? {
+        guard box.data.count >= 12 else { return nil }
+        var reader = BinaryReader(data: box.data)
+        _ = try? reader.readBytes(4) // version + flags
+        guard let uniformSize = try? reader.readUInt32BigEndian(),
+              let count = try? reader.readUInt32BigEndian() else { return nil }
+        if uniformSize > 0 {
+            return Int64(uniformSize) * Int64(count)
+        }
+        var total: Int64 = 0
+        let cap = min(count, 1 << 24)
+        for _ in 0..<cap {
+            guard let sz = try? reader.readUInt32BigEndian() else { break }
+            total &+= Int64(sz)
+        }
+        return total > 0 ? total : nil
     }
 
     /// stts payload: version+flags(4) + entry_count(4) + [sample_count(4) + sample_delta(4)]*.
@@ -697,6 +989,25 @@ public struct MP4Parser: Sendable {
             total &+= UInt64(sc)
         }
         return total > 0 ? Int(total) : nil
+    }
+
+    /// Pick the most-common sample delta across stts entries. ffprobe uses
+    /// this to compute `r_frame_rate` — the cadence the decoder ticks at,
+    /// independent of any partial trailing sample that nudges samples/duration
+    /// off the integer rate.
+    private static func parseSTTSDominantDelta(_ box: ISOBMFFBox) -> UInt32? {
+        guard box.data.count >= 8 else { return nil }
+        var reader = BinaryReader(data: box.data)
+        _ = try? reader.readBytes(4)
+        guard let entryCount = try? reader.readUInt32BigEndian() else { return nil }
+        var counts: [UInt32: UInt64] = [:]
+        for _ in 0..<min(entryCount, 1 << 20) {
+            guard let sc = try? reader.readUInt32BigEndian(),
+                  let sd = try? reader.readUInt32BigEndian() else { break }
+            guard sd > 0 else { continue }
+            counts[sd, default: 0] &+= UInt64(sc)
+        }
+        return counts.max(by: { $0.value < $1.value })?.key
     }
 
     // MARK: - Visual sample entry
@@ -772,6 +1083,11 @@ public struct MP4Parser: Sendable {
                 applyVisualChildBox(kid, into: &stream)
             }
         }
+
+        // Sample entries whose FourCC uniquely identifies the codec variant
+        // (ProRes, APV, ProRes RAW) can skip frame-header parsing entirely —
+        // fill in profile/chroma/bit_depth from the FourCC.
+        applyFourCCDefaults(codec, into: &stream)
     }
 
     private static func applyVisualChildBox(_ box: ISOBMFFBox, into stream: inout VideoStream) {
@@ -815,6 +1131,101 @@ public struct MP4Parser: Sendable {
             if let br = parseBTRT(box.data) {
                 stream.bitRate = br
             }
+        case "vvcC":
+            parseVVCC(box.data, into: &stream)
+        default:
+            break
+        }
+    }
+
+    /// VvcDecoderConfigurationRecord (ISO/IEC 14496-15 §11.3) — the fields we
+    /// need live in the first few bytes:
+    ///   byte 0 : LengthSizeMinusOne(2) | ptl_present_flag(1) | reserved(5)
+    ///   bytes 1–2 : ols_idx(9) / num_sublayers(3) / constant_frame_rate(2) /
+    ///                chroma_format_idc(2)
+    ///   byte 3 : bit_depth_minus8 (3 bits in the high nibble)
+    /// We only peek at the chroma and bit depth — profile lives in an optional
+    /// PTL record and varies too much across VVC drafts to map reliably here.
+    private static func parseVVCC(_ data: Data, into stream: inout VideoStream) {
+        guard data.count >= 4 else { return }
+        let s = data.startIndex
+        let ptlPresent = (data[s] >> 5) & 0x01
+        guard ptlPresent == 1, data.count >= 5 else {
+            // Without PTL the chroma/bit_depth fields aren't guaranteed — bail
+            // out after setting defensible defaults (every shipping VVC clip we
+            // care about is 10-bit 4:2:0 Main 10 Intra or Main 10).
+            if stream.chromaSubsampling == nil { stream.chromaSubsampling = "4:2:0" }
+            if stream.bitDepth == nil { stream.bitDepth = 10 }
+            return
+        }
+        // ptl_present_flag = 1: next 2 bytes are ols_idx(9)+sublayers(3)+cfr(2)+
+        // chroma_format_idc(2). Bit_depth_minus_8 is in the high 3 bits of the
+        // byte that follows.
+        let byte2 = data[s + 2]
+        let chromaIDC = Int(byte2 & 0x03)
+        let bitDepthMinus8 = Int((data[s + 3] >> 5) & 0x07)
+        if stream.chromaSubsampling == nil {
+            switch chromaIDC {
+            case 0: stream.chromaSubsampling = "4:0:0"
+            case 1: stream.chromaSubsampling = "4:2:0"
+            case 2: stream.chromaSubsampling = "4:2:2"
+            case 3: stream.chromaSubsampling = "4:4:4"
+            default: break
+            }
+        }
+        if stream.bitDepth == nil, bitDepthMinus8 >= 0, bitDepthMinus8 <= 8 {
+            stream.bitDepth = bitDepthMinus8 + 8
+        }
+    }
+
+    /// Deterministic pix_fmt / profile / bit_depth for codecs whose sample
+    /// entry FourCC uniquely identifies the subcodec — notably ProRes, APV
+    /// and ProRes RAW. ffprobe reads the same fields from the frame header,
+    /// but every FourCC here maps 1:1 so surfacing them from the container
+    /// side matches ffprobe's output without any bitstream parsing.
+    private static func applyFourCCDefaults(_ codec: String, into stream: inout VideoStream) {
+        switch codec {
+        // Apple ProRes (SMPTE RP 2019)
+        case "apco": // 422 Proxy
+            stream.profile = stream.profile ?? "Proxy"
+            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:2:2"
+            stream.bitDepth = stream.bitDepth ?? 10
+        case "apcs": // 422 LT
+            stream.profile = stream.profile ?? "LT"
+            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:2:2"
+            stream.bitDepth = stream.bitDepth ?? 10
+        case "apcn": // 422 Standard
+            stream.profile = stream.profile ?? "Standard"
+            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:2:2"
+            stream.bitDepth = stream.bitDepth ?? 10
+        case "apch": // 422 HQ
+            stream.profile = stream.profile ?? "HQ"
+            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:2:2"
+            stream.bitDepth = stream.bitDepth ?? 10
+        case "ap4h": // 4444 — always carries alpha, 12-bit YUV
+            stream.profile = stream.profile ?? "4444"
+            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:4:4"
+            stream.bitDepth = stream.bitDepth ?? 12
+            stream.pixelFormat = stream.pixelFormat ?? "yuva444p12le"
+        case "ap4x": // 4444 XQ
+            stream.profile = stream.profile ?? "4444XQ"
+            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:4:4"
+            stream.bitDepth = stream.bitDepth ?? 12
+            stream.pixelFormat = stream.pixelFormat ?? "yuva444p12le"
+        // Apple ProRes RAW
+        case "aprn":
+            stream.profile = stream.profile ?? "RAW"
+            stream.bitDepth = stream.bitDepth ?? 12
+        case "aprh":
+            stream.profile = stream.profile ?? "RAW HQ"
+            stream.bitDepth = stream.bitDepth ?? 12
+        // APV (Advanced Professional Video, SMPTE ST 2130) — the sample entry
+        // FourCC `apv1` always carries 10-bit 4:2:2 Main profile (profile_idc
+        // 33). Newer 4:4:4 / 12-bit variants will need a real APVC box.
+        case "apv1":
+            stream.profile = stream.profile ?? "33"
+            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:2:2"
+            stream.bitDepth = stream.bitDepth ?? 10
         default:
             break
         }
@@ -1129,10 +1540,15 @@ public struct MP4Parser: Sendable {
                         stream.bitRate = br
                     }
                 case "esds":
-                    // MPEG-4 Elementary Stream Descriptor; we peek for the
-                    // average bit rate field only.
+                    // MPEG-4 Elementary Stream Descriptor: average bit rate
+                    // (DecoderConfigDescriptor) + AOT-derived profile name
+                    // (DecoderSpecificInfo).
                     if let br = parseESDSAvgBitRate(kid.data) {
                         stream.bitRate = br
+                    }
+                    if stream.codec == "mp4a", stream.profile == nil,
+                       let profile = parseESDSAACProfile(kid.data) {
+                        stream.profile = profile
                     }
                 default:
                     break
@@ -1144,6 +1560,15 @@ public struct MP4Parser: Sendable {
         // value, synthesize a sensible label (matches ffprobe's default).
         if stream.channelLayout == nil, let ch = stream.channels {
             stream.channelLayout = defaultChannelLayout(forChannels: ch)
+        }
+
+        // AAC profile fallback: when esds didn't surface DecoderSpecificInfo,
+        // default to "LC" (the overwhelming majority of mp4a streams). ffprobe
+        // does the equivalent: when avcodec can't decode the AOT it shows the
+        // codec as plain `aac` with no profile, but every iPhone / Android
+        // recorder we care about emits LC.
+        if stream.codec == "mp4a", stream.profile == nil {
+            stream.profile = "LC"
         }
     }
 
@@ -1218,6 +1643,50 @@ public struct MP4Parser: Sendable {
                 if mb > 0 { return Int(mb) }
                 return nil
             }
+        }
+        return nil
+    }
+
+    /// Pull the MPEG-4 audio object type out of an `esds` box and map it to the
+    /// short profile labels ffprobe reports (`LC`, `HE-AAC`, `HE-AACv2`, `LD`).
+    /// Layout: ES_Descriptor (tag 0x03) → DecoderConfigDescriptor (0x04) →
+    /// DecoderSpecificInfo (0x05) whose first 5 bits are the audio object type.
+    private static func parseESDSAACProfile(_ data: Data) -> String? {
+        guard data.count > 4 else { return nil }
+        let payload = data.suffix(from: data.startIndex + 4)
+        // Locate the DecoderSpecificInfo descriptor (tag 0x05) directly — its
+        // payload begins with the AudioObjectType packed in the high 5 bits.
+        var i = payload.startIndex
+        while i < payload.endIndex {
+            if payload[i] == 0x05, i + 1 < payload.endIndex {
+                var off = i + 1
+                var size = 0
+                var seen = 0
+                while off < payload.endIndex, seen < 4 {
+                    let b = payload[off]
+                    size = (size << 7) | Int(b & 0x7F)
+                    off += 1; seen += 1
+                    if (b & 0x80) == 0 { break }
+                }
+                guard size >= 1, off < payload.endIndex else { return nil }
+                let aot = Int(payload[off] >> 3) & 0x1F
+                switch aot {
+                case 1: return "Main"
+                case 2: return "LC"
+                case 3: return "SSR"
+                case 4: return "LTP"
+                case 5: return "HE-AAC"
+                case 6: return "Scalable"
+                case 7: return "TwinVQ"
+                case 17: return "ER LC"
+                case 19: return "ER LTP"
+                case 23: return "LD"
+                case 29: return "HE-AACv2"
+                case 39: return "ELD"
+                default: return nil
+                }
+            }
+            i += 1
         }
         return nil
     }

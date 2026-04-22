@@ -116,12 +116,11 @@ public struct VideoMetadata: Sendable {
 
     private static func defaultFormatLongName(_ format: VideoFormat) -> String {
         switch format {
-        case .mp4: return "MP4 (MPEG-4 Part 14)"
-        case .mov: return "QuickTime / MOV"
-        case .m4v: return "Apple iTunes Video (M4V)"
+        // ISOBMFF family (mov,mp4,m4a,3gp,3g2,mj2) — ffprobe reports the same
+        // long name for every brand, since they share the demuxer.
+        case .mp4, .mov, .m4v: return "QuickTime / MOV"
         case .mxf: return "MXF (Material eXchange Format)"
-        case .mkv: return "Matroska"
-        case .webm: return "WebM"
+        case .mkv, .webm: return "Matroska / WebM"
         case .avi: return "AVI (Audio Video Interleave)"
         case .mpg: return "MPEG-PS / MPEG-TS"
         }
