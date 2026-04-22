@@ -35,6 +35,15 @@ A native Swift library for reading and writing image and video metadata — Exif
 
 ## Installation
 
+### CLI (Homebrew)
+
+```sh
+brew tap aagedal/tap
+brew install swift-exif
+```
+
+### Swift Package
+
 Add SwiftExif to your `Package.swift`:
 
 ```swift
