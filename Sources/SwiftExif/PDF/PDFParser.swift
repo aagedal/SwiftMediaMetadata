@@ -309,7 +309,9 @@ public struct PDFParser: Sendable {
     /// Extract a stream's content from an indirect object.
     private static func extractStream(data: Data, offset: Int) -> Data? {
         let dict = parseDictionary(data: data, offset: offset)
-        guard let lengthStr = dict["Length"], let length = Int(lengthStr.trimmingCharacters(in: .whitespaces)) else {
+        guard let lengthStr = dict["Length"],
+              let length = Int(lengthStr.trimmingCharacters(in: .whitespaces)),
+              length >= 0, length <= data.count else {
             return nil
         }
 
@@ -326,6 +328,8 @@ public struct PDFParser: Sendable {
             contentStart += 1
         }
 
+        // length is already bounded by data.count above, so contentStart+length
+        // cannot overflow Int; only the end-of-data check remains.
         let contentEnd = contentStart + length
         guard contentEnd <= data.count else { return nil }
 

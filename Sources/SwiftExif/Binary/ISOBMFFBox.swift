@@ -76,9 +76,11 @@ public struct ISOBMFFBoxReader: Sendable {
 
             let payloadSize: Int
             if size32 == 1 {
-                // Extended size (UInt64)
+                // Extended size (UInt64). Guard against values that don't fit in
+                // Int — Int(UInt64) traps on overflow, which a malformed file could
+                // trigger to crash the parser.
                 let size64 = try reader.readUInt64BigEndian()
-                guard size64 >= 16 else { break } // Header is 16 bytes minimum
+                guard size64 >= 16, size64 <= UInt64(Int.max) else { break }
                 payloadSize = Int(size64) - 16 // 16 = 4 (size32) + 4 (type) + 8 (size64)
             } else if size32 == 0 {
                 // Box extends to end of data

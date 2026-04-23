@@ -57,10 +57,13 @@ public struct PSDParser: Sendable {
         let layerMaskStart = reader.offset
         let layerMaskLength: Int
         if version == 2 {
-            // PSB uses 8-byte length for layer/mask section
+            // PSB uses 8-byte length for layer/mask section. Clamp to Int.max —
+            // Int(UInt64) traps on overflow, and a malformed PSB could specify
+            // a length > 2^63-1.
             let hi = try reader.readUInt32BigEndian()
             let lo = try reader.readUInt32BigEndian()
-            layerMaskLength = Int(UInt64(hi) << 32 | UInt64(lo))
+            let fullLength = UInt64(hi) << 32 | UInt64(lo)
+            layerMaskLength = fullLength > UInt64(Int.max) ? Int.max : Int(fullLength)
         } else {
             layerMaskLength = Int(try reader.readUInt32BigEndian())
         }
