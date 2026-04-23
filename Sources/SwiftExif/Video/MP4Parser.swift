@@ -2306,10 +2306,15 @@ public struct MP4Parser: Sendable {
         guard let entryCount = try? reader.readUInt32BigEndian() else { return nil }
         var out: [UInt64] = []
         var running: UInt64 = 0
-        for _ in 0..<min(entryCount, 1 << 16) {
+        // Total-sample cap — stts expands sample_count per entry, so the two
+        // per-loop caps below still let a crafted file produce 2^32 samples.
+        // Real chapter tracks have hundreds of samples, not millions.
+        let totalCap = 1 << 20
+        outer: for _ in 0..<min(entryCount, 1 << 16) {
             guard let sc = try? reader.readUInt32BigEndian(),
                   let sd = try? reader.readUInt32BigEndian() else { break }
             for _ in 0..<min(sc, 1 << 16) {
+                if out.count >= totalCap { break outer }
                 out.append(running)
                 running &+= UInt64(sd)
             }
@@ -2325,12 +2330,13 @@ public struct MP4Parser: Sendable {
         _ = try? reader.readBytes(4)
         guard let uniform = try? reader.readUInt32BigEndian(),
               let count = try? reader.readUInt32BigEndian() else { return nil }
+        let capped = Int(min(count, 1 << 20))
         if uniform > 0 {
-            return Array(repeating: Int(uniform), count: Int(count))
+            return Array(repeating: Int(uniform), count: capped)
         }
         var out: [Int] = []
-        out.reserveCapacity(Int(min(count, 1 << 20)))
-        for _ in 0..<min(count, 1 << 20) {
+        out.reserveCapacity(capped)
+        for _ in 0..<capped {
             guard let sz = try? reader.readUInt32BigEndian() else { break }
             out.append(Int(sz))
         }

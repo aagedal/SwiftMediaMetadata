@@ -181,6 +181,9 @@ public struct GIFParser: Sendable {
             let size = Int(data[off])
             off += 1
             if size == 0 { break }
+            // Stop at truncation rather than overshooting — the caller slices
+            // `data[start..<off]` and would trap on an out-of-range upper bound.
+            guard off + size <= data.count else { return data.count }
             off += size
         }
         return off
