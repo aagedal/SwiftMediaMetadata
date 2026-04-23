@@ -155,7 +155,9 @@ no AVFoundation, no external dependencies.
 | `creationDate` | `Date?` | Capture / mux time (ISOBMFF `mvhd`, Matroska `DateUTC`, etc.) |
 | `modificationDate` | `Date?` | Last modification time |
 | `bitRate` | `Int?` | Overall container bitrate in bits/second |
-| `timecode` | `String?` | Clip start timecode `HH:MM:SS:FF` (or `HH:MM:SS;FF` for drop-frame) from a QuickTime `tmcd` track |
+| `timecode` | `String?` | Clip start timecode `HH:MM:SS:FF` (or `HH:MM:SS;FF` for drop-frame) — the first source the container yields |
+| `timecodes` | `[Timecode]` | Every timecode source the container carries, tagged with provenance — QuickTime `tmcd` track, `moov>udta ©TIM`, XMP `xmpDM:startTimeCode`/`altTimeCode`, MXF MaterialPackage vs FilePackage, Sony NRT LtcChangeTable. Mismatches trigger a `timecode mismatch:` entry in `warnings` |
+| `chapters` | `[VideoChapter]` | Chapter markers ordered by start time — QuickTime `tref > chap` text tracks and Nero `udta > chpl` in MP4/MOV, `Chapters` master in Matroska / WebM |
 | `title` / `artist` / `comment` | `String?` | QuickTime `©nam` / `©ART` / `©cmt`, Matroska Info/Title + Segment-level `COMMENT`/`DESCRIPTION`, RIFF INFO |
 | `gpsLatitude` / `gpsLongitude` / `gpsAltitude` | `Double?` | QuickTime `©xyz` / ISO 6709 |
 | `c2pa` | `C2PAData?` | Parsed C2PA manifest store (MP4/MOV uuid or top-level `jumb`, MXF SMPTE UL or Dark KLV) |
@@ -196,6 +198,30 @@ plus convenience accessors that mirror the first video stream at the top level
 `VideoColorInfo.label` returns canonical names: `"bt709"`, `"bt601"`,
 `"bt2020"`, `"bt2020-pq"` (HDR10 / SMPTE ST 2084), `"bt2020-hlg"` (Hybrid
 Log-Gamma), … — the same vocabulary `ffprobe -show_streams` uses.
+
+#### Timecodes (every source)
+
+Broadcast workflows frequently carry the same timecode value in several
+independent places — a QuickTime `tmcd` track plus an XMP `startTimeCode`
+plus an MXF Material/File TimecodeComponent — and the three can disagree
+after a partial round-trip. `VideoMetadata.timecodes` keeps each one with
+its provenance rather than merging them silently:
+
+```swift
+for tc in video.timecodes {
+    print(tc.source, tc.value, tc.frameRate ?? -1)
+    // tc.source is .tmcdTrack, .quicktimeUdta, .xmpDM, .xmpDMAlt,
+    // .mxfMaterialPackage, .mxfFilePackage, or .sonyNRT
+}
+if video.warnings.contains(where: { $0.hasPrefix("timecode mismatch:") }) {
+    // two or more sources disagree — worth surfacing to the operator
+}
+```
+
+The scalar `timecode` field stays in sync with the first recorded entry
+for backward compatibility. `--streams` JSON output emits the full list at
+`format.Timecodes` (array of `{ value, source, frameRate }`) plus per-stream
+`Timecode` fields when the source is track-local.
 
 #### Per-stream: audio
 
@@ -243,6 +269,46 @@ Codec coverage:
   `S_TEXT/WEBVTT`, `S_HDMV/PGS` (Blu-ray), `S_VOBSUB`, `S_HDMV/TEXTST`.
 - **MPEG-TS**: DVB subtitles (stream type `0x06` + descriptor `0x59`),
   DVB teletext (descriptor `0x56`), Blu-ray PGS (stream type `0x82`).
+
+#### Chapter markers
+
+`VideoMetadata.chapters: [VideoChapter]` — start/end times in seconds from
+presentation start, with optional title and language. Ordered by start time,
+and re-indexed contiguously after hidden-atom suppression so `chapter.index`
+always matches array position.
+
+```swift
+for ch in video.chapters {
+    print(ch.index, ch.startTime, ch.endTime ?? -1,
+          ch.title ?? "", ch.language ?? "")
+    // duration is a computed property: endTime - startTime (or nil)
+    if let d = ch.duration { print("lasts \(d)s") }
+}
+```
+
+| `VideoChapter` property | Description |
+|-------------------------|-------------|
+| `index` | Position in the chapter list (0-based, contiguous) |
+| `id` | Stable identifier where the container provides one (Matroska `ChapterUID`); nil for MP4 chap / chpl |
+| `startTime` | Seconds from presentation start |
+| `endTime` | Seconds from presentation start; nil when the source doesn't record one (Nero `chpl`, open-ended Matroska atoms) |
+| `duration` | Computed `endTime − startTime`; nil when `endTime` is nil |
+| `title` | Chapter title; UTF-8 |
+| `language` | BCP-47 or ISO 639-2/T, when the container records one (Matroska `ChapLanguage` / `ChapLanguageBCP47`) |
+
+Source coverage:
+
+- **MP4 / MOV / M4V**: QuickTime text-track chapters — any trak's
+  `tref > chap` points at a text/subt trak whose stts-timed UTF-8 samples
+  carry the titles (DaVinci Resolve, Apple Compressor, iTunes, ffmpeg
+  `-map_chapters`). Falls back to Nero `udta > chpl` (x264, ffmpeg,
+  MP4Box) when no chap reference exists. The chap-referenced text track
+  is filtered out of `subtitleStreams` to match ffprobe, which reclassifies
+  those tracks as `codec_type=data` under `-select_streams s`.
+- **Matroska / WebM**: top-level `Chapters` master — walks every
+  `EditionEntry` + `ChapterAtom`, honouring `EditionFlagHidden` and
+  `ChapterFlagHidden`; supports `ChapterDisplay > ChapString`, both
+  `ChapLanguage` and the newer `ChapLanguageBCP47`.
 
 #### Format-specific highlights
 
