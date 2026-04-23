@@ -6,6 +6,33 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.3.1] — 2026-04-23
+
+### Security
+
+- **Int overflow hardening** across binary parsers — malformed input can no
+  longer trap the process via arithmetic overflow on 32-bit lengths,
+  offsets, or sub-block sizes. Affected paths: ICC profile, IPTC IIM,
+  MPF, XMP, PNG, PSD, and the shared `Data` slicing helpers.
+- **MP4 chapter allocation cap** — `chpl` (Nero) and `udta > chap` readers
+  now refuse chapter counts that would allocate more than a sane ceiling,
+  stopping a malformed `count` field from triggering gigabyte-scale
+  `Array.reserveCapacity` on import.
+- **GIF sub-block overrun fix** — application-extension sub-block reader
+  no longer walks past the declared data length when a truncated stream
+  omits its terminator.
+- **Video-read memory cap** — the MKV / WebM front-end now limits the
+  aggregate bytes it will buffer for a single import, keeping multi-file
+  scans (batch imports, folder-watch) well under 1 GB resident even when
+  fed unusually large Matroska clusters.
+- **CBOR decoder overflow guard** — string and byte-string readers reject
+  lengths that would overflow `Int`, preventing a crafted C2PA manifest
+  from crashing the CBOR front-end.
+- **zlib deflate-bomb cap** — PNG / ICC / XMP inflate paths now stop
+  producing output once a generous decompressed-size ceiling is reached,
+  so a tiny deflate stream can no longer expand to gigabytes and exhaust
+  memory.
+
 ## [1.3.0] — 2026-04-23
 
 ### Added
