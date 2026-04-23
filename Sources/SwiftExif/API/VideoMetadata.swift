@@ -96,14 +96,35 @@ public struct VideoMetadata: Sendable {
     /// sidecar (e.g. `CLIP.MXF` next to `CLIP.XML`), the sidecar is auto-discovered
     /// and merged into `camera`.
     ///
-    /// The file is memory-mapped when safe (`.mappedIfSafe`) so multi-gigabyte
-    /// video essence (mdat, MXF KLV body) never needs to be fully resident — only
-    /// the metadata-bearing boxes/KLVs the parsers touch end up paged in.
+    /// Memory behaviour: Matroska/WebM files are read via a bounded prefix
+    /// (`matroskaReadCap`, 512 MB) since the parser only scans that far and never
+    /// looks at the tail — critical when importing Blu-ray-sized MKVs from an
+    /// external volume where `.mappedIfSafe` falls back to an in-RAM load. Other
+    /// containers use `.alwaysMapped` to force mmap (again, external volumes are
+    /// treated as "unsafe" by `.mappedIfSafe` and would otherwise load wholly
+    /// into RAM). `originalData` is retained only for formats whose writer needs
+    /// it (MP4/MOV/M4V); dropping it elsewhere keeps multi-file imports from
+    /// accumulating gigabytes of mapped address space.
     public static func read(from url: URL) throws -> VideoMetadata {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        let data = try loadContainerData(from: url)
         var metadata = try parseContainer(data)
-        metadata.originalData = data
-        if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
+        // Retain the source data only for formats we can write back. For
+        // read-only formats (MKV, WebM, MXF, AVI, MPEG) holding a reference
+        // to a multi-GB Data serves no purpose and prevents the OS from
+        // reclaiming its pages as soon as the caller is done with metadata.
+        switch metadata.format {
+        case .mp4, .mov, .m4v:
+            metadata.originalData = data
+        case .mxf, .mkv, .webm, .avi, .mpg:
+            metadata.originalData = nil
+        }
+        if metadata.fileSize == nil {
+            if let attrSize = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64 {
+                metadata.fileSize = attrSize
+            } else {
+                metadata.fileSize = Int64(data.count)
+            }
+        }
         if metadata.formatLongName == nil { metadata.formatLongName = defaultFormatLongName(metadata.format) }
 
         // Auto-probe NRT sidecar if no embedded camera metadata is present.
@@ -126,10 +147,72 @@ public struct VideoMetadata: Sendable {
     /// Read video metadata from data.
     public static func read(from data: Data) throws -> VideoMetadata {
         var metadata = try parseContainer(data)
-        metadata.originalData = data
+        // Only retain the source Data for writable formats — same rationale
+        // as `read(from:url)`.
+        switch metadata.format {
+        case .mp4, .mov, .m4v:
+            metadata.originalData = data
+        case .mxf, .mkv, .webm, .avi, .mpg:
+            metadata.originalData = nil
+        }
         if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
         if metadata.formatLongName == nil { metadata.formatLongName = defaultFormatLongName(metadata.format) }
         return metadata
+    }
+
+    /// Upper bound on how much of a Matroska/WebM file we load. Matches the
+    /// parser's internal `maxHeaderScan` — bytes past this never get read.
+    private static let matroskaReadCap: Int = 512 * 1024 * 1024
+
+    /// Load a container file with a format-aware strategy that avoids pulling
+    /// multi-GB payloads into RAM on external volumes.
+    ///
+    /// The read is wrapped in `autoreleasepool` so the bridged NSData temporary
+    /// that `FileHandle.readData` returns gets drained before we return.
+    /// Without that, batch importers that call us in a tight loop hold every
+    /// prefix buffer alive until the enclosing pool drains — turning a 512 MB
+    /// per-file peak into 512 MB × files-imported.
+    private static func loadContainerData(from url: URL) throws -> Data {
+        var result: Data = Data()
+        var thrownError: Error?
+        autoreleasepool {
+            do {
+                result = try loadContainerDataInner(from: url)
+            } catch {
+                thrownError = error
+            }
+        }
+        if let thrownError { throw thrownError }
+        return result
+    }
+
+    private static func loadContainerDataInner(from url: URL) throws -> Data {
+        // Peek the first 16 bytes to detect the container. Every format we
+        // support can be identified within that window.
+        let fh = try FileHandle(forReadingFrom: url)
+        defer { try? fh.close() }
+        let head = fh.readData(ofLength: 16)
+
+        // Matroska/WebM: bounded prefix read capped at `matroskaReadCap`.
+        // The parser never scans beyond this offset, so loading the tail is
+        // pure waste — and with 10-15 GB Blu-ray rips on an external SSD
+        // `.mappedIfSafe` quietly falls back to a full in-RAM read.
+        if MatroskaReader.isMatroska(head) {
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64 ?? 0
+            let readLen = min(Int(truncatingIfNeeded: fileSize), matroskaReadCap)
+            try fh.seek(toOffset: 0)
+            if readLen > 0 {
+                return fh.readData(ofLength: readLen)
+            }
+            return Data()
+        }
+
+        // Every other container needs either the header *and* footer (MXF,
+        // MP4/MOV with tail-placed moov) or a linear walk, so fall back to a
+        // mapped read. Use `.alwaysMapped` rather than `.mappedIfSafe` — the
+        // latter declines to map external volumes and silently loads the
+        // whole file into RAM.
+        return try Data(contentsOf: url, options: .alwaysMapped)
     }
 
     private static func defaultFormatLongName(_ format: VideoFormat) -> String {

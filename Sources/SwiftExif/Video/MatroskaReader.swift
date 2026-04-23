@@ -44,25 +44,36 @@ public struct MatroskaReader: Sendable {
         while reader.remainingCount >= 2 {
             guard let id = try? readEBMLID(&reader),
                   let size = try? readVINT(&reader),
-                  size <= UInt64(reader.remainingCount) else { break }
+                  size <= UInt64(Int.max) else { break }
 
+            let declaredSize = Int(size)
+            let remaining = reader.remainingCount
             let payloadStart = reader.offset
             switch id {
             case Self.ebmlHeaderID:
-                let end = payloadStart + Int(size)
+                // EBML header is tiny (~30 bytes) — require it to fit in our data.
+                guard declaredSize <= remaining else { return metadata }
+                let end = payloadStart + declaredSize
                 let docType = readEBMLDocType(data, from: payloadStart, end: end)
                 if docType == "webm" { format = .webm }
                 if (try? reader.seek(to: end)) == nil { return metadata }
 
             case 0x18538067: // Segment
-                let scanEnd = min(payloadStart + Int(size), payloadStart + maxHeaderScan)
+                // The Segment's declared size covers the entire file and can
+                // legitimately exceed what we have loaded (callers may pass a
+                // bounded prefix to avoid RAM blow-ups on Blu-ray-sized MKVs).
+                // `parseSegment` caps its own walk at `maxHeaderScan`, so we
+                // only need enough bytes for that — clamp to what's available.
+                let effectiveSize = min(declaredSize, remaining)
+                let scanEnd = min(payloadStart + effectiveSize, payloadStart + maxHeaderScan)
                 parseSegment(data, from: payloadStart, end: scanEnd, into: &metadata)
                 // Segment is usually the last top-level element — stop after it.
                 metadata.format = format
                 return metadata
 
             default:
-                if (try? reader.seek(to: payloadStart + Int(size))) == nil { return metadata }
+                guard declaredSize <= remaining else { return metadata }
+                if (try? reader.seek(to: payloadStart + declaredSize)) == nil { return metadata }
             }
         }
 
