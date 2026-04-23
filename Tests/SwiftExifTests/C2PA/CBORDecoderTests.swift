@@ -204,6 +204,20 @@ final class CBORDecoderTests: XCTestCase {
         XCTAssertThrowsError(try CBORDecoder.decode(from: Data([0x19, 0x01])))
     }
 
+    func testDecodeHugeByteStringLengthThrows() {
+        // Major type 2 (byte string) + additional-info 27 (UInt64 length) = 0x5B,
+        // followed by length 0xFFFF_FFFF_FFFF_FFFF. Without a pre-conversion bound
+        // check, Int(UInt64.max) would trap on 64-bit.
+        let data = Data([0x5B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertThrowsError(try CBORDecoder.decode(from: data))
+    }
+
+    func testDecodeHugeTextStringLengthThrows() {
+        // Major type 3 (text string) + additional-info 27 = 0x7B + UInt64.max.
+        let data = Data([0x7B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertThrowsError(try CBORDecoder.decode(from: data))
+    }
+
     // MARK: - Helpers
 
     private func cborTextString(_ string: String) -> [UInt8] {

@@ -35,6 +35,12 @@ public struct CBORDecoder: Sendable {
                 return .byteString(try decodeIndefiniteBytes(from: &reader))
             }
             let length = try decodeLength(additionalInfo, from: &reader)
+            // Bound the UInt64 length by remaining data before converting to Int —
+            // Int(UInt64) traps when length > Int.max, and a crafted manifest can
+            // specify lengths up to 2^64-1.
+            guard length <= UInt64(reader.remainingCount) else {
+                throw MetadataError.invalidCBOR("Byte string length \(length) exceeds remaining data")
+            }
             return .byteString(try reader.readBytes(Int(length)))
 
         case 3: // Text string
@@ -47,6 +53,9 @@ public struct CBORDecoder: Sendable {
                 return .textString(string)
             }
             let length = try decodeLength(additionalInfo, from: &reader)
+            guard length <= UInt64(reader.remainingCount) else {
+                throw MetadataError.invalidCBOR("Text string length \(length) exceeds remaining data")
+            }
             let data = try reader.readBytes(Int(length))
             guard let string = String(data: data, encoding: .utf8) else {
                 throw MetadataError.invalidCBOR("Invalid UTF-8 in text string")
