@@ -173,6 +173,7 @@ public struct VideoMetadata: Sendable {
     /// prefix buffer alive until the enclosing pool drains — turning a 512 MB
     /// per-file peak into 512 MB × files-imported.
     private static func loadContainerData(from url: URL) throws -> Data {
+#if canImport(ObjectiveC)
         var result: Data = Data()
         var thrownError: Error?
         autoreleasepool {
@@ -184,6 +185,11 @@ public struct VideoMetadata: Sendable {
         }
         if let thrownError { throw thrownError }
         return result
+#else
+        // Linux Foundation has no autoreleasepool — bridged NSData temporaries
+        // don't accumulate the same way, so a direct call is fine.
+        return try loadContainerDataInner(from: url)
+#endif
     }
 
     private static func loadContainerDataInner(from url: URL) throws -> Data {
