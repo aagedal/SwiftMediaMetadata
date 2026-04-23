@@ -49,11 +49,35 @@ public struct MP4Parser: Sendable {
         // the frame rate + drop-frame flag and the first media sample in mdat
         // is a 32-bit frame counter. Needs the original data blob for the
         // mdat read, so we walk the trak list here rather than in parseTrak.
-        if metadata.timecode == nil {
+        //
+        // ffprobe surfaces the decoded timecode in two places: the clip-level
+        // `format.tags.timecode` (via the first tmcd track) and, per stream,
+        // the video track that cross-references a tmcd track via `tref.tmcd`.
+        // Mirror that behaviour here.
+        var tmcdTimecodes: [UInt32: String] = [:]
+        for trak in moovChildren.filter({ $0.type == "trak" }) {
+            guard trakHandlerType(trak.data) == "tmcd",
+                  let tid = parseTKHDTrackID(trak.data),
+                  let tc = parseTmcdTrackTimecode(trak.data, fullData: data) else { continue }
+            tmcdTimecodes[tid] = tc
+        }
+        if !tmcdTimecodes.isEmpty {
+            if metadata.timecode == nil { metadata.timecode = tmcdTimecodes.first?.value }
+            // ffprobe only sets the per-stream `timecode` tag on a video track
+            // when that track has an explicit `tref > tmcd` reference to a
+            // timecode track. Recordings without the cross-reference (e.g.
+            // Atomos Ninja ProRes RAW) surface timecode only at
+            // `format.tags.timecode`. Mirror that exactly — no fallback.
+            var videoIdx = 0
             for trak in moovChildren.filter({ $0.type == "trak" }) {
-                if let tc = parseTmcdTrackTimecode(trak.data, fullData: data) {
-                    metadata.timecode = tc
-                    break
+                guard trakHandlerType(trak.data) == "vide" else { continue }
+                defer { videoIdx += 1 }
+                guard videoIdx < metadata.videoStreams.count,
+                      metadata.videoStreams[videoIdx].timecode == nil else { continue }
+                let refs = parseTrefTmcd(trak.data)
+                if let tid = refs.first(where: { tmcdTimecodes[$0] != nil }),
+                   let tc = tmcdTimecodes[tid] {
+                    metadata.videoStreams[videoIdx].timecode = tc
                 }
             }
         }
@@ -847,6 +871,60 @@ public struct MP4Parser: Sendable {
               let heightFP = try? reader.readUInt32BigEndian() else { return nil }
 
         return (Int(widthFP >> 16), Int(heightFP >> 16))
+    }
+
+    /// tkhd `track_ID` (UInt32). Layout:
+    ///   FullBox header(4) + creation_time/mod_time (8 in v0, 16 in v1) + track_ID(4)
+    private static func parseTKHDTrackID(_ trakData: Data) -> UInt32? {
+        guard let trakChildren = try? ISOBMFFBoxReader.parseBoxes(from: trakData),
+              let tkhd = trakChildren.first(where: { $0.type == "tkhd" }),
+              tkhd.data.count >= 4 else { return nil }
+        let data = tkhd.data
+        let s = data.startIndex
+        let version = data[s]
+        let offset = (version == 1) ? (4 + 16) : (4 + 8)
+        guard data.count >= offset + 4 else { return nil }
+        return (UInt32(data[s + offset]) << 24)
+            | (UInt32(data[s + offset + 1]) << 16)
+            | (UInt32(data[s + offset + 2]) << 8)
+            | UInt32(data[s + offset + 3])
+    }
+
+    /// `trak > tref > tmcd` carries the list of tmcd trackIDs this track uses
+    /// for timecode (QuickTime File Format § Track Reference). Returns an
+    /// empty array when no such reference exists.
+    private static func parseTrefTmcd(_ trakData: Data) -> [UInt32] {
+        guard let trakChildren = try? ISOBMFFBoxReader.parseBoxes(from: trakData),
+              let tref = trakChildren.first(where: { $0.type == "tref" }),
+              let trefChildren = try? ISOBMFFBoxReader.parseBoxes(from: tref.data),
+              let tmcdRef = trefChildren.first(where: { $0.type == "tmcd" }) else { return [] }
+        let payload = tmcdRef.data
+        let count = payload.count / 4
+        var out: [UInt32] = []
+        out.reserveCapacity(count)
+        for i in 0..<count {
+            let s = payload.startIndex + i * 4
+            let v = (UInt32(payload[s]) << 24)
+                | (UInt32(payload[s + 1]) << 16)
+                | (UInt32(payload[s + 2]) << 8)
+                | UInt32(payload[s + 3])
+            out.append(v)
+        }
+        return out
+    }
+
+    /// Return the four-byte handler type on a trak (`vide`, `soun`, `tmcd`, …),
+    /// or nil when the trak lacks mdia/hdlr.
+    private static func trakHandlerType(_ trakData: Data) -> String? {
+        guard let trakChildren = try? ISOBMFFBoxReader.parseBoxes(from: trakData),
+              let mdia = trakChildren.first(where: { $0.type == "mdia" }),
+              let mdiaChildren = try? ISOBMFFBoxReader.parseBoxes(from: mdia.data),
+              let hdlr = mdiaChildren.first(where: { $0.type == "hdlr" }),
+              hdlr.data.count >= 12 else { return nil }
+        return String(
+            data: hdlr.data[hdlr.data.startIndex + 8 ..< hdlr.data.startIndex + 12],
+            encoding: .ascii
+        )
     }
 
     /// tkhd flags live in the bottom 24 bits of the FullBox header. Bit 0 =

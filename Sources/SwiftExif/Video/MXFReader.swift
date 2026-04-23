@@ -84,9 +84,10 @@ public struct MXFReader: Sendable {
             let keyIsPictureDescriptor = isPictureEssenceDescriptorKey(key)
             let keyIsSoundDescriptor = isSoundEssenceDescriptorKey(key)
             let keyIsDurationSet = isDurationBearingSetKey(key)
+            let keyIsTimecodeComponent = isTimecodeComponentKey(key)
             let isMetadata = keyIsC2PA || peekIsXML || peekIsJUMBF
                 || keyIsPictureDescriptor || keyIsSoundDescriptor
-                || keyIsDurationSet
+                || keyIsDurationSet || keyIsTimecodeComponent
 
             // Skip anything that doesn't look like metadata, plus anything
             // larger than the hard cap (defensive — metadata payloads are
@@ -139,6 +140,14 @@ public struct MXFReader: Sendable {
                     setEditRateNum = rate.num
                     setEditRateDen = rate.den
                 }
+            }
+
+            // TimecodeComponent: typically one instance per Package (Material
+            // and File). Keep the first decoded value — ffprobe reports it as
+            // format.tags.timecode, same source.
+            if keyIsTimecodeComponent, metadata.timecode == nil,
+               let tc = parseTimecodeComponent(value) {
+                metadata.timecode = tc
             }
 
             if keyIsSoundDescriptor {
@@ -252,6 +261,11 @@ public struct MXFReader: Sendable {
             if metadata.displayWidth == nil { metadata.displayWidth = v.displayWidth }
             if metadata.displayHeight == nil { metadata.displayHeight = v.displayHeight }
         }
+        // MXF carries timecode on a Material Package TimecodeComponent, not on
+        // an individual track — ffprobe surfaces the decoded value only in
+        // format.tags.timecode for MXF, and leaves per-stream tags empty. We
+        // mirror that: set the clip-level value and leave `videoStreams[*].timecode`
+        // nil unless a future codepath pulls a per-track figure.
         // Duration fallback: convert largest MaterialPackage/Track/Sequence
         // Duration (in edit units) into seconds using the track's EditRate.
         // Falls back to the first video stream's frameRate when the edit rate
@@ -465,6 +479,66 @@ public struct MXFReader: Sendable {
         // 0x3A StaticTrack, 0x3B Track, 0x3C EventTrack, 0x11 SourceClip.
         return kind == 0x0F || kind == 0x36 || kind == 0x37
             || kind == 0x3A || kind == 0x3B || kind == 0x3C || kind == 0x11
+    }
+
+    /// TimecodeComponent set (SMPTE 377M §G.2.42). Byte 14 = 0x14.
+    private static func isTimecodeComponentKey(_ key: Data) -> Bool {
+        guard key.count >= 15 else { return false }
+        let s = key.startIndex
+        for (i, b) in pictureDescriptorPrefix.enumerated() where key[s + i] != b { return false }
+        return key[s + 14] == 0x14
+    }
+
+    /// Decode a TimecodeComponent set to a `HH:MM:SS:FF` (or `HH:MM:SS;FF`
+    /// drop-frame) string. Local tags (SMPTE RP 210):
+    ///   0x1501 — StartTimecode (Position, Int64, in edit units)
+    ///   0x1502 — RoundedTimecodeBase (UInt16, nominal fps)
+    ///   0x1503 — DropFrame (Boolean, 1 byte)
+    static func parseTimecodeComponent(_ data: Data) -> String? {
+        var start: Int64?
+        var base: UInt16?
+        var drop = false
+        walkLocalSet(data) { tag, value in
+            switch tag {
+            case 0x1501 where value.count >= 8:
+                var raw: UInt64 = 0
+                let s = value.startIndex
+                for i in 0..<8 { raw = (raw << 8) | UInt64(value[s + i]) }
+                start = Int64(bitPattern: raw)
+            case 0x1502 where value.count >= 2:
+                let s = value.startIndex
+                base = (UInt16(value[s]) << 8) | UInt16(value[s + 1])
+            case 0x1503 where value.count >= 1:
+                drop = value[value.startIndex] != 0
+            default: break
+            }
+        }
+        guard let startFrames = start, startFrames >= 0,
+              let fpsRaw = base, fpsRaw > 0 else { return nil }
+        var frames = Int(startFrames)
+        let fps = Int(fpsRaw)
+
+        if drop {
+            // Same SMPTE 12M drop-frame arithmetic as the QuickTime tmcd path.
+            let dropCount = fps / 15
+            let framesPer10Min = fps * 60 * 10 - dropCount * 9
+            let framesPerMin = fps * 60 - dropCount
+            let d = frames / framesPer10Min
+            let m = frames % framesPer10Min
+            if m > dropCount {
+                frames = frames + dropCount * 9 * d + dropCount * ((m - dropCount) / framesPerMin)
+            } else {
+                frames = frames + dropCount * 9 * d
+            }
+        }
+
+        let totalSeconds = frames / fps
+        let ff = frames % fps
+        let ss = totalSeconds % 60
+        let mm = (totalSeconds / 60) % 60
+        let hh = (totalSeconds / 3600) % 24
+        let sep = drop ? ";" : ":"
+        return String(format: "%02d:%02d:%02d%@%02d", hh, mm, ss, sep, ff)
     }
 
     /// Pull the largest `Duration` (local tag 0x0202, UInt64) value out of a

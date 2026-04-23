@@ -54,7 +54,7 @@ struct ReadCommand: ParsableCommand {
         var imageNames: [String] = []
         var videoNames: [String] = []
         var audioNames: [String] = []
-        var perStreamReports: [(String, [[String: String]])] = []
+        var perStreamReports: [(name: String, format: [String: String], streams: [[String: String]])] = []
 
         for url in urls {
             if supportedAudioExtensions.contains(url.pathExtension.lowercased()) {
@@ -68,7 +68,7 @@ struct ReadCommand: ParsableCommand {
                 videoDicts.append(dict)
                 videoNames.append(url.lastPathComponent)
                 if streams {
-                    perStreamReports.append((url.lastPathComponent, buildStreamDicts(vm)))
+                    perStreamReports.append((url.lastPathComponent, dict, buildStreamDicts(vm)))
                 }
             } else {
                 let metadata = try ImageMetadata.read(from: url)
@@ -115,10 +115,10 @@ struct ReadCommand: ParsableCommand {
                 printTable(dict)
             }
             if streams {
-                for (name, streamDicts) in perStreamReports {
-                    printSeparator("\(name) — streams")
-                    for (i, sd) in streamDicts.enumerated() {
-                        if streamDicts.count > 1 { print("--- Stream #\(i) ---") }
+                for report in perStreamReports {
+                    printSeparator("\(report.name) — streams")
+                    for (i, sd) in report.streams.enumerated() {
+                        if report.streams.count > 1 { print("--- Stream #\(i) ---") }
                         printTable(sd)
                     }
                 }
@@ -303,10 +303,17 @@ struct ReadCommand: ParsableCommand {
         }
     }
 
-    private func printStreamsJSON(_ reports: [(String, [[String: String]])]) {
+    private func printStreamsJSON(_ reports: [(name: String, format: [String: String], streams: [[String: String]])]) {
         var out: [[String: Any]] = []
-        for (name, streams) in reports {
-            out.append(["file": name, "streams": streams])
+        for report in reports {
+            out.append([
+                "file": report.name,
+                // Clip-level metadata (ffprobe "format") — exposes Timecode,
+                // Duration, BitRate, FormatLongName, creation dates, GPS, etc.
+                // that don't belong on any single stream.
+                "format": report.format,
+                "streams": report.streams,
+            ])
         }
         if let data = try? JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]) {
             print(String(data: data, encoding: .utf8) ?? "[]")
