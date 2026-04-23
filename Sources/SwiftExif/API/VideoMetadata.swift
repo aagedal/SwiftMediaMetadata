@@ -12,8 +12,16 @@ public struct VideoMetadata: Sendable {
     /// File size in bytes (when read from a file or data blob).
     public var fileSize: Int64?
     /// Clip-level timecode (HH:MM:SS:FF) when the container embeds a dedicated
-    /// timecode track (e.g. QuickTime `tmcd`).
+    /// timecode track (e.g. QuickTime `tmcd`). This is the "primary" value
+    /// ffprobe surfaces at `format.tags.timecode`; for a full list of every
+    /// timecode the container carries (with provenance) see `timecodes`.
     public var timecode: String?
+    /// All timecode values found in the container, tagged with the source
+    /// that produced each one (tmcd track, QuickTime udta, XMP, MXF Material
+    /// vs File package, Sony NRT). Callers can spot disagreements by diffing
+    /// entries; a warning is appended to `warnings` whenever two sources
+    /// disagree on the clip-level value.
+    public var timecodes: [Timecode]
     public var duration: TimeInterval?
     public var creationDate: Date?
     public var modificationDate: Date?
@@ -72,6 +80,7 @@ public struct VideoMetadata: Sendable {
         self.videoStreams = []
         self.audioStreams = []
         self.subtitleStreams = []
+        self.timecodes = []
     }
 
     // MARK: - Reading
@@ -101,6 +110,10 @@ public struct VideoMetadata: Sendable {
                 }
             }
         }
+        // Merge any NRT start timecode into the provenance-tagged array.
+        // Safe to re-invoke when the container parser already ingested it —
+        // `recordTimecode` dedupes on (value, source).
+        metadata.ingestNRTTimecode()
 
         return metadata
     }
@@ -216,5 +229,66 @@ public struct VideoMetadata: Sendable {
     /// Strip only XMP metadata.
     public mutating func stripXMP() {
         xmp = nil
+    }
+
+    // MARK: - Timecode
+
+    /// Record a timecode value tagged with its source. Appends to `timecodes`,
+    /// sets `timecode` on the first call (so the existing scalar API still
+    /// works), and emits a `warnings` entry whenever a later source disagrees
+    /// with one already recorded (ignoring case so `HH:MM:SS:FF` vs
+    /// `HH:MM:SS;FF` drop-frame variants can still match when the frame counts
+    /// line up — but we treat the full string as the canonical form, so a `;`
+    /// vs `:` difference IS a mismatch and gets flagged).
+    internal mutating func recordTimecode(_ value: String, source: TimecodeSource, frameRate: Double? = nil) {
+        // Skip empty / "00:00:00:00" placeholder entries that some writers
+        // emit when they don't actually know the clip start — they add no
+        // information and spuriously trigger mismatch warnings against real
+        // values.
+        guard !value.isEmpty, value != "00:00:00:00", value != "00:00:00;00" else { return }
+
+        // Drop exact duplicates (same value AND same source) so re-scanning
+        // the same container can't silently grow the array.
+        if timecodes.contains(where: { $0.value == value && $0.source == source }) {
+            return
+        }
+
+        // Warn when this value disagrees with any previously recorded value
+        // from a different source. Same-source duplicates with different
+        // values (e.g. two MXF TimecodeComponents in the File package) are
+        // already flagged via mxfMaterialPackage vs mxfFilePackage labelling.
+        for existing in timecodes where existing.value != value {
+            warnings.append(
+                "timecode mismatch: \(existing.source.rawValue)=\(existing.value) vs \(source.rawValue)=\(value)"
+            )
+        }
+
+        timecodes.append(Timecode(value: value, source: source, frameRate: frameRate))
+        if timecode == nil { timecode = value }
+    }
+
+    /// Pull `xmpDM:startTimeCode` / `xmpDM:altTimeCode` out of the attached
+    /// XMP block (if any) and record them via `recordTimecode`. Parsers
+    /// should call this once XMP has been attached to `self.xmp` so the
+    /// XMP values show up in `timecodes` alongside container-native
+    /// timecode sources.
+    internal mutating func ingestXMPTimecodes() {
+        guard let xmp = xmp else { return }
+        if let start = xmp.startTimecode {
+            recordTimecode(start.timeValue, source: .xmpDM, frameRate: start.frameRate)
+        }
+        if let alt = xmp.altTimecode {
+            recordTimecode(alt.timeValue, source: .xmpDMAlt, frameRate: alt.frameRate)
+        }
+    }
+
+    /// Pull the Sony NRT LtcChangeTable start timecode out of `self.camera`
+    /// (if present) and record it as a `.sonyNRT` entry in `timecodes`.
+    /// Callers should invoke this once `camera` is attached — NRT can be
+    /// embedded in MXF header metadata or auto-discovered as an XML sidecar,
+    /// and both paths should surface the same provenance.
+    internal mutating func ingestNRTTimecode() {
+        guard let tc = camera?.startTimecode, !tc.isEmpty else { return }
+        recordTimecode(tc, source: .sonyNRT, frameRate: camera?.captureFps)
     }
 }

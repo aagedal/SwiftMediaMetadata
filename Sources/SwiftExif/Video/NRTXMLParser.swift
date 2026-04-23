@@ -114,6 +114,7 @@ private final class NRTDelegate: NSObject, XMLParserDelegate {
     private var captureGammaEquation: String?
     private var recordingModeType: String?
     private var captureFps: Double?
+    private var startTimecode: String?
     private var userMetaNames: [String] = []
     private var userMetaContents: [String] = []
     private var creationDate: Date?
@@ -132,6 +133,7 @@ private final class NRTDelegate: NSObject, XMLParserDelegate {
             captureGammaEquation: captureGammaEquation,
             recordingModeType: recordingModeType,
             captureFps: captureFps,
+            startTimecode: startTimecode,
             userMetaNames: userMetaNames,
             userMetaContents: userMetaContents,
             creationDate: creationDate
@@ -181,6 +183,20 @@ private final class NRTDelegate: NSObject, XMLParserDelegate {
         case "CreationDate":
             if let v = attributeDict["value"], let d = parseISO8601(v) {
                 creationDate = d
+            }
+
+        case "LtcChange":
+            // RDD-18 `<LtcChangeTable>` carries `<LtcChange frameCount="N"
+            // value="HH:MM:SS:FF" status="…"/>` entries. The first entry
+            // (frameCount="0") is the clip start timecode. Later entries
+            // only exist when the camera's LTC reel changed mid-clip, which
+            // Sony tags with status="increment"/"reset" — we ignore those
+            // and keep the first reading as the start TC.
+            if startTimecode == nil,
+               let frameCount = attributeDict["frameCount"],
+               frameCount == "0",
+               let v = attributeDict["value"], !v.isEmpty {
+                startTimecode = formatLtcValue(v)
             }
 
         case "Meta":
@@ -251,6 +267,37 @@ private final class NRTDelegate: NSObject, XMLParserDelegate {
             }
         }
         return Double(s)
+    }
+
+    /// Decode a Sony NRT `LtcChange value="…"` attribute into
+    /// `HH:MM:SS:FF` form. Sony RDD-18 files carry two different encodings
+    /// in the wild:
+    ///   1. an 8 hex-digit SMPTE 12M LTC word (byte0=frames+flags,
+    ///      byte1=seconds, byte2=minutes, byte3=hours, all BCD) — what
+    ///      XDCAM / XAVC professional cameras write;
+    ///   2. the already-formatted "HH:MM:SS:FF" / "HH:MM:SS;FF" string —
+    ///      what a few Alpha-series consumer bodies write.
+    /// Returns nil when the string matches neither shape.
+    private func formatLtcValue(_ raw: String) -> String? {
+        let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if v.contains(":") || v.contains(";") { return v }
+
+        var hex = v
+        if hex.hasPrefix("0x") || hex.hasPrefix("0X") { hex = String(hex.dropFirst(2)) }
+        guard hex.count == 8, let word = UInt32(hex, radix: 16) else { return nil }
+
+        let byte0 = UInt8((word >> 24) & 0xFF) // FF + drop-frame/color-frame flags
+        let byte1 = UInt8((word >> 16) & 0xFF) // SS + phase bit
+        let byte2 = UInt8((word >>  8) & 0xFF) // MM + binary-group flag
+        let byte3 = UInt8( word        & 0xFF) // HH + binary-group flag
+
+        let ff = Int(byte0 & 0x0F) + 10 * Int((byte0 >> 4) & 0x3)
+        let ss = Int(byte1 & 0x0F) + 10 * Int((byte1 >> 4) & 0x7)
+        let mm = Int(byte2 & 0x0F) + 10 * Int((byte2 >> 4) & 0x7)
+        let hh = Int(byte3 & 0x0F) + 10 * Int((byte3 >> 4) & 0x3)
+        let dropFrame = (byte0 & 0x40) != 0
+        let sep = dropFrame ? ";" : ":"
+        return String(format: "%02d:%02d:%02d%@%02d", hh, mm, ss, sep, ff)
     }
 
     private func parseISO8601(_ value: String) -> Date? {

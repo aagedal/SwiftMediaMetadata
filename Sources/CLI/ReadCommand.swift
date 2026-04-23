@@ -54,7 +54,10 @@ struct ReadCommand: ParsableCommand {
         var imageNames: [String] = []
         var videoNames: [String] = []
         var audioNames: [String] = []
-        var perStreamReports: [(name: String, format: [String: String], streams: [[String: String]])] = []
+        // `format` carries the video "clip-level" block — emitted via JSON
+        // serialization, so the value type is `[String: Any]` to preserve
+        // nested arrays (e.g. Timecodes: [{ value, source, frameRate }]).
+        var perStreamReports: [(name: String, format: [String: Any], streams: [[String: Any]])] = []
 
         for url in urls {
             if supportedAudioExtensions.contains(url.pathExtension.lowercased()) {
@@ -64,11 +67,15 @@ struct ReadCommand: ParsableCommand {
                 audioNames.append(url.lastPathComponent)
             } else if supportedVideoExtensions.contains(url.pathExtension.lowercased()) {
                 let vm = try VideoMetadata.read(from: url)
-                let dict = VideoMetadataExporter.buildDictionary(vm).mapValues { String(describing: $0) }
+                let rawDict = VideoMetadataExporter.buildDictionary(vm)
+                // Stringify for the display/CSV/table path; retain the
+                // native typed dict for JSON stream output so nested arrays
+                // like Timecodes serialise as real JSON arrays.
+                let dict = rawDict.mapValues { String(describing: $0) }
                 videoDicts.append(dict)
                 videoNames.append(url.lastPathComponent)
                 if streams {
-                    perStreamReports.append((url.lastPathComponent, dict, buildStreamDicts(vm)))
+                    perStreamReports.append((url.lastPathComponent, rawDict, buildStreamDicts(vm)))
                 }
             } else {
                 let metadata = try ImageMetadata.read(from: url)
@@ -119,17 +126,20 @@ struct ReadCommand: ParsableCommand {
                     printSeparator("\(report.name) — streams")
                     for (i, sd) in report.streams.enumerated() {
                         if report.streams.count > 1 { print("--- Stream #\(i) ---") }
-                        printTable(sd)
+                        // Table path displays a textual projection of the
+                        // typed stream dict — structured per-stream values
+                        // (just Timecode today) still collapse to a string.
+                        printTable(sd.mapValues { String(describing: $0) })
                     }
                 }
             }
         }
     }
 
-    private func buildStreamDicts(_ vm: VideoMetadata) -> [[String: String]] {
-        var rows: [[String: String]] = []
+    private func buildStreamDicts(_ vm: VideoMetadata) -> [[String: Any]] {
+        var rows: [[String: Any]] = []
         for stream in vm.videoStreams {
-            var d: [String: String] = ["StreamType": "video", "Index": String(stream.index)]
+            var d: [String: Any] = ["StreamType": "video", "Index": String(stream.index)]
             if let v = stream.codec          { d["Codec"]            = v }
             if let v = stream.codecName      { d["CodecName"]        = v }
             if let v = stream.codec, let s = ffprobeShortVideoCodec(v) { d["CodecShort"] = s }
@@ -171,7 +181,7 @@ struct ReadCommand: ParsableCommand {
             rows.append(d)
         }
         for stream in vm.audioStreams {
-            var d: [String: String] = ["StreamType": "audio", "Index": String(stream.index)]
+            var d: [String: Any] = ["StreamType": "audio", "Index": String(stream.index)]
             if let v = stream.codec         { d["Codec"]         = v }
             if let v = stream.codecName     { d["CodecName"]     = v }
             if let v = stream.codec, let s = ffprobeShortAudioCodec(v, bitDepth: stream.bitDepth) {
@@ -190,7 +200,7 @@ struct ReadCommand: ParsableCommand {
             rows.append(d)
         }
         for stream in vm.subtitleStreams {
-            var d: [String: String] = ["StreamType": "subtitle", "Index": String(stream.index)]
+            var d: [String: Any] = ["StreamType": "subtitle", "Index": String(stream.index)]
             if let v = stream.codec             { d["Codec"]     = v }
             if let v = stream.codecName         { d["CodecName"] = v }
             if let v = stream.codec, let s = ffprobeShortSubtitleCodec(v) { d["CodecShort"] = s }
@@ -303,7 +313,7 @@ struct ReadCommand: ParsableCommand {
         }
     }
 
-    private func printStreamsJSON(_ reports: [(name: String, format: [String: String], streams: [[String: String]])]) {
+    private func printStreamsJSON(_ reports: [(name: String, format: [String: Any], streams: [[String: Any]])]) {
         var out: [[String: Any]] = []
         for report in reports {
             out.append([

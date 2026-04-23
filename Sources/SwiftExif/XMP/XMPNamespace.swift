@@ -24,6 +24,7 @@ public enum XMPNamespace: Sendable {
     public static let stRef     = "http://ns.adobe.com/xap/1.0/sType/ResourceRef#"
     public static let pdf       = "http://ns.adobe.com/pdf/1.3/"
     public static let crs       = "http://ns.adobe.com/camera-raw-settings/1.0/"
+    public static let xmpDM     = "http://ns.adobe.com/xmp/1.0/DynamicMedia/"
 
     /// Mapping from IPTC IIM tags to XMP namespace + property.
     public static let iimToXMP: [IPTCTag: (namespace: String, property: String)] = [
@@ -74,5 +75,6 @@ public enum XMPNamespace: Sendable {
         stRef: "stRef",
         pdf: "pdf",
         crs: "crs",
+        xmpDM: "xmpDM",
     ]
 }

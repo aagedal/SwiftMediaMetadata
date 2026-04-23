@@ -839,4 +839,65 @@ public struct XMPData: Equatable, Sendable {
             else { removeValue(namespace: XMPNamespace.xmpRights, property: "WebStatement") }
         }
     }
+
+    // MARK: - xmpDM (Dynamic Media — video / audio)
+
+    /// Decoded `xmpDM:startTimeCode` and `xmpDM:altTimeCode` structures,
+    /// exposing the `timeValue` (HH:MM:SS:FF or HH:MM:SS;FF drop-frame) and
+    /// the optional `timeFormat` companion (Adobe enumerated string such as
+    /// "24Timecode" / "2997DropTimecode" / "25Timecode" / "30Timecode").
+    ///
+    /// These are the canonical XMP video timecode fields, written by Adobe
+    /// Premiere / Media Encoder, Avid Media Composer, DaVinci Resolve, and
+    /// anything else that embeds an RDD-09 / RDD-47 compliant sidecar.
+    public struct XMPTimecode: Sendable, Equatable {
+        public var timeValue: String
+        public var timeFormat: String?
+        public init(timeValue: String, timeFormat: String? = nil) {
+            self.timeValue = timeValue
+            self.timeFormat = timeFormat
+        }
+        /// Numeric frame rate parsed from `timeFormat` (e.g. "2997DropTimecode"
+        /// → 29.97, "24Timecode" → 24, "25Timecode" → 25). Returns nil for
+        /// unknown / missing values.
+        public var frameRate: Double? {
+            guard let fmt = timeFormat else { return nil }
+            // Adobe's enumerated strings start with a numeric prefix that
+            // encodes the nominal fps × 100 for drop-frame and the nominal
+            // fps for non-drop. We reverse-map the ones RDD-47 lists.
+            switch fmt {
+            case "24Timecode": return 24
+            case "25Timecode": return 25
+            case "2997DropTimecode", "2997NonDropTimecode": return 29.97
+            case "30Timecode": return 30
+            case "50Timecode": return 50
+            case "5994DropTimecode", "5994NonDropTimecode": return 59.94
+            case "60Timecode": return 60
+            case "23976Timecode": return 23.976
+            default: return nil
+            }
+        }
+    }
+
+    /// `xmpDM:startTimeCode`: the clip-start timecode. Returns nil when the
+    /// structure or its `timeValue` field is missing.
+    public var startTimecode: XMPTimecode? {
+        get { timecodeStructure(property: "startTimeCode") }
+    }
+
+    /// `xmpDM:altTimeCode`: an alternate (secondary) timecode reel. Many
+    /// editors set this to a user-facing timecode that runs separately from
+    /// the source stamp.
+    public var altTimecode: XMPTimecode? {
+        get { timecodeStructure(property: "altTimeCode") }
+    }
+
+    private func timecodeStructure(property: String) -> XMPTimecode? {
+        guard let fields = structureValue(namespace: XMPNamespace.xmpDM, property: property) else {
+            return nil
+        }
+        let ns = XMPNamespace.xmpDM
+        guard let value = fields["\(ns)timeValue"], !value.isEmpty else { return nil }
+        return XMPTimecode(timeValue: value, timeFormat: fields["\(ns)timeFormat"])
+    }
 }

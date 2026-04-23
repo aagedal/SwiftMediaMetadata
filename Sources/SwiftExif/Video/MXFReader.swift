@@ -67,6 +67,9 @@ public struct MXFReader: Sendable {
         var maxSetDurationUnits: UInt64 = 0
         var setEditRateNum: UInt32 = 0
         var setEditRateDen: UInt32 = 0
+        // Ordinal of the next TimecodeComponent we decode. MaterialPackage
+        // comes first in header metadata, FilePackage(s) after.
+        var timecodeComponentsSeen = 0
 
         var reader = BinaryReader(data: data)
         while reader.remainingCount >= 17 {
@@ -142,12 +145,20 @@ public struct MXFReader: Sendable {
                 }
             }
 
-            // TimecodeComponent: typically one instance per Package (Material
-            // and File). Keep the first decoded value — ffprobe reports it as
-            // format.tags.timecode, same source.
-            if keyIsTimecodeComponent, metadata.timecode == nil,
-               let tc = parseTimecodeComponent(value) {
-                metadata.timecode = tc
+            // TimecodeComponent: one instance per Package. MaterialPackage is
+            // always emitted before SourcePackage in the header metadata, so
+            // the first TimecodeComponent we see is the Material Package
+            // timecode (what ffprobe surfaces as `format.tags.timecode`) and
+            // subsequent ones are File/Source Package timecodes the camera
+            // stamped on the essence. When the two agree the additional entry
+            // is still recorded so consumers can see the source split; when
+            // they disagree `recordTimecode` emits a mismatch warning.
+            if keyIsTimecodeComponent, let tc = parseTimecodeComponent(value) {
+                let source: TimecodeSource = timecodeComponentsSeen == 0
+                    ? .mxfMaterialPackage
+                    : .mxfFilePackage
+                metadata.recordTimecode(tc, source: source)
+                timecodeComponentsSeen += 1
             }
 
             if keyIsSoundDescriptor {
@@ -184,6 +195,9 @@ public struct MXFReader: Sendable {
                 }
             }
         }
+        // Surface any Sony NRT LtcChangeTable start timecode. Dedupes
+        // against MXF Material / File package values via recordTimecode.
+        metadata.ingestNRTTimecode()
 
         for i in 0..<metadata.videoStreams.count {
             // ISOBMFF-style colour-range default: most broadcast MXF essence is
@@ -261,11 +275,13 @@ public struct MXFReader: Sendable {
             if metadata.displayWidth == nil { metadata.displayWidth = v.displayWidth }
             if metadata.displayHeight == nil { metadata.displayHeight = v.displayHeight }
         }
-        // MXF carries timecode on a Material Package TimecodeComponent, not on
-        // an individual track — ffprobe surfaces the decoded value only in
-        // format.tags.timecode for MXF, and leaves per-stream tags empty. We
-        // mirror that: set the clip-level value and leave `videoStreams[*].timecode`
-        // nil unless a future codepath pulls a per-track figure.
+        // MXF carries timecode on a Material Package TimecodeComponent plus
+        // one or more File/Source Package TimecodeComponents. ffprobe only
+        // surfaces the first at `format.tags.timecode` and leaves per-stream
+        // tags empty; we mirror the scalar `timecode` field to the Material
+        // value for backward compat and expose every other TimecodeComponent
+        // via `timecodes` with source=.mxfFilePackage so callers can spot
+        // Material vs File disagreements (see parse loop above).
         // Duration fallback: convert largest MaterialPackage/Track/Sequence
         // Duration (in edit units) into seconds using the track's EditRate.
         // Falls back to the first video stream's frameRate when the edit rate

@@ -23,6 +23,25 @@ public struct VideoMetadataExporter: Sendable {
         if let longName = metadata.formatLongName { dict["FormatLongName"] = longName }
         if let size = metadata.fileSize { dict["FileSize"] = size }
         if let tc = metadata.timecode { dict["Timecode"] = tc }
+        // Provenance-tagged timecodes: every independent source the container
+        // carries, with its label (tmcdTrack / quicktimeUdta / xmpDM /
+        // mxfMaterialPackage / mxfFilePackage / sonyNRT / …). Emitted as a
+        // flat array of dicts so JSON/table consumers can key off `source`.
+        // The scalar `Timecode` field above stays in sync with the first
+        // entry for backward compatibility.
+        if !metadata.timecodes.isEmpty {
+            dict["Timecodes"] = metadata.timecodes.map { tc -> [String: Any] in
+                var entry: [String: Any] = [
+                    "value": tc.value,
+                    "source": tc.source.rawValue,
+                ]
+                if let fr = tc.frameRate { entry["frameRate"] = fr }
+                return entry
+            }
+        }
+        if !metadata.warnings.isEmpty {
+            dict["Warnings"] = metadata.warnings
+        }
 
         if let d = metadata.duration { dict["Duration"] = d }
         if let w = metadata.videoWidth { dict["VideoWidth"] = w }

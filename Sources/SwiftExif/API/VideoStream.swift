@@ -1,5 +1,45 @@
 import Foundation
 
+/// Provenance of a timecode value. Different containers embed timecode in
+/// multiple independent places; each surface keeps its own entry so callers
+/// can spot disagreements rather than seeing a single merged value.
+public enum TimecodeSource: String, Sendable, Equatable {
+    /// QuickTime/ISOBMFF `tmcd` timecode track (mdat frame counter via `tref > tmcd`).
+    case tmcdTrack
+    /// QuickTime `moov > udta > ©TIM` / `@TIM` / `tmcd` user-data atom — written
+    /// by Sony, Panasonic and other broadcast camcorders.
+    case quicktimeUdta
+    /// XMP `xmpDM:startTimecode` (frame + format).
+    case xmpDM
+    /// XMP `xmpDM:altTimecode` (alternate / secondary timecode reel).
+    case xmpDMAlt
+    /// MXF MaterialPackage TimecodeComponent (the "program" timecode ffprobe
+    /// surfaces as `format.tags.timecode`).
+    case mxfMaterialPackage
+    /// MXF FilePackage/SourcePackage TimecodeComponent (the "source" timecode
+    /// the camera stamped on the essence).
+    case mxfFilePackage
+    /// Sony NonRealTimeMeta XML (`<LtcChangeTable>` / Duration@frameCount base).
+    case sonyNRT
+}
+
+/// A single decoded timecode value with its source. Shape is `HH:MM:SS:FF`
+/// (non-drop-frame) or `HH:MM:SS;FF` (drop-frame), matching ffprobe.
+public struct Timecode: Sendable, Equatable {
+    public var value: String
+    public var source: TimecodeSource
+    /// Frame-rate companion (e.g. 23.976, 25, 29.97) when the source carries
+    /// one alongside the value — xmpDM's `timeFormat` field is the common
+    /// case. `nil` when the frame rate has to be inferred from the stream.
+    public var frameRate: Double?
+
+    public init(value: String, source: TimecodeSource, frameRate: Double? = nil) {
+        self.value = value
+        self.source = source
+        self.frameRate = frameRate
+    }
+}
+
 /// Scan/field order for video essence.
 public enum VideoFieldOrder: String, Sendable, Equatable {
     case progressive

@@ -23,6 +23,12 @@ public struct CameraMetadata: Sendable, Equatable {
     /// (from `<VideoFormat><VideoFrame captureFps="…" />`).
     public var captureFps: Double?
 
+    /// Start timecode of the clip, as the Sony NRT LtcChangeTable reports it
+    /// at `frameCount="0"`. Format `HH:MM:SS:FF` (or `HH:MM:SS;FF` for
+    /// drop-frame). Nil when the NRT document omits an LtcChangeTable or its
+    /// first entry doesn't carry a value attribute.
+    public var startTimecode: String?
+
     /// User descriptive metadata "name" tokens.
     public var userMetaNames: [String]
     /// User descriptive metadata "content" tokens (aligned with `userMetaNames`).
@@ -39,6 +45,7 @@ public struct CameraMetadata: Sendable, Equatable {
         captureGammaEquation: String? = nil,
         recordingModeType: String? = nil,
         captureFps: Double? = nil,
+        startTimecode: String? = nil,
         userMetaNames: [String] = [],
         userMetaContents: [String] = [],
         creationDate: Date? = nil
@@ -51,6 +58,7 @@ public struct CameraMetadata: Sendable, Equatable {
         self.captureGammaEquation = captureGammaEquation
         self.recordingModeType = recordingModeType
         self.captureFps = captureFps
+        self.startTimecode = startTimecode
         self.userMetaNames = userMetaNames
         self.userMetaContents = userMetaContents
         self.creationDate = creationDate
@@ -60,7 +68,7 @@ public struct CameraMetadata: Sendable, Equatable {
     public var isEmpty: Bool {
         deviceManufacturer == nil && deviceModelName == nil && deviceSerialNumber == nil
             && lensModelName == nil && timeZone == nil && captureGammaEquation == nil
-            && recordingModeType == nil && captureFps == nil
+            && recordingModeType == nil && captureFps == nil && startTimecode == nil
             && userMetaNames.isEmpty && userMetaContents.isEmpty && creationDate == nil
     }
 }

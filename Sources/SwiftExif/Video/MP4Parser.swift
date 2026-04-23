@@ -62,7 +62,12 @@ public struct MP4Parser: Sendable {
             tmcdTimecodes[tid] = tc
         }
         if !tmcdTimecodes.isEmpty {
-            if metadata.timecode == nil { metadata.timecode = tmcdTimecodes.first?.value }
+            // Record the first tmcd-track value as the clip-level primary.
+            // Using `recordTimecode` keeps the `timecodes` provenance array
+            // and the legacy scalar `timecode` field in sync.
+            if let first = tmcdTimecodes.first?.value {
+                metadata.recordTimecode(first, source: .tmcdTrack)
+            }
             // ffprobe only sets the per-stream `timecode` tag on a video track
             // when that track has an explicit `tref > tmcd` reference to a
             // timecode track. Recordings without the cross-reference (e.g.
@@ -78,6 +83,16 @@ public struct MP4Parser: Sendable {
                 if let tid = refs.first(where: { tmcdTimecodes[$0] != nil }),
                    let tc = tmcdTimecodes[tid] {
                     metadata.videoStreams[videoIdx].timecode = tc
+                    // Flag disagreement between this video track's
+                    // tref-linked tmcd and the clip-level primary. ffprobe
+                    // reports both values in its streams/format blocks;
+                    // we mirror that plus a warning so callers can act on
+                    // the divergence rather than silently picking one.
+                    if let clip = metadata.timecode, clip != tc {
+                        metadata.warnings.append(
+                            "timecode mismatch: clip=\(clip) vs videoStream[\(videoIdx)]=\(tc)"
+                        )
+                    }
                 }
             }
         }
@@ -96,6 +111,15 @@ public struct MP4Parser: Sendable {
         for uuid in boxes.filter({ $0.type == "uuid" }) {
             parseUUIDBox(uuid.data, into: &metadata)
         }
+
+        // Once XMP has been attached (via ilst, top-level meta, or the XMP
+        // uuid), pull xmpDM:startTimeCode / altTimeCode out and record them
+        // as provenance-tagged timecodes. A mismatch with an already-recorded
+        // tmcd/udta value surfaces as a `warnings` entry.
+        metadata.ingestXMPTimecodes()
+        // Sony NRT blobs arrive via the NRT uuid box above; fold any start
+        // timecode into the provenance array the same way.
+        metadata.ingestNRTTimecode()
 
         // Parse C2PA manifest store if present (top-level jumb or uuid-wrapped JUMBF).
         if let jumbfData = C2PAReader.extractJUMBFFromISOBMFF(boxes) {
@@ -1824,6 +1848,59 @@ public struct MP4Parser: Sendable {
         if let meta = children.first(where: { $0.type == "meta" }) {
             parseMetaBox(meta.data, into: &metadata)
         }
+
+        // QuickTime user-data timecode atoms written by Sony/Panasonic/ARRI
+        // broadcast camcorders directly under moov > udta (not under ilst):
+        //   ©TIM / @TIM — UTF-8 timecode string (HH:MM:SS:FF)
+        //   tmcd       — same 4-byte frame counter as the tmcd track form,
+        //                using the following TimecodeSampleDescription
+        //                layout. Rare in practice; ffprobe ignores it.
+        //
+        // ISOBMFF/QuickTime user-data text atoms have the layout
+        // `UInt16 textSize + UInt16 language + UTF-8 text`. Some writers put
+        // the raw UTF-8 string directly instead — detect both.
+        for child in children {
+            let type = child.type
+            let isTimText = (type == "\u{00A9}TIM" || type == "@TIM")
+            guard isTimText else { continue }
+            if let tc = decodeUDTATextAtom(child.data) {
+                metadata.recordTimecode(tc, source: .quicktimeUdta)
+            }
+        }
+    }
+
+    /// Decode a QuickTime user-data text atom payload, handling both the
+    /// `UInt16 length + UInt16 language + UTF-8` shape and the bare-UTF-8
+    /// shape some muxers emit. Returns nil when the payload doesn't look
+    /// like printable text.
+    private static func decodeUDTATextAtom(_ data: Data) -> String? {
+        guard data.count >= 1 else { return nil }
+
+        // Prefer the `length + language + text` shape when the declared
+        // length fits inside the payload. QuickTime uses this exact layout
+        // for every ©xxx atom under moov > udta.
+        if data.count >= 4 {
+            let s = data.startIndex
+            let len = (Int(data[s]) << 8) | Int(data[s + 1])
+            if len > 0, data.count >= 4 + len {
+                let textRange = (s + 4)..<(s + 4 + len)
+                if let str = String(data: Data(data[textRange]), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   !str.isEmpty {
+                    return str
+                }
+            }
+        }
+
+        // Fallback: raw UTF-8 (a handful of older Panasonic P2 files do this).
+        if let str = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)),
+           !str.isEmpty,
+           str.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "/-:;. ".contains($0)) }) {
+            return str
+        }
+
+        return nil
     }
 
     private static func parseMetaBox(_ data: Data, into metadata: inout VideoMetadata) {
