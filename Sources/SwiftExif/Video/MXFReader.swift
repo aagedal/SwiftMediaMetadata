@@ -593,6 +593,7 @@ public struct MXFReader: Sendable {
         var sampleRateDen: UInt32 = 0
         var containerDuration: UInt64 = 0
         var frameLayout: UInt8?
+        var fieldDominance: UInt8?
         var horizontalSubsampling: UInt32 = 0
         var verticalSubsampling: UInt32 = 0
         var aspectRatioNum: UInt32 = 0
@@ -617,6 +618,8 @@ public struct MXFReader: Sendable {
                 if let v = parseUInt32(value) { stream.displayWidth = Int(v) }
             case 0x320C: // FrameLayout (UInt8)
                 if value.count >= 1 { frameLayout = value[value.startIndex] }
+            case 0x3212: // FieldDominance (UInt8) — 1=top-first, 2=bottom-first
+                if value.count >= 1 { fieldDominance = value[value.startIndex] }
             case 0x320E: // AspectRatio (Rational) — display aspect ratio.
                 if let r = parseRational(value), r.num > 0, r.den > 0 {
                     aspectRatioNum = r.num
@@ -679,7 +682,7 @@ public struct MXFReader: Sendable {
         }
 
         if let fl = frameLayout {
-            stream.fieldOrder = fieldOrderFromLayout(fl)
+            stream.fieldOrder = fieldOrderFromLayout(fl, dominance: fieldDominance)
             // FrameLayout 1 (SeparateFields) / 2 (OneField) report StoredHeight
             // as the *field* height. ffprobe reports the *frame* height, so
             // double ours to match when the fields encode a full interlaced
@@ -805,16 +808,22 @@ public struct MXFReader: Sendable {
     }
 
     /// FrameLayout (SMPTE 377-1 table 13):
-    ///   0 = full-frame (progressive), 1 = separated fields (interlaced — order
-    ///   signalled by VideoLineMap), 2 = single field (odd/even), 3 = mixed,
+    ///   0 = full-frame (progressive), 1 = separated fields (interlaced),
+    ///   2 = single field (odd/even), 3 = mixed,
     ///   4 = segmented frame (PsF — progressive stored as fields).
-    /// Without the VideoLineMap we can't distinguish TFF from BFF, so we
-    /// report interlaced streams as `.unknown` for field order.
-    private static func fieldOrderFromLayout(_ layout: UInt8) -> VideoFieldOrder {
+    /// Field order for interlaced layouts is resolved from FieldDominance
+    /// (SMPTE 377-1 §G.2.51: 1 = top-first, 2 = bottom-first). Broadcast MXF
+    /// defaults to top-field-first when FieldDominance is absent — that's what
+    /// MediaInfo and ffprobe report for untagged interlaced essence.
+    private static func fieldOrderFromLayout(_ layout: UInt8, dominance: UInt8?) -> VideoFieldOrder {
         switch layout {
         case 0, 4: return .progressive
-        case 1, 3: return .unknown
-        case 2: return .unknown
+        case 1, 3:
+            switch dominance {
+            case 2: return .bottomFieldFirst
+            default: return .topFieldFirst
+            }
+        case 2: return .topFieldFirst
         default: return .unknown
         }
     }

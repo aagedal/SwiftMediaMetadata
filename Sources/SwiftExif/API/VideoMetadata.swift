@@ -379,4 +379,26 @@ public struct VideoMetadata: Sendable {
         guard let tc = camera?.startTimecode, !tc.isEmpty else { return }
         recordTimecode(tc, source: .sonyNRT, frameRate: camera?.captureFps)
     }
+
+    /// Progressive / interlaced / unknown — suitable for a "Scan Type" UI
+    /// column. Derived from `fieldOrder`, which encodes both scan type and
+    /// scan order in a single value.
+    public var scanType: VideoScanType? {
+        switch fieldOrder {
+        case .none: return nil
+        case .progressive: return .progressive
+        case .topFieldFirst, .bottomFieldFirst, .mixed: return .interlaced
+        case .unknown: return .unknown
+        }
+    }
+
+    /// "TFF" / "BFF" for interlaced streams, `nil` otherwise. Suitable for a
+    /// "Scan Order" UI column alongside `scanType`.
+    public var scanOrder: String? {
+        switch fieldOrder {
+        case .topFieldFirst: return "TFF"
+        case .bottomFieldFirst: return "BFF"
+        default: return nil
+        }
+    }
 }

@@ -6,7 +6,36 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
-## [1.3.1] — 2026-04-23
+## [1.3.1] — 2026-04-24
+
+### Added
+
+- **`VideoScanType` and `scanType` / `scanOrder` helpers** on `VideoMetadata`
+  and `VideoStream` — derive MediaInfo-style "Scan Type" (progressive /
+  interlaced / unknown) and "Scan Order" (TFF / BFF) UI columns without
+  enumerating every `VideoFieldOrder` case. `fieldOrder` still encodes both
+  values in one enum and remains the ground truth.
+- **MXF `FieldDominance` parsing (0x3212)** — SMPTE 377-1 §G.2.51 tag now
+  resolves TFF vs BFF for interlaced essence descriptors that carry it.
+
+### Fixed
+
+- **`fieldOrder` now resolves for every supported container.** Previously,
+  MP4 / MOV without a `fiel` atom, Matroska / WebM without `FlagInterlaced`,
+  and MXF with `FrameLayout=1` (separated fields) all returned `nil` or
+  `.unknown`, leaving downstream "Scan Type" UIs blank for the majority of
+  real-world files. New behaviour:
+  - MP4 / MOV: absence of `fiel` defaults to `.progressive` (matches ffmpeg
+    `mov` demuxer and iPhone / camera convention).
+  - Matroska / WebM: absence of `FlagInterlaced` / `FieldOrder` defaults to
+    `.progressive` for video essence (cover-art MJPEG tracks keep `nil`).
+    VP8 / VP9 / AV1 have no interlaced coding mode; HEVC / H.264 writers
+    only emit these elements for genuinely interlaced source.
+  - MXF: `FrameLayout=1` (separated fields) and `FrameLayout=3` (mixed)
+    now resolve to `.topFieldFirst` (the broadcast convention and what
+    MediaInfo / ffprobe report for untagged interlaced essence).
+    `FieldDominance=2` overrides to `.bottomFieldFirst`. Previously these
+    returned `.unknown`.
 
 ### Security
 

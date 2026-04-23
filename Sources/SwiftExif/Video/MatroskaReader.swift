@@ -638,6 +638,15 @@ public struct MatroskaReader: Sendable {
             if stream.isAttachedPic == nil {
                 stream.isAttachedPic = false
             }
+            // Matroska spec: FlagInterlaced/FieldOrder default to "undetermined"
+            // when absent. For VP8/VP9/AV1 the codecs have no interlaced mode,
+            // and for HEVC/H.264 the common case is progressive — real-world
+            // writers only emit these elements for interlaced source. Default
+            // to progressive so downstream consumers get Progressive/Interlaced
+            // instead of nil. Cover-art MJPEG tracks keep nil (not video essence).
+            if stream.fieldOrder == nil, codecID != "V_MJPEG" {
+                stream.fieldOrder = .progressive
+            }
             if trackUID != 0 {
                 refs.append(TrackRef(uid: trackUID, kind: .video, index: stream.index, trackNumber: trackNumber))
             }

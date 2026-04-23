@@ -40,12 +40,24 @@ public struct Timecode: Sendable, Equatable {
     }
 }
 
-/// Scan/field order for video essence.
+/// Scan/field order for video essence. Encodes both *scan type* (progressive
+/// vs interlaced) and *scan order* (which field is first) in one value — split
+/// into distinct properties via `VideoStream.scanType` / `VideoStream.scanOrder`
+/// when a UI wants separate columns (e.g. MediaInfo-style).
 public enum VideoFieldOrder: String, Sendable, Equatable {
     case progressive
     case topFieldFirst = "top-field-first"
     case bottomFieldFirst = "bottom-field-first"
     case mixed
+    case unknown
+}
+
+/// High-level scan type suitable for a "Scan Type" UI column. Derived from
+/// `VideoFieldOrder` so consumers don't have to enumerate every field-order
+/// case themselves.
+public enum VideoScanType: String, Sendable, Equatable {
+    case progressive
+    case interlaced
     case unknown
 }
 
@@ -147,6 +159,29 @@ public struct VideoStream: Sendable, Equatable {
 
     public init(index: Int) {
         self.index = index
+    }
+
+    /// Progressive vs interlaced, suitable for a MediaInfo-style "Scan Type"
+    /// UI column. Derived from `fieldOrder`. Note: MBAFF / PAFF distinctions
+    /// require bitstream parsing and aren't exposed here — both collapse to
+    /// `.interlaced` (matching the container-descriptor view).
+    public var scanType: VideoScanType? {
+        switch fieldOrder {
+        case .none: return nil
+        case .progressive: return .progressive
+        case .topFieldFirst, .bottomFieldFirst, .mixed: return .interlaced
+        case .unknown: return .unknown
+        }
+    }
+
+    /// Field-first order for a "Scan Order" UI column — "TFF" or "BFF".
+    /// `nil` for progressive content or when the order could not be determined.
+    public var scanOrder: String? {
+        switch fieldOrder {
+        case .topFieldFirst: return "TFF"
+        case .bottomFieldFirst: return "BFF"
+        default: return nil
+        }
     }
 
     public static func == (lhs: VideoStream, rhs: VideoStream) -> Bool {

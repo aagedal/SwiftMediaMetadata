@@ -605,6 +605,11 @@ public struct MP4Parser: Sendable {
                 stream.displayHeight = trackHeight
             }
 
+            // MP4/MOV convention: absence of a `fiel` atom means progressive.
+            // Cameras and modern encoders (HEVC, AV1, VVC) routinely omit it.
+            // ffmpeg's mov demuxer treats untagged streams the same way.
+            if stream.fieldOrder == nil { stream.fieldOrder = .progressive }
+
             metadata.videoStreams.append(stream)
 
             if metadata.videoWidth == nil, let w = stream.width, w > 0 {
