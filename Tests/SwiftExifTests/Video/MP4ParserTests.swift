@@ -158,7 +158,81 @@ final class MP4ParserTests: XCTestCase {
         XCTAssertTrue(json.contains("MP4"))
     }
 
+    // MARK: - Chapters
+
+    /// Nero `chpl` in a moov>udta box. MP4Box / x264 / ffmpeg all write this
+    /// shape; times are 100-nanosecond ticks relative to presentation start.
+    func testParseNeroCHPLChapters() throws {
+        let chapters: [(start100ns: UInt64, title: String)] = [
+            (0, "Opening"),
+            (30_000_000, "Credits"),      // 3.0 s
+            (120_000_000, "Chapter Two"), // 12.0 s
+        ]
+        let data = buildMP4WithCHPL(chapters)
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.chapters.count, 3)
+        XCTAssertEqual(metadata.chapters[0].title, "Opening")
+        XCTAssertEqual(metadata.chapters[0].startTime, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(metadata.chapters[1].title, "Credits")
+        XCTAssertEqual(metadata.chapters[1].startTime, 3.0, accuracy: 0.0001)
+        XCTAssertEqual(metadata.chapters[2].title, "Chapter Two")
+        XCTAssertEqual(metadata.chapters[2].startTime, 12.0, accuracy: 0.0001)
+    }
+
+    /// Empty chpl box is tolerated (produces no chapters, no crash). Some
+    /// muxers write a zero-count Nero chapter list when chapter-less media is
+    /// remuxed from a container that did carry one.
+    func testParseNeroCHPLEmpty() throws {
+        let data = buildMP4WithCHPL([])
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertTrue(metadata.chapters.isEmpty)
+    }
+
+    /// Titles written as plain UTF-8 survive a round trip (Nero allows any
+    /// byte sequence the spec treats as UTF-8; Norwegian chars are the canary).
+    func testParseNeroCHPLUTF8Title() throws {
+        let data = buildMP4WithCHPL([(0, "Åpning – første kapittel")])
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.chapters.first?.title, "Åpning – første kapittel")
+    }
+
     // MARK: - Helpers
+
+    /// Build an MP4 with ftyp + moov>mvhd + moov>udta>chpl (Nero chapter list,
+    /// version 1 form).
+    private func buildMP4WithCHPL(_ chapters: [(start100ns: UInt64, title: String)]) -> Data {
+        var writer = BinaryWriter(capacity: 512)
+        writeFtyp(&writer, brand: "isom")
+
+        // Build mvhd
+        var mvhdWriter = BinaryWriter(capacity: 128)
+        mvhdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhdWriter.writeBytes(Data(repeating: 0, count: 96))
+        let mvhdBox = buildBox("mvhd", data: mvhdWriter.data)
+
+        // Build chpl payload (version 1): version/flags(4) + reserved(1) + count(4) + entries
+        var chplData = Data([0x01, 0x00, 0x00, 0x00]) // version=1, flags=0
+        chplData.append(0x00)                          // reserved
+        let count = UInt32(chapters.count)
+        chplData.append(UInt8((count >> 24) & 0xFF))
+        chplData.append(UInt8((count >> 16) & 0xFF))
+        chplData.append(UInt8((count >> 8) & 0xFF))
+        chplData.append(UInt8(count & 0xFF))
+        for (start, title) in chapters {
+            for i in (0..<8).reversed() {
+                chplData.append(UInt8((start >> (8 * i)) & 0xFF))
+            }
+            let titleBytes = Data(title.utf8)
+            chplData.append(UInt8(min(titleBytes.count, 255)))
+            chplData.append(titleBytes.prefix(255))
+        }
+        let chplBox = buildBox("chpl", data: chplData)
+        let udtaBox = buildBox("udta", data: chplBox)
+        let moovBox = buildBox("moov", data: mvhdBox + udtaBox)
+        writer.writeBytes(moovBox)
+        return writer.data
+    }
+
 
     /// Build a minimal ISOBMFF file with just an ftyp box.
     private func buildMinimalMP4(brand: String) -> Data {

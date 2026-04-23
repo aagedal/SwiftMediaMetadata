@@ -109,6 +109,19 @@ public struct VideoMetadataExporter: Sendable {
             dict["SubtitleForcedFlags"]          = metadata.subtitleStreams.map { $0.isForced ?? false }
             dict["SubtitleHearingImpairedFlags"] = metadata.subtitleStreams.map { $0.isHearingImpaired ?? false }
         }
+        if !metadata.chapters.isEmpty {
+            dict["ChapterCount"] = metadata.chapters.count
+            dict["ChapterStartTimes"] = metadata.chapters.map(\.startTime)
+            // End times — emit as a sparse array where missing entries are
+            // represented by NSNull, since not every chapter source records an
+            // explicit end (Matroska allows open-ended atoms, Nero `chpl`
+            // never records end times).
+            dict["ChapterEndTimes"] = metadata.chapters.map { $0.endTime.map { $0 as Any } ?? NSNull() }
+            dict["ChapterDurations"] = metadata.chapters.map { $0.duration.map { $0 as Any } ?? NSNull() }
+            dict["ChapterTitles"] = metadata.chapters.map { $0.title ?? "" }
+            let languages = metadata.chapters.compactMap(\.language)
+            if !languages.isEmpty { dict["ChapterLanguages"] = languages }
+        }
         if let t = metadata.title { dict["Title"] = t }
         if let a = metadata.artist { dict["Artist"] = a }
         if let c = metadata.comment { dict["Comment"] = c }

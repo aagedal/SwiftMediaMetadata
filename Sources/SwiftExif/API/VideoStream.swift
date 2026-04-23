@@ -180,6 +180,55 @@ public struct VideoStream: Sendable, Equatable {
     }
 }
 
+/// A chapter marker inside a container (MP4/MOV `chpl` or QuickTime text-track
+/// chapters; Matroska `Chapters` master element).
+///
+/// Times are expressed in seconds from the start of the presentation. `endTime`
+/// is optional — Matroska allows open-ended chapters (end implied by the next
+/// chapter's start), and Nero `chpl` boxes never record an end time.
+public struct VideoChapter: Sendable, Equatable {
+    /// Stable identifier where the container provides one (Matroska
+    /// `ChapterUID`). Nil for MP4 chapter tracks, which have no persistent id.
+    public var id: UInt64?
+    /// Index in the chapter list, numbered from 0. Matches ffprobe's
+    /// `chapters[].id` when the container lacks an explicit UID.
+    public var index: Int
+    /// Start time in seconds, measured from the start of the presentation.
+    public var startTime: TimeInterval
+    /// End time in seconds. Nil when the container doesn't record one.
+    public var endTime: TimeInterval?
+    /// Human-readable chapter title (the first `ChapString` or `chpl` entry
+    /// title). May be nil when the container omits a label.
+    public var title: String?
+    /// BCP-47 or ISO 639-2/T language tag for the title when the container
+    /// records one (Matroska `ChapLanguage` / `ChapLanguageBCP47`). Nil for MP4.
+    public var language: String?
+
+    public init(
+        index: Int,
+        id: UInt64? = nil,
+        startTime: TimeInterval,
+        endTime: TimeInterval? = nil,
+        title: String? = nil,
+        language: String? = nil
+    ) {
+        self.index = index
+        self.id = id
+        self.startTime = startTime
+        self.endTime = endTime
+        self.title = title
+        self.language = language
+    }
+
+    /// Chapter length in seconds, derived from `endTime - startTime`. Nil when
+    /// the source doesn't record an end time (Nero `chpl` — consumer can fall
+    /// back to `nextChapter.startTime - startTime`, with the clip duration as
+    /// the backstop for the final chapter).
+    public var duration: TimeInterval? {
+        endTime.map { $0 - startTime }
+    }
+}
+
 /// A subtitle / timed-text / closed-caption track inside a container.
 public struct SubtitleStream: Sendable, Equatable {
     public var index: Int

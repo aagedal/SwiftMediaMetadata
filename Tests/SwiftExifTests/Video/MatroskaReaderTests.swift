@@ -73,6 +73,46 @@ final class MatroskaReaderTests: XCTestCase {
         XCTAssertGreaterThan(m.bitRate ?? 0, 0)
     }
 
+    /// Matroska `Chapters` master element — parsed directly from a synthesised
+    /// EBML blob to avoid needing ffmpeg + a separate chapter-metadata input.
+    /// Exercises the two time units (1-byte ChapterFlagHidden vs 8-byte
+    /// ChapterTimeStart), ChapterDisplay > ChapString, and ChapLanguage.
+    func testMKVChaptersBlockDecodes() throws {
+        let blob = buildMatroskaWithChapters([
+            (uid: 0xA1A2A3A4, startNs: 0,             endNs: 60_000_000_000, title: "Opening",   language: "eng"),
+            (uid: 0xB1B2B3B4, startNs: 60_000_000_000, endNs: 180_000_000_000, title: "Act Two",  language: "eng"),
+            (uid: 0xC1C2C3C4, startNs: 180_000_000_000, endNs: nil,          title: "Epilogue", language: "nor"),
+        ])
+        let m = try VideoMetadata.read(from: blob)
+        XCTAssertEqual(m.chapters.count, 3)
+        XCTAssertEqual(m.chapters[0].id, 0xA1A2A3A4)
+        XCTAssertEqual(m.chapters[0].title, "Opening")
+        XCTAssertEqual(m.chapters[0].language, "eng")
+        XCTAssertEqual(m.chapters[0].startTime, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(m.chapters[0].endTime ?? -1, 60.0, accuracy: 0.0001)
+        XCTAssertEqual(m.chapters[1].startTime, 60.0, accuracy: 0.0001)
+        XCTAssertEqual(m.chapters[2].title, "Epilogue")
+        XCTAssertEqual(m.chapters[2].language, "nor")
+        XCTAssertNil(m.chapters[2].endTime)
+    }
+
+    /// A hidden chapter atom (ChapterFlagHidden=1) is dropped on the floor —
+    /// matches ffprobe's behaviour. The remaining chapters are re-indexed so
+    /// their `index` field is contiguous.
+    func testMKVHiddenChaptersSuppressed() throws {
+        let specs: [ChapterSpec] = [
+            ChapterSpec(uid: 1, startNs: 0,              endNs: nil, title: "Visible A", language: nil),
+            ChapterSpec(uid: 2, startNs: 10_000_000_000, endNs: nil, title: "Hidden",    language: nil, hidden: true),
+            ChapterSpec(uid: 3, startNs: 20_000_000_000, endNs: nil, title: "Visible B", language: nil),
+        ]
+        let blob = buildMatroskaWithChapters(specs)
+        let m = try VideoMetadata.read(from: blob)
+        XCTAssertEqual(m.chapters.count, 2)
+        XCTAssertEqual(m.chapters.map { $0.index }, [0, 1])
+        XCTAssertEqual(m.chapters[0].title, "Visible A")
+        XCTAssertEqual(m.chapters[1].title, "Visible B")
+    }
+
     // MARK: - Fixtures
 
     private func generateMKVWithTitles(videoTitle: String, audioTitle: String) throws -> URL {
@@ -107,6 +147,106 @@ final class MatroskaReaderTests: XCTestCase {
             ],
             suffix: ".mkv"
         )
+    }
+
+    // MARK: - Synthesised Matroska fixtures
+
+    /// Minimal Matroska blob: EBML header (DocType "matroska") + Segment
+    /// containing a Chapters block with one EditionEntry and a list of
+    /// ChapterAtoms. No Info / Tracks / Clusters — the reader tolerates those
+    /// being missing.
+    private struct ChapterSpec {
+        let uid: UInt64
+        let startNs: UInt64
+        let endNs: UInt64?
+        let title: String?
+        let language: String?
+        let hidden: Bool
+        init(uid: UInt64, startNs: UInt64, endNs: UInt64?,
+             title: String?, language: String?, hidden: Bool = false) {
+            self.uid = uid; self.startNs = startNs; self.endNs = endNs
+            self.title = title; self.language = language; self.hidden = hidden
+        }
+    }
+
+    private func buildMatroskaWithChapters(
+        _ entries: [(uid: UInt64, startNs: UInt64, endNs: UInt64?, title: String?, language: String?)]
+    ) -> Data {
+        buildMatroskaWithChapters(entries.map {
+            ChapterSpec(uid: $0.uid, startNs: $0.startNs, endNs: $0.endNs,
+                        title: $0.title, language: $0.language)
+        })
+    }
+
+    private func buildMatroskaWithChapters(_ specs: [ChapterSpec]) -> Data {
+        // EBML header: DocType "matroska".
+        var ebmlPayload = Data()
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x86], payload: encodeUInt(1)))          // EBMLVersion
+        ebmlPayload.append(ebmlElement(id: [0x42, 0xF7], payload: encodeUInt(1)))          // EBMLReadVersion
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x82], payload: Data("matroska".utf8))) // DocType
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x87], payload: encodeUInt(4)))          // DocTypeVersion
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x85], payload: encodeUInt(2)))          // DocTypeReadVersion
+        let ebmlHeader = ebmlElement(id: [0x1A, 0x45, 0xDF, 0xA3], payload: ebmlPayload)
+
+        // Chapters > EditionEntry > ChapterAtom*
+        var atoms = Data()
+        for s in specs {
+            var atom = Data()
+            atom.append(ebmlElement(id: [0x73, 0xC4], payload: encodeUInt(s.uid)))         // ChapterUID
+            atom.append(ebmlElement(id: [0x91], payload: encodeUInt(s.startNs)))            // ChapterTimeStart
+            if let e = s.endNs {
+                atom.append(ebmlElement(id: [0x92], payload: encodeUInt(e)))                // ChapterTimeEnd
+            }
+            if s.hidden {
+                atom.append(ebmlElement(id: [0x98], payload: encodeUInt(1)))                // ChapterFlagHidden
+            }
+            // ChapterDisplay(0x80) > ChapString(0x85) + ChapLanguage(0x437C)
+            if s.title != nil || s.language != nil {
+                var display = Data()
+                if let t = s.title {
+                    display.append(ebmlElement(id: [0x85], payload: Data(t.utf8)))
+                }
+                if let l = s.language {
+                    display.append(ebmlElement(id: [0x43, 0x7C], payload: Data(l.utf8)))
+                }
+                atom.append(ebmlElement(id: [0x80], payload: display))
+            }
+            atoms.append(ebmlElement(id: [0xB6], payload: atom))                            // ChapterAtom
+        }
+        let edition = ebmlElement(id: [0x45, 0xB9], payload: atoms)                         // EditionEntry
+        let chapters = ebmlElement(id: [0x10, 0x43, 0xA7, 0x70], payload: edition)          // Chapters
+
+        let segment = ebmlElement(id: [0x18, 0x53, 0x80, 0x67], payload: chapters)          // Segment
+        return ebmlHeader + segment
+    }
+
+    /// Encode an unsigned integer as the shortest big-endian byte sequence
+    /// that still round-trips (minimum 1 byte for value 0).
+    private func encodeUInt(_ value: UInt64) -> Data {
+        if value == 0 { return Data([0]) }
+        var bytes: [UInt8] = []
+        var v = value
+        while v > 0 {
+            bytes.insert(UInt8(v & 0xFF), at: 0)
+            v >>= 8
+        }
+        return Data(bytes)
+    }
+
+    /// Build one EBML element: raw ID bytes (already marker-preserved) + VINT
+    /// size + payload. We always emit a 4-byte size VINT for simplicity, which
+    /// gives us a payload range up to 2²⁸ − 2 bytes — plenty for fixtures.
+    private func ebmlElement(id: [UInt8], payload: Data) -> Data {
+        var out = Data(id)
+        // 4-byte VINT: marker bit 0x10 in the first byte, remaining 28 bits = size.
+        let size = UInt32(payload.count)
+        precondition(size < (1 << 28) - 1, "ebml element payload too large for 4-byte VINT")
+        out.append(UInt8(0x10 | (size >> 24) & 0x0F))
+        out.append(UInt8((size >> 16) & 0xFF))
+        out.append(UInt8((size >> 8) & 0xFF))
+        out.append(UInt8(size & 0xFF))
+        out.append(payload)
+        return out
     }
 
     private func runFFmpeg(arguments: [String], suffix: String) throws -> URL {

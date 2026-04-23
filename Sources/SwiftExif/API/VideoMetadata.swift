@@ -56,6 +56,10 @@ public struct VideoMetadata: Sendable {
     public var audioStreams: [AudioStream]
     /// Per-track subtitle / timed-text / closed-caption streams.
     public var subtitleStreams: [SubtitleStream]
+    /// Chapter markers declared by the container (MP4/MOV `chpl` or QuickTime
+    /// text-track chapters; Matroska `Chapters` master element). Ordered by
+    /// `startTime`. Empty when the container exposes no chapter information.
+    public var chapters: [VideoChapter]
     /// Overall container bit rate in bits/second, when the container advertises one.
     public var bitRate: Int?
     public var title: String?
@@ -81,6 +85,7 @@ public struct VideoMetadata: Sendable {
         self.audioStreams = []
         self.subtitleStreams = []
         self.timecodes = []
+        self.chapters = []
     }
 
     // MARK: - Reading

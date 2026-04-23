@@ -85,6 +85,7 @@ public struct MatroskaReader: Sendable {
         var trackRefs: [TrackRef] = []
         var tagsBlocks: [(start: Int, end: Int)] = []
         var clusterBlocks: [(start: Int, end: Int)] = []
+        var chaptersBlocks: [(start: Int, end: Int)] = []
 
         while reader.offset < end, reader.remainingCount >= 2 {
             guard let id = try? readEBMLID(&reader),
@@ -113,6 +114,8 @@ public struct MatroskaReader: Sendable {
                 if clusterBlocks.count < 64 {
                     clusterBlocks.append((childStart, childEnd))
                 }
+            case 0x1043A770: // Chapters (top-level in Segment)
+                chaptersBlocks.append((childStart, childEnd))
             case 0x1C53BB6B, 0x1941A469: // Cues, Attachments
                 break
             default:
@@ -124,6 +127,14 @@ public struct MatroskaReader: Sendable {
 
         for (s, e) in tagsBlocks {
             parseTags(data, from: s, end: e, refs: trackRefs, into: &metadata)
+        }
+
+        // Chapter markers (0x1043A770). Parsed after Tracks so that in the
+        // future we can map chapter TrackUIDs back to stream indices if we
+        // want per-track chapters — for now we flatten every EditionEntry into
+        // the single top-level `chapters` list, mirroring ffprobe behaviour.
+        for (s, e) in chaptersBlocks {
+            parseChapters(data, from: s, end: e, into: &metadata)
         }
 
         // Clear stale shared BPS / NUMBER_OF_FRAMES tags BEFORE the cluster
@@ -1549,6 +1560,183 @@ public struct MatroskaReader: Sendable {
             }
             if (try? reader.seek(to: vStart + vSize)) == nil { return }
         }
+    }
+
+    // MARK: - Chapters
+
+    /// Walk the Chapters master (0x1043A770). Each Chapters element contains
+    /// one or more EditionEntry children; the non-hidden ones carry the list
+    /// of ChapterAtoms we surface. Matches ffprobe's rule of skipping
+    /// `EditionFlagHidden=1` editions so they never show up in the flat list.
+    ///
+    /// ChapterTimeStart / ChapterTimeEnd are nanosecond uints independent of
+    /// the Segment's TimestampScale.
+    private static func parseChapters(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        into metadata: inout VideoMetadata
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let childStart = reader.offset
+            let childEnd = childStart + Int(size)
+            if id == 0x45B9 { // EditionEntry
+                parseEditionEntry(data, from: childStart, end: childEnd, into: &metadata)
+            }
+            if (try? reader.seek(to: childEnd)) == nil { return }
+        }
+
+        // Stable sort by start time (most muxers already write them in order,
+        // but we don't rely on that).
+        metadata.chapters.sort { $0.startTime < $1.startTime }
+        // Renumber so indices are contiguous even when we skipped hidden
+        // chapters or editions.
+        for i in 0..<metadata.chapters.count {
+            metadata.chapters[i].index = i
+        }
+    }
+
+    private static func parseEditionEntry(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        into metadata: inout VideoMetadata
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        var editionHidden = false
+        var atoms: [(start: Int, end: Int)] = []
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+            switch id {
+            case 0x45BD: // EditionFlagHidden
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    editionHidden = v != 0
+                }
+            case 0xB6: // ChapterAtom
+                atoms.append((vStart, vStart + vSize))
+            default:
+                break
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { return }
+        }
+
+        guard !editionHidden else { return }
+        for (s, e) in atoms {
+            if let chapter = readChapterAtom(data, from: s, end: e,
+                                             index: metadata.chapters.count) {
+                metadata.chapters.append(chapter)
+            }
+        }
+    }
+
+    /// Decode a single ChapterAtom. Nested ChapterAtoms (sub-chapters) are
+    /// flattened alongside their parents — ffprobe reports them the same way.
+    private static func readChapterAtom(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        index: Int
+    ) -> VideoChapter? {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        var uid: UInt64?
+        var startTime: UInt64?
+        var endTime: UInt64?
+        var hidden = false
+        var title: String?
+        var language: String?
+
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+            switch id {
+            case 0x73C4: // ChapterUID
+                uid = readUIntPayload(data, offset: vStart, size: vSize)
+            case 0x91: // ChapterTimeStart (ns)
+                startTime = readUIntPayload(data, offset: vStart, size: vSize)
+            case 0x92: // ChapterTimeEnd (ns, optional)
+                endTime = readUIntPayload(data, offset: vStart, size: vSize)
+            case 0x98: // ChapterFlagHidden
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    hidden = v != 0
+                }
+            case 0x80: // ChapterDisplay
+                let display = readChapterDisplay(data, from: vStart, end: vStart + vSize)
+                if title == nil { title = display.title }
+                if language == nil { language = display.language }
+            default:
+                break
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { break }
+        }
+
+        guard !hidden, let ns = startTime else { return nil }
+        let start = Double(ns) / 1_000_000_000.0
+        let endSeconds: TimeInterval? = endTime.map { Double($0) / 1_000_000_000.0 }
+        return VideoChapter(
+            index: index,
+            id: uid,
+            startTime: start,
+            endTime: endSeconds,
+            title: title,
+            language: language
+        )
+    }
+
+    /// Extract the first `ChapString` / language pair from a ChapterDisplay.
+    /// Matroska permits multiple ChapterDisplays per language; ffprobe picks
+    /// the first one that appears, so we do too.
+    private static func readChapterDisplay(
+        _ data: Data,
+        from start: Int,
+        end: Int
+    ) -> (title: String?, language: String?) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+        var title: String?
+        var language: String?
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+            switch id {
+            case 0x85: // ChapString
+                if title == nil {
+                    title = readStringPayload(data, offset: vStart, size: vSize)
+                }
+            case 0x437C: // ChapLanguage (ISO 639-2/T)
+                if language == nil {
+                    language = readStringPayload(data, offset: vStart, size: vSize)
+                }
+            case 0x437D: // ChapLanguageBCP47 — preferred when present
+                if let bcp = readStringPayload(data, offset: vStart, size: vSize),
+                   !bcp.isEmpty {
+                    language = bcp
+                }
+            default:
+                break
+            }
+            if (try? reader.seek(to: vStart + vSize)) == nil { break }
+        }
+        return (title, language)
     }
 
     // MARK: - EBML primitives

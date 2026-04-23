@@ -212,6 +212,19 @@ struct ReadCommand: ParsableCommand {
             if let v = stream.duration          { d["Duration"]  = String(v) }
             rows.append(d)
         }
+        // Chapters aren't streams per se, but ffprobe groups them alongside
+        // streams in `--streams` output when invoked with `-show_chapters`, so
+        // surface them here with StreamType="chapter" for parity.
+        for ch in vm.chapters {
+            var d: [String: String] = ["StreamType": "chapter", "Index": String(ch.index)]
+            if let id = ch.id { d["ChapterUID"] = String(id) }
+            d["StartTime"] = String(ch.startTime)
+            if let v = ch.endTime  { d["EndTime"]  = String(v) }
+            if let v = ch.duration { d["Duration"] = String(v) }
+            if let v = ch.title    { d["Title"]    = v }
+            if let v = ch.language { d["Language"] = v }
+            rows.append(d)
+        }
         return rows
     }
 
