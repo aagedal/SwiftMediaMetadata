@@ -7,15 +7,23 @@ import Foundation
 /// flate streams parse the same way on macOS and Linux-musl.
 enum ZlibInflate {
 
-    /// Inflate zlib-framed (RFC 1950) data. Returns nil on malformed input.
-    static func inflate(_ data: Data) -> Data? {
-        inflate(data, rawDeflate: false)
+    /// Default cap on decompressed output. Sized generously above anything a
+    /// legitimate PNG iCCP/iTXt chunk or PDF FlateDecode metadata stream would
+    /// produce (real ICC profiles stay under 10 MB, XMP packets under a few
+    /// MB), while stopping a crafted deflate bomb — which can expand 1000:1 or
+    /// more — from filling memory. Callers needing more can pass a larger cap.
+    static let defaultMaxOutput = 256 * 1024 * 1024
+
+    /// Inflate zlib-framed (RFC 1950) data. Returns nil on malformed input or
+    /// when the decompressed output would exceed `maxOutput` bytes.
+    static func inflate(_ data: Data, maxOutput: Int = defaultMaxOutput) -> Data? {
+        inflate(data, rawDeflate: false, maxOutput: maxOutput)
     }
 
     /// Inflate either zlib-framed or raw deflate (negative `windowBits`).
     /// PDF `/FlateDecode` streams are supposed to be zlib-framed, but some
     /// encoders emit raw deflate; call with `rawDeflate: true` for the retry.
-    static func inflate(_ data: Data, rawDeflate: Bool) -> Data? {
+    static func inflate(_ data: Data, rawDeflate: Bool, maxOutput: Int = defaultMaxOutput) -> Data? {
         guard !data.isEmpty else { return nil }
 
         var stream = z_stream()
@@ -49,6 +57,9 @@ enum ZlibInflate {
 
                 let produced = chunk.count - Int(stream.avail_out)
                 if produced > 0 {
+                    // Enforce the output cap before the append so we never
+                    // commit more than maxOutput bytes to memory.
+                    if output.count + produced > maxOutput { return nil }
                     output.append(chunk, count: produced)
                 }
 
