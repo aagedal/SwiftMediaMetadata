@@ -60,8 +60,8 @@ func isSupportedFile(_ url: URL) -> Bool {
 }
 
 let supportedImageExtensions: Set<String> = [
-    "jpg", "jpeg", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw",
-    "raf", "rw2", "orf", "pef",
+    "jpg", "jpeg", "tif", "tiff", "dng", "cr2", "cr3", "nef", "nrw", "arw",
+    "raf", "rw2", "orf", "pef", "srw", "raw",
     "jxl", "png", "avif", "heic", "heif", "webp",
     "gif", "bmp", "dib", "svg", "psd", "pdf",
 ]

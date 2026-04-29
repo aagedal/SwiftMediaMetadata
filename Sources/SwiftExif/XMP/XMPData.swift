@@ -1,12 +1,17 @@
 import Foundation
 
 /// XMP value types.
-public enum XMPValue: Equatable, Sendable {
+///
+/// `.structure` and `.structuredArray` carry `XMPValue` payloads recursively,
+/// so a struct can contain another struct, an array, or a nested rdf:Bag of structs.
+/// Adobe Camera Raw's MaskGroupBasedCorrections (rdf:Bag of corrections, each holding
+/// its own rdf:Bag of CorrectionMasks) is the canonical case that requires recursion.
+public indirect enum XMPValue: Equatable, Sendable {
     case simple(String)
-    case array([String])                     // rdf:Bag or rdf:Seq
-    case langAlternative(String)             // rdf:Alt with xml:lang="x-default"
-    case structure([String: String])         // Single rdf:Description with fields
-    case structuredArray([[String: String]]) // rdf:Bag of rdf:Description items
+    case array([String])                       // rdf:Bag or rdf:Seq
+    case langAlternative(String)               // rdf:Alt with xml:lang="x-default"
+    case structure([String: XMPValue])         // Single rdf:Description with fields
+    case structuredArray([[String: XMPValue]]) // rdf:Bag of rdf:Description items
 }
 
 /// Parsed XMP metadata.
@@ -53,16 +58,48 @@ public struct XMPData: Equatable, Sendable {
         return []
     }
 
-    /// Get a structure value (single rdf:Description with fields).
-    public func structureValue(namespace: String, property: String) -> [String: String]? {
+    /// Get a structure value (single rdf:Description with fields). Field values may themselves
+    /// be nested arrays / structs — for the common flat-string case use `flatStructureValue`.
+    public func structureValue(namespace: String, property: String) -> [String: XMPValue]? {
         if case .structure(let fields) = value(namespace: namespace, property: property) { return fields }
         return nil
     }
 
-    /// Get a structured array value (rdf:Bag of rdf:Description items).
-    public func structuredArrayValue(namespace: String, property: String) -> [[String: String]]? {
+    /// Get a structured array value (rdf:Bag of rdf:Description items). For the flat-string
+    /// case use `flatStructuredArrayValue`.
+    public func structuredArrayValue(namespace: String, property: String) -> [[String: XMPValue]]? {
         if case .structuredArray(let items) = value(namespace: namespace, property: property) { return items }
         return nil
+    }
+
+    /// Convenience view that down-casts a structure's `XMPValue` fields to `String`, dropping
+    /// any non-`.simple` entries. Use this for legacy schemas (IPTC, xmpDM timecode, stRef) that
+    /// only carry flat-string fields.
+    public func flatStructureValue(namespace: String, property: String) -> [String: String]? {
+        guard let fields = structureValue(namespace: namespace, property: property) else { return nil }
+        return Self.flatten(fields)
+    }
+
+    /// Down-cast view of a structured array — see `flatStructureValue`.
+    public func flatStructuredArrayValue(namespace: String, property: String) -> [[String: String]]? {
+        guard let items = structuredArrayValue(namespace: namespace, property: property) else { return nil }
+        return items.map { Self.flatten($0) }
+    }
+
+    /// Down-cast a struct's `XMPValue` fields to `String`, dropping anything that isn't `.simple`.
+    /// Use this when consuming a flat-string schema (IPTC, stRef, xmpDM timecode) where non-simple
+    /// fields aren't expected.
+    public static func flatten(_ fields: [String: XMPValue]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (key, value) in fields {
+            if case .simple(let s) = value { out[key] = s }
+        }
+        return out
+    }
+
+    /// Wrap each entry in a flat `[String: String]` as `.simple`, producing the recursive form.
+    public static func wrapSimple(_ fields: [String: String]) -> [String: XMPValue] {
+        fields.mapValues { .simple($0) }
     }
 
     /// All property keys.
@@ -293,11 +330,11 @@ public struct XMPData: Equatable, Sendable {
     /// Creator contact information (Iptc4xmpCore:CreatorContactInfo) — structured type.
     public var creatorContactInfo: IPTCCreatorContactInfo? {
         get {
-            guard let fields = structureValue(namespace: XMPNamespace.iptcCore, property: "CreatorContactInfo") else { return nil }
+            guard let fields = flatStructureValue(namespace: XMPNamespace.iptcCore, property: "CreatorContactInfo") else { return nil }
             return IPTCCreatorContactInfo(fields: fields)
         }
         set {
-            if let v = newValue { setValue(.structure(v.toFields()), namespace: XMPNamespace.iptcCore, property: "CreatorContactInfo") }
+            if let v = newValue { setValue(.structure(Self.wrapSimple(v.toFields())), namespace: XMPNamespace.iptcCore, property: "CreatorContactInfo") }
             else { removeValue(namespace: XMPNamespace.iptcCore, property: "CreatorContactInfo") }
         }
     }
@@ -419,60 +456,60 @@ public struct XMPData: Equatable, Sendable {
     /// Locations where the image was created (Iptc4xmpExt:LocationCreated) — structured array.
     public var locationCreated: [IPTCLocation] {
         get {
-            guard let items = structuredArrayValue(namespace: XMPNamespace.iptcExt, property: "LocationCreated") else { return [] }
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.iptcExt, property: "LocationCreated") else { return [] }
             return items.map { IPTCLocation(fields: $0) }
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "LocationCreated") }
-            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.iptcExt, property: "LocationCreated") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "LocationCreated") }
         }
     }
 
     /// Locations shown in the image (Iptc4xmpExt:LocationShown) — structured array.
     public var locationShown: [IPTCLocation] {
         get {
-            guard let items = structuredArrayValue(namespace: XMPNamespace.iptcExt, property: "LocationShown") else { return [] }
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.iptcExt, property: "LocationShown") else { return [] }
             return items.map { IPTCLocation(fields: $0) }
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "LocationShown") }
-            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.iptcExt, property: "LocationShown") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "LocationShown") }
         }
     }
 
     /// Registry entries for the image (Iptc4xmpExt:RegistryId) — structured array.
     public var registryId: [IPTCRegistryEntry] {
         get {
-            guard let items = structuredArrayValue(namespace: XMPNamespace.iptcExt, property: "RegistryId") else { return [] }
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.iptcExt, property: "RegistryId") else { return [] }
             return items.map { IPTCRegistryEntry(fields: $0) }
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "RegistryId") }
-            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.iptcExt, property: "RegistryId") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "RegistryId") }
         }
     }
 
     /// Artwork or objects in the image (Iptc4xmpExt:ArtworkOrObject) — structured array.
     public var artworkOrObject: [IPTCArtworkOrObject] {
         get {
-            guard let items = structuredArrayValue(namespace: XMPNamespace.iptcExt, property: "ArtworkOrObject") else { return [] }
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.iptcExt, property: "ArtworkOrObject") else { return [] }
             return items.map { IPTCArtworkOrObject(fields: $0) }
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "ArtworkOrObject") }
-            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.iptcExt, property: "ArtworkOrObject") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "ArtworkOrObject") }
         }
     }
 
     /// Image creators (Iptc4xmpExt:ImageCreator) — structured array, IPTC Extension 1.4+.
     public var imageCreator: [IPTCImageCreator] {
         get {
-            guard let items = structuredArrayValue(namespace: XMPNamespace.iptcExt, property: "ImageCreator") else { return [] }
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.iptcExt, property: "ImageCreator") else { return [] }
             return items.map { IPTCImageCreator(fields: $0) }
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "ImageCreator") }
-            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.iptcExt, property: "ImageCreator") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "ImageCreator") }
         }
     }
 
@@ -489,24 +526,24 @@ public struct XMPData: Equatable, Sendable {
     /// Copyright owners (plus:CopyrightOwner) — structured array from PLUS namespace.
     public var copyrightOwner: [IPTCCopyrightOwner] {
         get {
-            guard let items = structuredArrayValue(namespace: XMPNamespace.plus, property: "CopyrightOwner") else { return [] }
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.plus, property: "CopyrightOwner") else { return [] }
             return items.map { IPTCCopyrightOwner(fields: $0) }
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "CopyrightOwner") }
-            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.plus, property: "CopyrightOwner") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.plus, property: "CopyrightOwner") }
         }
     }
 
     /// Licensors (plus:Licensor) — structured array from PLUS namespace.
     public var licensor: [IPTCLicensor] {
         get {
-            guard let items = structuredArrayValue(namespace: XMPNamespace.plus, property: "Licensor") else { return [] }
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.plus, property: "Licensor") else { return [] }
             return items.map { IPTCLicensor(fields: $0) }
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "Licensor") }
-            else { setValue(.structuredArray(newValue.map { $0.toFields() }), namespace: XMPNamespace.plus, property: "Licensor") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.plus, property: "Licensor") }
         }
     }
 
@@ -893,7 +930,7 @@ public struct XMPData: Equatable, Sendable {
     }
 
     private func timecodeStructure(property: String) -> XMPTimecode? {
-        guard let fields = structureValue(namespace: XMPNamespace.xmpDM, property: property) else {
+        guard let fields = flatStructureValue(namespace: XMPNamespace.xmpDM, property: property) else {
             return nil
         }
         let ns = XMPNamespace.xmpDM

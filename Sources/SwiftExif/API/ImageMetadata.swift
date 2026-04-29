@@ -632,6 +632,22 @@ public struct ImageMetadata: Sendable {
 
     // MARK: - Thumbnail Extraction
 
+    /// Extract every thumbnail asserted in any C2PA manifest (claim or ingredient).
+    /// Returns the JUMBF `bidb` payloads as `C2PAThumbnail` values, in manifest/assertion order.
+    /// Filter by `label` (e.g. has-prefix `"c2pa.thumbnail.claim."`) to narrow to a specific kind.
+    public func extractC2PAThumbnails() -> [C2PAThumbnail] {
+        guard let manifests = c2pa?.manifests else { return [] }
+        var out: [C2PAThumbnail] = []
+        for manifest in manifests {
+            for assertion in manifest.assertions {
+                guard case .thumbnail(let data, let format) = assertion.content,
+                      !data.isEmpty else { continue }
+                out.append(C2PAThumbnail(label: assertion.label, data: data, format: format))
+            }
+        }
+        return out
+    }
+
     /// Extract the embedded JPEG thumbnail from Exif IFD1, if present.
     /// Returns the raw JPEG data of the thumbnail image.
     public func extractThumbnail() -> Data? {
@@ -890,8 +906,10 @@ public struct ImageMetadata: Sendable {
                     case .simple(let s): return s
                     case .array(let arr): return arr.joined(separator: "; ")
                     case .langAlternative(let s): return s
-                    case .structure(let fields): return fields.values.sorted().joined(separator: "; ")
-                    case .structuredArray(let items): return items.map { $0.values.sorted().joined(separator: ", ") }.joined(separator: "; ")
+                    case .structure(let fields):
+                        return XMPData.flatten(fields).values.sorted().joined(separator: "; ")
+                    case .structuredArray(let items):
+                        return items.map { XMPData.flatten($0).values.sorted().joined(separator: ", ") }.joined(separator: "; ")
                     }
                 }
                 break

@@ -57,7 +57,7 @@ final class XMPAdobeNamespacesTests: XCTestCase {
         """
 
         let xmp = try XMPReader.read(from: makeXMPData(xml: xml))
-        let fields = xmp.structureValue(namespace: XMPNamespace.xmpMM, property: "DerivedFrom")
+        let fields = xmp.flatStructureValue(namespace: XMPNamespace.xmpMM, property: "DerivedFrom")
         XCTAssertNotNil(fields)
         XCTAssertEqual(fields?["\(XMPNamespace.stRef)documentID"], "xmp.did:PARENT")
         XCTAssertEqual(fields?["\(XMPNamespace.stRef)instanceID"], "xmp.iid:PARENT")

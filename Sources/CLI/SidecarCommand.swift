@@ -46,8 +46,10 @@ struct SidecarRead: ParsableCommand {
             case .simple(let s): display = s
             case .array(let items): display = items.joined(separator: "; ")
             case .langAlternative(let s): display = s
-            case .structure(let fields): display = fields.values.sorted().joined(separator: "; ")
-            case .structuredArray(let items): display = items.map { $0.values.sorted().joined(separator: ", ") }.joined(separator: "; ")
+            case .structure(let fields):
+                display = XMPData.flatten(fields).values.sorted().joined(separator: "; ")
+            case .structuredArray(let items):
+                display = items.map { XMPData.flatten($0).values.sorted().joined(separator: ", ") }.joined(separator: "; ")
             }
             let shortKey = shortenXMPKey(key)
             print("\(shortKey.padding(toLength: maxKey + 2, withPad: " ", startingAt: 0)): \(display)")

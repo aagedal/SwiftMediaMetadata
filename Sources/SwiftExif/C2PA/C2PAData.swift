@@ -293,3 +293,21 @@ public struct C2PAIngredient: Sendable {
         self.relationship = relationship
     }
 }
+
+// MARK: - Thumbnail Convenience
+
+/// An extracted C2PA thumbnail with its source label and image format.
+public struct C2PAThumbnail: Sendable {
+    /// Full assertion label, e.g. "c2pa.thumbnail.claim.jpeg" or "c2pa.thumbnail.ingredient.png".
+    public let label: String
+    /// Raw image bytes from the JUMBF `bidb` box.
+    public let data: Data
+    /// Image format suffix from the assertion label, e.g. "jpeg", "png".
+    public let format: String
+
+    public init(label: String, data: Data, format: String) {
+        self.label = label
+        self.data = data
+        self.format = format
+    }
+}

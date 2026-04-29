@@ -113,6 +113,8 @@ public struct FormatDetector: Sendable {
             return .raw(.cr2)
         case "nef":
             return .raw(.nef)
+        case "nrw":
+            return .raw(.nrw)
         case "arw":
             return .raw(.arw)
         case "cr3":
@@ -125,6 +127,10 @@ public struct FormatDetector: Sendable {
             return .raw(.orf)
         case "pef":
             return .raw(.pef)
+        case "srw":
+            return .raw(.srw)
+        case "raw":
+            return .raw(.raw)
         case "jxl":
             return .jpegXL
         case "png":

@@ -6,7 +6,7 @@ final class SmokeTests: CLITestCase {
         let result = try CLITestHarness.run(["--version"])
         XCTAssertEqual(result.exitCode, 0, "stderr: \(result.stderr)")
         XCTAssertFalse(result.stdout.isEmpty, "--version should print something")
-        // Version is "1.3.0" at time of writing; just assert it looks like a semver.
+        // Just assert the output looks like a semver — exact version is in CHANGELOG.
         XCTAssertTrue(
             result.stdout.range(of: #"\d+\.\d+\.\d+"#, options: .regularExpression) != nil,
             "stdout did not look like a version: \(result.stdout)"

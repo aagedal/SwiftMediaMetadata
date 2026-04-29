@@ -8,7 +8,7 @@ A native Swift library for reading and writing image and video metadata — Exif
 |--------|------|-------|----------------|
 | JPEG | Yes | Yes | Exif, IPTC, XMP, C2PA, ICC |
 | TIFF | Yes | Yes | Exif, IPTC, XMP, ICC |
-| RAW (DNG, CR2, NEF, ARW) | Yes | Yes | Exif, IPTC, XMP, MakerNotes, ICC |
+| RAW (DNG, CR2, CR3, NEF, NRW, ARW, RAF, RW2, ORF, PEF, SRW, .raw) | Yes | Yes | Exif, IPTC, XMP, MakerNotes, ICC |
 | JPEG XL (container) | Yes | Yes | Exif, XMP, ICC |
 | PNG | Yes | Yes | Exif, XMP, ICC |
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |

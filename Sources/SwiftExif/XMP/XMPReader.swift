@@ -64,17 +64,49 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
 
     // Structure parsing state
     private var inStructuredItem = false
-    private var currentStructureFields: [String: String] = [:]
-    private var currentStructuredArrayItems: [[String: String]] = []
+    private var currentStructureFields: [String: XMPValue] = [:]
+    private var currentStructuredArrayItems: [[String: XMPValue]] = []
     private var isStructuredBag = false
     private var inPropertyStructure = false
-    private var propertyStructureFields: [String: String] = [:]
+    private var propertyStructureFields: [String: XMPValue] = [:]
     private var propertyStructureProperty = ""
     private var propertyStructureNamespace = ""
     private var structureChildElement = ""
     private var structureChildNamespace = ""
     /// Tracks when we're inside a property element awaiting a value (child Bag/Alt/simple text or nested Description).
     private var inPendingProperty = false
+
+    /// Stack of paused parsing frames. Pushed when a nested container (rdf:Bag / rdf:Seq /
+    /// rdf:Alt / rdf:Description) appears as a child of a struct field — we save the outer
+    /// frame's state, reset, parse the inner container fresh, then on the matching close-tag
+    /// restore the outer state and assign the inner value as a field of its parent struct.
+    /// Without this, anything nested deeper than a single rdf:Description is silently dropped.
+    private var frameStack: [NestedFrame] = []
+    private struct NestedFrame {
+        let triggeringElement: String   // "Bag" | "Seq" | "Alt" | "Description"
+        let parentFieldKey: String      // namespaced key to store the result under
+        /// Whether the parent frame was a structured-array item (vs property-structure or top-level).
+        let parentWasStructuredItem: Bool
+        let parentWasPropertyStructure: Bool
+
+        let savedCurrentStructureFields: [String: XMPValue]
+        let savedCurrentStructuredArrayItems: [[String: XMPValue]]
+        let savedCurrentArrayItems: [String]
+        let savedCurrentArrayProperty: String
+        let savedCurrentArrayNamespace: String
+        let savedInBag: Bool
+        let savedInSeq: Bool
+        let savedInAlt: Bool
+        let savedIsStructuredBag: Bool
+        let savedInStructuredItem: Bool
+        let savedInPropertyStructure: Bool
+        let savedPropertyStructureFields: [String: XMPValue]
+        let savedPropertyStructureProperty: String
+        let savedPropertyStructureNamespace: String
+        let savedStructureChildElement: String
+        let savedStructureChildNamespace: String
+        let savedInPendingProperty: Bool
+    }
 
     /// Stack of active xmlns prefix → URI mappings. XMLParser doesn't resolve attribute namespaces,
     /// so we honor the document's live declarations to avoid silently dropping unknown-prefix attribute-form
@@ -186,6 +218,20 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         // Standard XMP handling (skip when inside regions)
         if inRegions { return }
 
+        // Detect nested-container start FIRST — before the inPropertyStructure / inStructuredItem
+        // handlers below would clobber `structureChildElement` for a value-bearing child element
+        // (Bag / Seq / Alt / Description). When we're already collecting fields for a struct AND
+        // the field-element has been seen (`structureChildElement` is set), the next container
+        // element supplies that field's value: push the outer frame, parse the inner container
+        // fresh, and let the matching close-tag pop and assign.
+        if shouldDescend(elementName: elementName) {
+            if descend(triggeringElement: elementName, attributes: attributeDict) {
+                return  // Description trigger fully handled in descend().
+            }
+            // Bag/Seq/Alt: fall through so the existing element-start branches fire at the
+            // inner frame's reset state.
+        }
+
         // Handle structure child elements (rdf:parseType="Resource" style)
         if inPropertyStructure {
             structureChildElement = elementName
@@ -204,7 +250,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                     let prefix = String(parts[0])
                     let prop = String(parts[1])
                     if let ns = resolvePrefix(prefix) {
-                        currentStructureFields["\(ns)\(prop)"] = value
+                        currentStructureFields["\(ns)\(prop)"] = .simple(value)
                     }
                 }
             }
@@ -232,7 +278,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                     let prefix = String(parts[0])
                     let prop = String(parts[1])
                     if let ns = resolvePrefix(prefix) {
-                        propertyStructureFields["\(ns)\(prop)"] = value
+                        propertyStructureFields["\(ns)\(prop)"] = .simple(value)
                     }
                 }
             }
@@ -290,7 +336,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                 propertyStructureNamespace = namespaceURI ?? ""
             } else {
                 // Check for structure attributes directly on the property element (compact form)
-                var structAttrs: [String: String] = [:]
+                var structAttrs: [String: XMPValue] = [:]
                 for (key, value) in attributeDict {
                     if Self.isMetaAttribute(key) { continue }
                     let parts = key.split(separator: ":", maxSplits: 1)
@@ -298,7 +344,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                         let prefix = String(parts[0])
                         let prop = String(parts[1])
                         if let ns = resolvePrefix(prefix) {
-                            structAttrs["\(ns)\(prop)"] = value
+                            structAttrs["\(ns)\(prop)"] = .simple(value)
                         }
                     }
                 }
@@ -363,6 +409,15 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         }
         if inRegions { return }
 
+        // Description-triggered nested frame: when the close-tag matches the rdf:Description we
+        // descended into, build the struct value and ascend instead of storing top-level.
+        if elementName == "Description",
+           let frame = frameStack.last, frame.triggeringElement == "Description" {
+            let value: XMPValue = .structure(propertyStructureFields)
+            ascend(value: value)
+            return
+        }
+
         // Handle end of structure child elements
         if inPropertyStructure && elementName != propertyStructureProperty {
             if elementName == "Description" {
@@ -372,7 +427,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             // Child element text value
             let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty, let ns = namespaceURI, !ns.isEmpty {
-                propertyStructureFields["\(ns)\(elementName)"] = trimmed
+                propertyStructureFields["\(ns)\(elementName)"] = .simple(trimmed)
             }
             structureChildElement = ""
             structureChildNamespace = ""
@@ -396,7 +451,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         if inStructuredItem && elementName != "li" && elementName != "Description" {
             let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty, let ns = namespaceURI, !ns.isEmpty {
-                currentStructureFields["\(ns)\(elementName)"] = trimmed
+                currentStructureFields["\(ns)\(elementName)"] = .simple(trimmed)
             }
             structureChildElement = ""
             structureChildNamespace = ""
@@ -425,27 +480,44 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                 }
             }
         } else if elementName == "Bag" || elementName == "Seq" {
+            // Build the result value first so we can either store as a top-level property
+            // or hand it back to a paused parent frame.
+            let builtValue: XMPValue
             if isStructuredBag && !currentStructuredArrayItems.isEmpty {
-                // Store as structured array
-                if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
-                    properties["\(currentArrayNamespace)\(currentArrayProperty)"] = .structuredArray(currentStructuredArrayItems)
-                }
+                builtValue = .structuredArray(currentStructuredArrayItems)
+            } else {
+                builtValue = .array(currentArrayItems)
+            }
+
+            if let frame = frameStack.last, frame.triggeringElement == elementName {
+                ascend(value: builtValue)
             } else if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
-                properties["\(currentArrayNamespace)\(currentArrayProperty)"] = .array(currentArrayItems)
+                properties["\(currentArrayNamespace)\(currentArrayProperty)"] = builtValue
+                inBag = false
+                inSeq = false
+                isStructuredBag = false
+                currentArrayItems = []
+                currentStructuredArrayItems = []
+            } else {
+                inBag = false
+                inSeq = false
+                isStructuredBag = false
+                currentArrayItems = []
+                currentStructuredArrayItems = []
             }
-            inBag = false
-            inSeq = false
-            isStructuredBag = false
-            currentArrayItems = []
-            currentStructuredArrayItems = []
         } else if elementName == "Alt" {
-            if let first = currentArrayItems.first {
-                if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
-                    properties["\(currentArrayNamespace)\(currentArrayProperty)"] = .langAlternative(first)
-                }
+            let builtValue: XMPValue = .langAlternative(currentArrayItems.first ?? "")
+            if let frame = frameStack.last, frame.triggeringElement == "Alt" {
+                ascend(value: builtValue)
+            } else if let first = currentArrayItems.first,
+                      !currentArrayNamespace.isEmpty, !currentArrayProperty.isEmpty {
+                properties["\(currentArrayNamespace)\(currentArrayProperty)"] = .langAlternative(first)
+                inAlt = false
+                currentArrayItems = []
+            } else {
+                inAlt = false
+                currentArrayItems = []
             }
-            inAlt = false
-            currentArrayItems = []
         } else if inDescription && !inBag && !inSeq && !inAlt {
             inPendingProperty = false
             // Only store as simple if this key wasn't already set (by a child Bag/Seq/Alt/structure)
@@ -489,5 +561,125 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         if key == "about" || key == "parseType" || key == "ID" || key == "nodeID" || key == "resource" { return true }
         if key.hasPrefix("rdf:") || key.hasPrefix("xml:") { return true }
         return false
+    }
+
+    // MARK: - Nested-container stack
+
+    /// True when an element-start indicates a nested container value inside a struct field.
+    /// The trigger: we're inside a struct (structured-array item or property-structure), the most
+    /// recent child element opened is the field name (structureChildElement), and now we see a
+    /// container element that supplies that field's value.
+    private func shouldDescend(elementName: String) -> Bool {
+        guard inStructuredItem || inPropertyStructure else { return false }
+        guard !structureChildElement.isEmpty else { return false }
+        return elementName == "Bag" || elementName == "Seq"
+            || elementName == "Alt" || elementName == "Description"
+    }
+
+    /// Push the current frame and reset state to begin parsing a nested container fresh.
+    /// Returns true if the trigger element was fully handled (Description trigger), in which case
+    /// the caller should return from didStartElement immediately. False otherwise (Bag/Seq/Alt) —
+    /// the existing handlers run at the inner level after descend.
+    private func descend(triggeringElement: String, attributes: [String: String]) -> Bool {
+        let parentKey = "\(structureChildNamespace)\(structureChildElement)"
+        frameStack.append(NestedFrame(
+            triggeringElement: triggeringElement,
+            parentFieldKey: parentKey,
+            parentWasStructuredItem: inStructuredItem,
+            parentWasPropertyStructure: inPropertyStructure,
+            savedCurrentStructureFields: currentStructureFields,
+            savedCurrentStructuredArrayItems: currentStructuredArrayItems,
+            savedCurrentArrayItems: currentArrayItems,
+            savedCurrentArrayProperty: currentArrayProperty,
+            savedCurrentArrayNamespace: currentArrayNamespace,
+            savedInBag: inBag,
+            savedInSeq: inSeq,
+            savedInAlt: inAlt,
+            savedIsStructuredBag: isStructuredBag,
+            savedInStructuredItem: inStructuredItem,
+            savedInPropertyStructure: inPropertyStructure,
+            savedPropertyStructureFields: propertyStructureFields,
+            savedPropertyStructureProperty: propertyStructureProperty,
+            savedPropertyStructureNamespace: propertyStructureNamespace,
+            savedStructureChildElement: structureChildElement,
+            savedStructureChildNamespace: structureChildNamespace,
+            savedInPendingProperty: inPendingProperty
+        ))
+
+        // Reset to a pristine state so the triggering element parses as if at top level.
+        inBag = false
+        inSeq = false
+        inAlt = false
+        inStructuredItem = false
+        inPropertyStructure = false
+        inPendingProperty = false
+        isStructuredBag = false
+        currentStructureFields = [:]
+        currentStructuredArrayItems = []
+        currentArrayItems = []
+        currentArrayProperty = ""
+        currentArrayNamespace = ""
+        propertyStructureFields = [:]
+        propertyStructureProperty = ""
+        propertyStructureNamespace = ""
+        structureChildElement = ""
+        structureChildNamespace = ""
+
+        // Description trigger: collect the rdf:Description's attributes ourselves (the existing
+        // attribute-parsing branches all require flags we just cleared). The matching close-tag
+        // is detected in didEndElement and ascends with `.structure(propertyStructureFields)`.
+        if triggeringElement == "Description" {
+            inPropertyStructure = true
+            propertyStructureProperty = "Description"
+            propertyStructureNamespace = ""
+            for (key, value) in attributes {
+                if Self.isMetaAttribute(key) { continue }
+                let parts = key.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    let prefix = String(parts[0])
+                    let prop = String(parts[1])
+                    if let ns = resolvePrefix(prefix) {
+                        propertyStructureFields["\(ns)\(prop)"] = .simple(value)
+                    }
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Pop a frame: restore outer state and assign the inner value to the parent struct field.
+    private func ascend(value: XMPValue) {
+        guard let frame = frameStack.popLast() else { return }
+
+        currentStructureFields = frame.savedCurrentStructureFields
+        currentStructuredArrayItems = frame.savedCurrentStructuredArrayItems
+        currentArrayItems = frame.savedCurrentArrayItems
+        currentArrayProperty = frame.savedCurrentArrayProperty
+        currentArrayNamespace = frame.savedCurrentArrayNamespace
+        inBag = frame.savedInBag
+        inSeq = frame.savedInSeq
+        inAlt = frame.savedInAlt
+        isStructuredBag = frame.savedIsStructuredBag
+        inStructuredItem = frame.savedInStructuredItem
+        inPropertyStructure = frame.savedInPropertyStructure
+        propertyStructureFields = frame.savedPropertyStructureFields
+        propertyStructureProperty = frame.savedPropertyStructureProperty
+        propertyStructureNamespace = frame.savedPropertyStructureNamespace
+        // The field-element that triggered this nested value is now consumed.
+        structureChildElement = ""
+        structureChildNamespace = ""
+        inPendingProperty = frame.savedInPendingProperty
+        // Clear leftover text from the inner container so the parent's field-end-tag handler
+        // (line ~367, which converts trailing text to .simple) doesn't overwrite the value
+        // we just stored on the parent struct.
+        currentText = ""
+
+        // Assign the popped value to the appropriate parent container.
+        if frame.parentWasStructuredItem {
+            currentStructureFields[frame.parentFieldKey] = value
+        } else if frame.parentWasPropertyStructure {
+            propertyStructureFields[frame.parentFieldKey] = value
+        }
     }
 }

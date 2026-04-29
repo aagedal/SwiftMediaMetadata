@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Cross-compile swift-exif for macOS (arm64, x86_64, universal) and fully
-# static Linux (x86_64-musl, aarch64-musl). Output lands under ./dist/.
+# Cross-compile swift-exif for macOS (arm64) and fully static Linux
+# (x86_64-musl, aarch64-musl). Output lands under ./dist/.
 #
 # Prerequisites:
 #   - Xcode 16+ / Swift 6.3+ on macOS
@@ -91,7 +91,6 @@ build_linux_static() {
 rm -f "$DIST"/swift-exif-*
 
 build_mac arm64
-build_mac x86_64
 
 build_linux_static x86_64
 build_linux_static aarch64

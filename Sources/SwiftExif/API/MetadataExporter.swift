@@ -322,21 +322,9 @@ public struct MetadataExporter: Sendable {
                 case .langAlternative(let s):
                     dict[exportKey] = s
                 case .structure(let fields):
-                    var nested: [String: String] = [:]
-                    for (k, v) in fields {
-                        if let (p, ln) = resolveXMPKey(k) { nested["\(p):\(ln)"] = v }
-                        else { nested[k] = v }
-                    }
-                    dict[exportKey] = nested
+                    dict[exportKey] = renderStructFields(fields)
                 case .structuredArray(let items):
-                    dict[exportKey] = items.map { item in
-                        var nested: [String: String] = [:]
-                        for (k, v) in item {
-                            if let (p, ln) = resolveXMPKey(k) { nested["\(p):\(ln)"] = v }
-                            else { nested[k] = v }
-                        }
-                        return nested
-                    }
+                    dict[exportKey] = items.map(renderStructFields)
                 }
             }
         }
@@ -359,6 +347,29 @@ public struct MetadataExporter: Sendable {
         case .gif: return "GIF"
         case .bmp: return "BMP"
         case .svg: return "SVG"
+        }
+    }
+
+    /// Render an XMP struct's fields as a JSON-friendly dictionary, recursively.
+    /// Simple fields become strings; nested structures and arrays preserve their shape.
+    private static func renderStructFields(_ fields: [String: XMPValue]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for (k, v) in fields {
+            let key: String
+            if let (prefix, ln) = resolveXMPKey(k) { key = "\(prefix):\(ln)" }
+            else { key = k }
+            out[key] = renderXMPValue(v)
+        }
+        return out
+    }
+
+    private static func renderXMPValue(_ value: XMPValue) -> Any {
+        switch value {
+        case .simple(let s): return s
+        case .langAlternative(let s): return s
+        case .array(let items): return items
+        case .structure(let fields): return renderStructFields(fields)
+        case .structuredArray(let items): return items.map(renderStructFields)
         }
     }
 

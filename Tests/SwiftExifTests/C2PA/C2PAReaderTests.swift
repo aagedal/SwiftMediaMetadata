@@ -105,6 +105,91 @@ final class C2PAReaderTests: XCTestCase {
         }
     }
 
+    func testParseThumbnailAssertion() throws {
+        let bytes = Data([0xFF, 0xD8, 0xFF, 0xE0, 0xCA, 0xFE, 0xBA, 0xBE]) // pseudo-JPEG
+        let jumbfData = buildManifestStoreWithThumbnail(label: "c2pa.thumbnail.claim.jpeg", bytes: bytes)
+        let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+        let assertions = c2pa?.activeManifest?.assertions
+
+        let thumb = assertions?.first(where: { $0.label == "c2pa.thumbnail.claim.jpeg" })
+        XCTAssertNotNil(thumb)
+
+        if case .thumbnail(let data, let format) = thumb?.content {
+            XCTAssertEqual(data, bytes)
+            XCTAssertEqual(format, "jpeg")
+        } else {
+            XCTFail("Expected thumbnail assertion content")
+        }
+    }
+
+    func testExtractC2PAThumbnailsAccessor() throws {
+        let claimBytes = Data(repeating: 0xAA, count: 32)
+        let ingredientBytes = Data(repeating: 0xBB, count: 16)
+
+        // Build a manifest with two thumbnails — claim + ingredient
+        let claimAssertion = buildThumbnailAssertionBox(label: "c2pa.thumbnail.claim.jpeg", bytes: claimBytes)
+        let ingredientAssertion = buildThumbnailAssertionBox(label: "c2pa.thumbnail.ingredient.png", bytes: ingredientBytes)
+        let claim = buildClaim(generator: "test")
+        let manifest = buildManifest(label: "urn:c2pa:two-thumbs", claimCBOR: claim,
+                                     assertionBoxes: [claimAssertion, ingredientAssertion])
+        let jumbfData = wrapInManifestStore(manifest)
+
+        let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+        XCTAssertNotNil(c2pa)
+
+        // Construct an ImageMetadata that carries the parsed C2PA payload
+        let metadata = ImageMetadata(container: .jpeg(JPEGFile(segments: [])),
+                                     format: .jpeg, c2pa: c2pa)
+        let thumbs = metadata.extractC2PAThumbnails()
+
+        XCTAssertEqual(thumbs.count, 2)
+        XCTAssertEqual(thumbs[0].label, "c2pa.thumbnail.claim.jpeg")
+        XCTAssertEqual(thumbs[0].data, claimBytes)
+        XCTAssertEqual(thumbs[0].format, "jpeg")
+        XCTAssertEqual(thumbs[1].label, "c2pa.thumbnail.ingredient.png")
+        XCTAssertEqual(thumbs[1].data, ingredientBytes)
+        XCTAssertEqual(thumbs[1].format, "png")
+    }
+
+    func testExtractC2PAThumbnailsEmptyWhenNoC2PA() {
+        let metadata = ImageMetadata(container: .jpeg(JPEGFile(segments: [])), format: .jpeg)
+        XCTAssertTrue(metadata.extractC2PAThumbnails().isEmpty)
+    }
+
+    /// Thumbnail assertions with no `bidb` payload (empty Data) should be filtered out — the
+    /// label exists but there's no actual image to extract. The accessor must skip these.
+    func testExtractC2PAThumbnailsSkipsEmptyBidb() throws {
+        // Build an assertion with a c2pa.thumbnail.* label but NO bidb content box.
+        // The reader emits .thumbnail(Data(), format:...) for that case; the accessor must skip it.
+        var assertionPayload = Data()
+        let jumd = buildJUMDPayload(prefix: "c2as", label: "c2pa.thumbnail.claim.jpeg")
+        appendBox(to: &assertionPayload, type: "jumd", data: jumd)
+        // Note: no bidb box here.
+        var assertionBox = Data()
+        appendBox(to: &assertionBox, type: "jumb", data: assertionPayload)
+
+        let claim = buildClaim(generator: "test")
+        let manifest = buildManifest(label: "urn:c2pa:empty-thumb", claimCBOR: claim,
+                                     assertionBoxes: [assertionBox])
+        let jumbfData = wrapInManifestStore(manifest)
+
+        let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+        let metadata = ImageMetadata(container: .jpeg(JPEGFile(segments: [])),
+                                     format: .jpeg, c2pa: c2pa)
+        XCTAssertTrue(metadata.extractC2PAThumbnails().isEmpty,
+                      "Empty-bytes thumbnails should not be returned")
+    }
+
+    /// A manifest whose only assertions are non-thumbnail (actions, hash, ingredient) should
+    /// produce an empty result without errors.
+    func testExtractC2PAThumbnailsSkipsNonThumbnailAssertions() throws {
+        let jumbfData = buildManifestStoreWithActions()
+        let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+        let metadata = ImageMetadata(container: .jpeg(JPEGFile(segments: [])),
+                                     format: .jpeg, c2pa: c2pa)
+        XCTAssertTrue(metadata.extractC2PAThumbnails().isEmpty)
+    }
+
     func testParseIngredientAssertion() throws {
         let jumbfData = buildManifestStoreWithIngredient()
         let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
@@ -440,6 +525,23 @@ final class C2PAReaderTests: XCTestCase {
         let assertionBox = buildAssertionBox(label: "c2pa.hash.data", cbor: hashCBOR)
         let claim = buildClaim(generator: "test")
         let manifest = buildManifest(label: "urn:c2pa:hash", claimCBOR: claim, assertionBoxes: [assertionBox])
+        return wrapInManifestStore(manifest)
+    }
+
+    private func buildThumbnailAssertionBox(label: String, bytes: Data) -> Data {
+        var assertionPayload = Data()
+        let jumd = buildJUMDPayload(prefix: "c2as", label: label)
+        appendBox(to: &assertionPayload, type: "jumd", data: jumd)
+        appendBox(to: &assertionPayload, type: "bidb", data: bytes)
+        var box = Data()
+        appendBox(to: &box, type: "jumb", data: assertionPayload)
+        return box
+    }
+
+    private func buildManifestStoreWithThumbnail(label: String, bytes: Data) -> Data {
+        let assertion = buildThumbnailAssertionBox(label: label, bytes: bytes)
+        let claim = buildClaim(generator: "test")
+        let manifest = buildManifest(label: "urn:c2pa:thumb", claimCBOR: claim, assertionBoxes: [assertion])
         return wrapInManifestStore(manifest)
     }
 

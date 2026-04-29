@@ -29,13 +29,7 @@ public struct XMPWriter: Sendable {
             usedNamespaces.insert(parts.namespace)
 
             // Scan nested structure field keys for additional namespaces in the same pass.
-            switch value {
-            case .structure(let fields):
-                collectNamespaces(from: fields.keys, into: &usedNamespaces)
-            case .structuredArray(let items):
-                for item in items { collectNamespaces(from: item.keys, into: &usedNamespaces) }
-            default: break
-            }
+            collectNamespacesRecursive(value, into: &usedNamespaces)
 
             return ResolvedProp(prefix: parts.prefix, localName: parts.localName, value: value)
         }
@@ -81,26 +75,14 @@ public struct XMPWriter: Sendable {
 
             case .structure(let fields):
                 complexProps += "\n  <\(prefix):\(localName)>"
-                complexProps += "\n   <rdf:Description"
-                for (fieldKey, fieldValue) in fields.sorted(by: { $0.key < $1.key }) {
-                    if let parts = resolveKey(fieldKey) {
-                        complexProps += " \(parts.prefix):\(parts.localName)=\"\(escapeXML(fieldValue))\""
-                    }
-                }
-                complexProps += "/>"
+                complexProps += emitStructureBody(fields, indent: "   ")
                 complexProps += "\n  </\(prefix):\(localName)>"
 
             case .structuredArray(let items):
                 complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>"
                 for item in items {
                     complexProps += "\n    <rdf:li>"
-                    complexProps += "\n     <rdf:Description"
-                    for (fieldKey, fieldValue) in item.sorted(by: { $0.key < $1.key }) {
-                        if let parts = resolveKey(fieldKey) {
-                            complexProps += " \(parts.prefix):\(parts.localName)=\"\(escapeXML(fieldValue))\""
-                        }
-                    }
-                    complexProps += "/>"
+                    complexProps += emitStructureBody(item, indent: "     ")
                     complexProps += "\n    </rdf:li>"
                 }
                 complexProps += "\n   </rdf:Bag>\n  </\(prefix):\(localName)>"
@@ -216,6 +198,87 @@ public struct XMPWriter: Sendable {
                 break
             }
         }
+    }
+
+    /// Recursively collect namespaces referenced by an XMPValue's nested fields.
+    private static func collectNamespacesRecursive(_ value: XMPValue, into set: inout Set<String>) {
+        switch value {
+        case .structure(let fields):
+            collectNamespaces(from: fields.keys, into: &set)
+            for (_, child) in fields { collectNamespacesRecursive(child, into: &set) }
+        case .structuredArray(let items):
+            for item in items {
+                collectNamespaces(from: item.keys, into: &set)
+                for (_, child) in item { collectNamespacesRecursive(child, into: &set) }
+            }
+        case .simple, .array, .langAlternative:
+            return
+        }
+    }
+
+    /// Serialize a struct's fields as an `<rdf:Description>` element. `.simple` fields are emitted
+    /// as XML attributes (compact form, preserving the existing on-disk shape for flat structures);
+    /// any non-simple field becomes a child element so nested arrays/structs round-trip.
+    private static func emitStructureBody(_ fields: [String: XMPValue], indent: String) -> String {
+        var attrs: [(prefix: String, localName: String, value: String)] = []
+        var children: [(prefix: String, localName: String, value: XMPValue)] = []
+
+        for (fieldKey, fieldValue) in fields.sorted(by: { $0.key < $1.key }) {
+            guard let parts = resolveKey(fieldKey) else { continue }
+            if case .simple(let s) = fieldValue {
+                attrs.append((parts.prefix, parts.localName, s))
+            } else {
+                children.append((parts.prefix, parts.localName, fieldValue))
+            }
+        }
+
+        var xml = "\n\(indent)<rdf:Description"
+        for attr in attrs {
+            xml += " \(attr.prefix):\(attr.localName)=\"\(escapeXML(attr.value))\""
+        }
+        if children.isEmpty {
+            xml += "/>"
+        } else {
+            xml += ">"
+            for child in children {
+                xml += emitFieldElement(prefix: child.prefix, localName: child.localName, value: child.value, indent: indent + " ")
+            }
+            xml += "\n\(indent)</rdf:Description>"
+        }
+        return xml
+    }
+
+    /// Serialize a single field as a child element of an enclosing `<rdf:Description>`.
+    private static func emitFieldElement(prefix: String, localName: String, value: XMPValue, indent: String) -> String {
+        var xml = "\n\(indent)<\(prefix):\(localName)>"
+        switch value {
+        case .simple(let s):
+            // Element form for what's normally an attribute — used when the writer is given a
+            // simple value mixed in among complex children. Round-trips back through the reader.
+            xml += escapeXML(s)
+        case .array(let items):
+            xml += "\n\(indent) <rdf:Bag>"
+            for item in items {
+                xml += "\n\(indent)  <rdf:li>\(escapeXML(item))</rdf:li>"
+            }
+            xml += "\n\(indent) </rdf:Bag>"
+        case .langAlternative(let s):
+            xml += "\n\(indent) <rdf:Alt>"
+            xml += "\n\(indent)  <rdf:li xml:lang=\"x-default\">\(escapeXML(s))</rdf:li>"
+            xml += "\n\(indent) </rdf:Alt>"
+        case .structure(let fields):
+            xml += emitStructureBody(fields, indent: indent + " ")
+        case .structuredArray(let items):
+            xml += "\n\(indent) <rdf:Bag>"
+            for item in items {
+                xml += "\n\(indent)  <rdf:li>"
+                xml += emitStructureBody(item, indent: indent + "   ")
+                xml += "\n\(indent)  </rdf:li>"
+            }
+            xml += "\n\(indent) </rdf:Bag>"
+        }
+        xml += "\n\(indent)</\(prefix):\(localName)>"
+        return xml
     }
 
     private static func escapeXML(_ string: String) -> String {

@@ -6,6 +6,45 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.4.0] — 2026-04-29
+
+### Added
+
+- **NRW, SRW, and generic `.raw` extension support** — `RawFormat` now lists
+  `nrw` (Nikon Coolpix), `srw` (Samsung), and `raw` alongside the existing
+  TIFF-based RAWs. `FormatDetector.detectFromExtension` routes them through
+  the shared `TIFFFileParser`, so they read **and** write the same metadata
+  surfaces (Exif, IPTC, XMP, ICC) as NEF / ARW / ORF / PEF. Extension lookup
+  in the CLI's `supportedImageExtensions` set is updated to match.
+- **`ImageMetadata.extractC2PAThumbnails()`** — convenience accessor that
+  walks every C2PA manifest, returns each `c2pa.thumbnail.claim.*` /
+  `c2pa.thumbnail.ingredient.*` assertion as a `C2PAThumbnail` (label, raw
+  Data bytes, format suffix). Mirrors the existing `extractThumbnail()`
+  pattern for EXIF IFD1 thumbnails. Bytes are already preserved by the JUMBF
+  parser; this just removes the pattern-match boilerplate at call sites.
+- **Recursive `XMPValue` for nested structured schemas** — Adobe Camera Raw's
+  `MaskGroupBasedCorrections` (rdf:Bag of corrections, each holding its own
+  rdf:Bag of mask sub-structs), face regions in `mwg-rs`, and other recursive
+  XMP shapes can now be expressed in the generic API instead of hand-rolled
+  parsers. Both writer and reader recurse.
+
+### Changed
+
+- **Breaking** — `XMPValue.structure` payload is now `[String: XMPValue]` (was
+  `[String: String]`), and `XMPValue.structuredArray` is `[[String: XMPValue]]`
+  (was `[[String: String]]`). Direct consumers that pattern-matched on these
+  cases must wrap field values as `.simple(...)` when constructing them, and
+  unwrap when reading. The accessor return types `structureValue(...)` and
+  `structuredArrayValue(...)` changed accordingly.
+
+  Two new convenience accessors smooth the migration: `flatStructureValue`
+  and `flatStructuredArrayValue` return the legacy `[String: String]` shape
+  by dropping any non-`.simple` entries — useful for IPTC / xmpDM timecode /
+  stRef schemas that only carry flat strings. `XMPData.flatten` and
+  `XMPData.wrapSimple` round-trip between the two forms.
+- **Build script drops macOS Intel** — `Scripts/build-release.sh` now ships
+  macOS arm64 + Linux x86_64-musl + Linux aarch64-musl only.
+
 ## [1.3.1] — 2026-04-24
 
 ### Added
@@ -164,5 +203,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
+[1.4.0]: https://github.com/aagedal/SwiftExif/compare/1.3.1...1.4.0
+[1.3.1]: https://github.com/aagedal/SwiftExif/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/aagedal/SwiftExif/compare/1.2.0...1.3.0
 [1.2.0]: https://github.com/aagedal/SwiftExif/compare/1.1.0...1.2.0

@@ -60,6 +60,54 @@ final class RAWFileParserTests: XCTestCase {
         XCTAssertEqual(exif?.make, "Sony")
     }
 
+    func testNRWParsesAsTIFF() throws {
+        let tiffData = TestFixtures.tiffWithExif(make: "NIKON", model: "COOLPIX P7700")
+        let tiff = try RAWFileParser.parse(tiffData, format: .nrw)
+
+        let exif = try TIFFFileParser.extractExif(from: tiff, data: tiffData)
+        XCTAssertEqual(exif?.make, "NIKON")
+    }
+
+    func testSRWParsesAsTIFF() throws {
+        let tiffData = TestFixtures.tiffWithExif(make: "SAMSUNG", model: "NX1")
+        let tiff = try RAWFileParser.parse(tiffData, format: .srw)
+
+        let exif = try TIFFFileParser.extractExif(from: tiff, data: tiffData)
+        XCTAssertEqual(exif?.make, "SAMSUNG")
+    }
+
+    func testGenericRAWParsesAsTIFF() throws {
+        let tiffData = TestFixtures.tiffWithExif(make: "Generic", model: "Unknown")
+        let tiff = try RAWFileParser.parse(tiffData, format: .raw)
+
+        let exif = try TIFFFileParser.extractExif(from: tiff, data: tiffData)
+        XCTAssertEqual(exif?.make, "Generic")
+    }
+
+    func testReadMetadataFromNRW() throws {
+        let tiffData = TestFixtures.tiffWithExif(make: "NIKON", model: "COOLPIX P7700")
+        let metadata = try ImageMetadata.read(from: tiffData, format: .raw(.nrw))
+
+        XCTAssertEqual(metadata.format, .raw(.nrw))
+        XCTAssertEqual(metadata.exif?.make, "NIKON")
+    }
+
+    /// Verify NRW supports the full read+write cycle. The TIFF container path is shared
+    /// with NEF/ARW; this test guards against accidentally introducing a write-side regression
+    /// (e.g. a stray switch that doesn't list the new RawFormat cases).
+    func testNRWReadModifyWriteRoundTrip() throws {
+        let tiffData = TestFixtures.tiffWithExif(make: "NIKON", model: "COOLPIX P7700")
+        var metadata = try ImageMetadata.read(from: tiffData, format: .raw(.nrw))
+
+        // Modify a piece of metadata that survives a TIFF round-trip.
+        metadata.iptc.byline = "Photographer Name"
+
+        let written = try metadata.writeToData()
+        let reparsed = try ImageMetadata.read(from: written, format: .raw(.nrw))
+        XCTAssertEqual(reparsed.iptc.byline, "Photographer Name")
+        XCTAssertEqual(reparsed.exif?.make, "NIKON")
+    }
+
     func testDetectNonRAW() {
         let tiffData = TestFixtures.minimalTIFF()
         XCTAssertNil(RAWFileParser.detectRAWFormat(tiffData))

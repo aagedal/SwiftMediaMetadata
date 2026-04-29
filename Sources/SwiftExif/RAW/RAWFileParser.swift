@@ -66,8 +66,10 @@ public struct RAWFileParser: Sendable {
                 }
             }
             return tiff
-        case .dng, .nef, .arw, .orf, .pef:
-            // These all parse identically to TIFF
+        case .dng, .nef, .nrw, .arw, .orf, .pef, .srw, .raw:
+            // These all parse identically to TIFF.
+            // NRW (Nikon Coolpix) and SRW (Samsung) are TIFF/IFD-based variants.
+            // The generic `.raw` case is a best-effort TIFF parse for vendor-neutral extensions.
             return try TIFFFileParser.parse(data)
         }
     }
