@@ -6,6 +6,55 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.5.0] — 2026-04-30
+
+### Added
+
+- **MPEG-TS bitstream decoding** — `MPEGReader` now decodes inline H.264 and
+  HEVC SPS NAL units, AAC ADTS frame headers, and PCR timestamps directly from
+  Transport Stream packets, surfacing pixel format, profile/level, framerate,
+  sample rate, channel layout, and timing on `.ts` / `.m2ts` files without
+  ffprobe. New `MPEGBitstream.swift` houses the bit-readers (Exp-Golomb,
+  NAL emulation-prevention unescaping, ADTS frame parsing). Real-world HEVC
+  SPS fixture added under `Tests/SwiftExifTests/Video/MPEGReaderTests.swift`.
+
+- **SMPTE ST 377-4 MCA audio labels for MXF** — multichannel audio labeling
+  per SMPTE ST 377-4 is now decoded out of MXF audio descriptors. New
+  `MCAAudioLabeling`, `MCALabelsRenderer`, and `MXFMCAReader` types in
+  `Sources/SwiftExif/Video/`, surfaced through `VideoStream` /
+  `VideoMetadata` and the JSON exporter. New CLI subcommand
+  `swift-exif mxf-labels` emits a bmx-compatible `labels.txt` round-trip
+  for production audio workflows. Covered by
+  [Tests/SwiftExifTests/Video/MXFMCALabelsTests.swift](Tests/SwiftExifTests/Video/MXFMCALabelsTests.swift)
+  and the broader `MXFReaderTests` bundle.
+
+- **Apple ecosystem support (Phase 18)** — full delivery of the Apple stack:
+  - `AppleMakerNote.swift` — parse iPhone MakerNote tags (lens model,
+    ContentIdentifier, image stabilization, HDR mode, etc.).
+  - `AAESidecar.swift` — read Apple `.aae` adjustment-sidecar XML produced
+    by Photos.app edits.
+  - `HEIFAuxiliaryImages.swift` — extract HEIF auxiliary images (depth maps,
+    alpha mattes, HDR gain maps) via the shared ISOBMFF / iloc plumbing.
+  - Live Photo `ContentIdentifier` surfaced from `MP4Parser` so still+motion
+    pairs can be re-linked after copy/round-trip.
+
+- **Pentax, Leica, and Sigma MakerNote parsers** — three additional vendor
+  MakerNote implementations under `Sources/SwiftExif/MakerNote/`, with
+  matching writer support in `MakerNoteWriter.swift` and round-trip
+  coverage in `MakerNoteReaderTests` / `MakerNoteWriterTests`.
+
+### Changed
+
+- *(none yet)*
+
+### Fixed
+
+- **GIF parser sub-block handling** — regression tests added covering the
+  earlier sub-block-overrun hardening (truncated extension blocks, malformed
+  image descriptors, unterminated sub-block chains). See
+  [Tests/SwiftExifTests/GIF/GIFParserTests.swift](Tests/SwiftExifTests/GIF/GIFParserTests.swift)
+  and `GIFWriterTests`.
+
 ## [1.4.0] — 2026-04-29
 
 ### Added
@@ -203,6 +252,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
+[1.5.0]: https://github.com/aagedal/SwiftExif/compare/1.4.0...1.5.0
 [1.4.0]: https://github.com/aagedal/SwiftExif/compare/1.3.1...1.4.0
 [1.3.1]: https://github.com/aagedal/SwiftExif/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/aagedal/SwiftExif/compare/1.2.0...1.3.0
