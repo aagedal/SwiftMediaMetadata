@@ -160,6 +160,22 @@ public struct MetadataExporter: Sendable {
             dict["ICCProfile:Size"] = Int(icc.profileSize)
         }
 
+        // MPF (Multi-Picture Format) — Live Photo aux frames, depth maps,
+        // multi-shot bursts, stereo pairs.
+        if let mpf = metadata.mpf {
+            if let v = mpf.version { dict["MPF:Version"] = v }
+            dict["MPF:NumberOfImages"] = mpf.numberOfImages
+            for (i, e) in mpf.entries.enumerated() {
+                let prefix = "MPF:Image\(i + 1)"
+                dict["\(prefix):Type"] = e.imageType
+                dict["\(prefix):Size"] = Int(e.imageSize)
+                dict["\(prefix):Offset"] = Int(e.imageOffset)
+                if e.isRepresentative { dict["\(prefix):Representative"] = true }
+                if e.isDependentParent { dict["\(prefix):DependentParent"] = true }
+                if e.isDependentChild { dict["\(prefix):DependentChild"] = true }
+            }
+        }
+
         return dict
     }
 

@@ -320,6 +320,109 @@ final class MP4ParserTests: XCTestCase {
         return writer.data
     }
 
+    // MARK: - tkhd Display-Matrix Rotation
+
+    func testIdentityMatrixYieldsNoRotation() throws {
+        let data = buildMP4WithRotatedTrack(rotation: 0, width: 1920, height: 1080)
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        XCTAssertNil(stream.rotation, "identity matrix must not emit a rotation side-data value")
+    }
+
+    func testPortraitPhoneVideoReportsMinus90() throws {
+        // 90° clockwise (the iPhone-portrait case).
+        let data = buildMP4WithRotatedTrack(rotation: -90, width: 1080, height: 1920)
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        XCTAssertEqual(stream.rotation, -90)
+    }
+
+    func testUpsideDownReports180() throws {
+        let data = buildMP4WithRotatedTrack(rotation: 180, width: 1920, height: 1080)
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        XCTAssertNotNil(stream.rotation)
+        XCTAssertEqual(abs(stream.rotation!), 180)
+    }
+
+    func testCounterClockwiseRotationReportsPositive90() throws {
+        // 90° counter-clockwise → ffprobe rotation = +90.
+        let data = buildMP4WithRotatedTrack(rotation: 90, width: 1080, height: 1920)
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        XCTAssertEqual(stream.rotation, 90)
+    }
+
+    /// Build an MP4 with a single video track whose tkhd carries a 3x3
+    /// transformation matrix encoding the requested rotation. Pass `0` for
+    /// the identity matrix (no rotation).
+    private func buildMP4WithRotatedTrack(rotation: Int, width: Int, height: Int) -> Data {
+        var writer = BinaryWriter(capacity: 512)
+        writeFtyp(&writer, brand: "isom")
+
+        var mvhdWriter = BinaryWriter(capacity: 128)
+        mvhdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhdWriter.writeBytes(Data(repeating: 0, count: 96))
+        let mvhdBox = buildBox("mvhd", data: mvhdWriter.data)
+
+        var tkhdWriter = BinaryWriter(capacity: 128)
+        tkhdWriter.writeBytes([0x00, 0x00, 0x00, 0x03])           // version 0 + flags
+        tkhdWriter.writeBytes(Data(repeating: 0, count: 36))       // creation through volume+reserved
+        tkhdWriter.writeBytes(tkhdMatrixBytes(rotation: rotation)) // matrix (36 bytes)
+        tkhdWriter.writeUInt32BigEndian(UInt32(width) << 16)
+        tkhdWriter.writeUInt32BigEndian(UInt32(height) << 16)
+        let tkhdBox = buildBox("tkhd", data: tkhdWriter.data)
+
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4))
+        hdlrWriter.writeString("vide", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12))
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        var stsdWriter = BinaryWriter(capacity: 32)
+        stsdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        stsdWriter.writeUInt32BigEndian(1)
+        stsdWriter.writeUInt32BigEndian(16)
+        stsdWriter.writeString("avc1", encoding: .ascii)
+        stsdWriter.writeBytes(Data(repeating: 0, count: 4))
+        let stsdBox = buildBox("stsd", data: stsdWriter.data)
+
+        let stblBox = buildBox("stbl", data: stsdBox)
+        let minfBox = buildBox("minf", data: stblBox)
+        let mdiaBox = buildBox("mdia", data: hdlrBox + minfBox)
+        let trakBox = buildBox("trak", data: tkhdBox + mdiaBox)
+
+        let moovBox = buildBox("moov", data: mvhdBox + trakBox)
+        writer.writeBytes(moovBox)
+        return writer.data
+    }
+
+    /// Encode the 9 fixed-point ints of a tkhd display matrix for the
+    /// requested rotation. Values follow QuickTime convention: the upper-left
+    /// 2x2 (a, b, c, d) is 16.16 fixed-point; the perspective term `w` is
+    /// 2.30 fixed-point (1.0 = 0x40000000).
+    private func tkhdMatrixBytes(rotation: Int) -> Data {
+        var w = BinaryWriter(capacity: 36)
+        let one: UInt32 = 0x00010000      // +1.0 in 16.16
+        let neg: UInt32 = 0xFFFF0000      // -1.0 in 16.16
+        let zero: UInt32 = 0
+        let perspective: UInt32 = 0x40000000  // +1.0 in 2.30
+
+        let a, b, c, d: UInt32
+        switch rotation {
+        case 90:        a = zero; b = neg;  c = one;  d = zero
+        case -90:       a = zero; b = one;  c = neg;  d = zero
+        case 180, -180: a = neg;  b = zero; c = zero; d = neg
+        default:        a = one;  b = zero; c = zero; d = one  // identity
+        }
+
+        w.writeUInt32BigEndian(a);  w.writeUInt32BigEndian(b);  w.writeUInt32BigEndian(zero)  // u
+        w.writeUInt32BigEndian(c);  w.writeUInt32BigEndian(d);  w.writeUInt32BigEndian(zero)  // v
+        w.writeUInt32BigEndian(zero); w.writeUInt32BigEndian(zero); w.writeUInt32BigEndian(perspective)
+        return w.data
+    }
+
     /// Build an MP4 with QuickTime metadata (ilst items).
     func testParseLivePhotoContentIdentifier() throws {
         let uuid = "B12C123E-4567-89AB-CDEF-012345678901"

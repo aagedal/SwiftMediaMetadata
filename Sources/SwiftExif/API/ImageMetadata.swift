@@ -9,11 +9,15 @@ public struct ImageMetadata: Sendable {
     public var xmp: XMPData?
     public var c2pa: C2PAData?
     public var iccProfile: ICCProfile?
+    /// JPEG Multi-Picture Format (CIPA DC-007) index. Present when an APP2
+    /// segment carries the MPF block — typical for Apple Live Photo aux
+    /// images, Sony multi-shot bursts, and stereo / 3D JPEG pairs.
+    public var mpf: MPFData?
 
     /// Non-fatal issues encountered during parsing (e.g. corrupted C2PA data).
     public var warnings: [String]
 
-    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, iccProfile: ICCProfile? = nil, warnings: [String] = []) {
+    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, iccProfile: ICCProfile? = nil, mpf: MPFData? = nil, warnings: [String] = []) {
         self.container = container
         self.format = format
         self.iptc = iptc
@@ -21,6 +25,7 @@ public struct ImageMetadata: Sendable {
         self.xmp = xmp
         self.c2pa = c2pa
         self.iccProfile = iccProfile
+        self.mpf = mpf
         self.warnings = warnings
     }
 
@@ -1262,7 +1267,14 @@ public struct ImageMetadata: Sendable {
             warnings.append("C2PA parsing failed: \(error)")
         }
 
-        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
+        // MPF (CIPA DC-007) from an APP2 segment when the payload starts
+        // with "MPF\0". Carries Live Photo aux frames, depth maps, etc.
+        var mpf: MPFData?
+        if let mpfSegment = jpegFile.mpfSegment() {
+            mpf = MPFParser.parse(mpfSegment.data)
+        }
+
+        return ImageMetadata(container: .jpeg(jpegFile), format: .jpeg, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, mpf: mpf, warnings: warnings)
     }
 
     private static func readTIFF(from data: Data, format: ImageFormat) throws -> ImageMetadata {

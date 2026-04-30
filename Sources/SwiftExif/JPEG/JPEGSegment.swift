@@ -48,6 +48,9 @@ extension JPEGSegment {
     /// The Photoshop identifier at the start of an IPTC APP13 segment.
     public static let photoshopIdentifier = "Photoshop 3.0\0".data(using: .ascii)!
 
+    /// The MPF identifier at the start of an MPF APP2 segment ("MPF\0").
+    public static let mpfIdentifier = MPFParser.mpfIdentifier
+
     /// Whether this is an Exif APP1 segment.
     public var isExif: Bool {
         rawMarker == JPEGMarker.app1.rawValue && data.starts(with: JPEGSegment.exifIdentifier)
@@ -66,5 +69,10 @@ extension JPEGSegment {
     /// Whether this is a Photoshop/IPTC APP13 segment.
     public var isPhotoshop: Bool {
         rawMarker == JPEGMarker.app13.rawValue && data.starts(with: JPEGSegment.photoshopIdentifier)
+    }
+
+    /// Whether this is an MPF (Multi-Picture Format) APP2 segment.
+    public var isMPF: Bool {
+        rawMarker == JPEGMarker.app2.rawValue && data.starts(with: JPEGSegment.mpfIdentifier)
     }
 }

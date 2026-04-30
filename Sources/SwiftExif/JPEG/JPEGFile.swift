@@ -41,6 +41,12 @@ public struct JPEGFile: Sendable {
         segments.filter { $0.isICCProfile }
     }
 
+    /// Find the MPF (Multi-Picture Format) APP2 segment, if present.
+    /// MPF carries Apple Live Photo aux frames, Sony multi-shot, and stereo JPEGs.
+    public func mpfSegment() -> JPEGSegment? {
+        segments.first { $0.isMPF }
+    }
+
     /// Find the Photoshop/IPTC APP13 segment.
     public func iptcSegment() -> JPEGSegment? {
         segments.first { $0.isPhotoshop }

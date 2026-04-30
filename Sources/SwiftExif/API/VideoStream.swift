@@ -156,6 +156,11 @@ public struct VideoStream: Sendable, Equatable {
     public var timecode: String?
     /// Optional human-readable track title / label set by the muxer.
     public var title: String?
+    /// Display rotation in degrees, derived from the MP4/MOV `tkhd` 3x3
+    /// transformation matrix. Matches ffprobe's `side_data_list[].rotation`
+    /// (negative = clockwise). `-90` is the typical iPhone-portrait value.
+    /// Nil when the matrix is identity or the container has no display matrix.
+    public var rotation: Int?
 
     public init(index: Int) {
         self.index = index
@@ -212,6 +217,7 @@ public struct VideoStream: Sendable, Equatable {
             && lhs.isForced == rhs.isForced
             && lhs.timecode == rhs.timecode
             && lhs.title == rhs.title
+            && lhs.rotation == rhs.rotation
     }
 }
 

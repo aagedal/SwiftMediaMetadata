@@ -185,6 +185,7 @@ struct ReadCommand: ParsableCommand {
             d["IsForced"]         = String(stream.isForced ?? false)
             if let v = stream.timecode       { d["Timecode"]         = v }
             if let v = stream.title          { d["Title"]            = v }
+            if let v = stream.rotation       { d["Rotation"]         = String(v) }
             if let c = stream.colorInfo {
                 if let p = c.primaries { d["ColorPrimaries"] = String(p) }
                 if let t = c.transfer  { d["TransferCharacteristics"] = String(t) }

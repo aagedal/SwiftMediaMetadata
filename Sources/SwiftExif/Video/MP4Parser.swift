@@ -433,12 +433,14 @@ public struct MP4Parser: Sendable {
         var trackWidth: Int?
         var trackHeight: Int?
         var tkhdIsDefault: Bool?
+        var tkhdRotation: Int?
         if let tkhd = children.first(where: { $0.type == "tkhd" }) {
             if let dims = parseTKHDDimensions(tkhd.data) {
                 trackWidth = dims.width
                 trackHeight = dims.height
             }
             tkhdIsDefault = parseTKHDIsDefault(tkhd.data)
+            tkhdRotation = parseTKHDRotation(tkhd.data)
         }
         // parseTKHDTrackID walks the trak looking for tkhd itself — cheap
         // enough; we already parsed the children but the function is shared
@@ -576,6 +578,7 @@ public struct MP4Parser: Sendable {
             stream.avgFrameRate = fps
             stream.rFrameRate = rFrameRate ?? fps
             stream.isDefault = tkhdIsDefault
+            stream.rotation = tkhdRotation
             parseVisualSampleEntry(stsdBox.data, into: &stream)
             // ffprobe always computes per-stream bit_rate from actual packet
             // sizes in the edit-list window (not from the encoder-declared
@@ -951,6 +954,45 @@ public struct MP4Parser: Sendable {
               let heightFP = try? reader.readUInt32BigEndian() else { return nil }
 
         return (Int(widthFP >> 16), Int(heightFP >> 16))
+    }
+
+    /// Decode the display rotation from the `tkhd` 3x3 transformation matrix
+    /// (ISO/IEC 14496-12 §8.3.2). The matrix is stored in 16.16 fixed-point
+    /// for the upper-left 2x2 (a, b, c, d) and 2.30 fixed-point for the
+    /// translation/perspective row, but only `a` and `b` are needed to
+    /// recover the rotation angle: `θ = -atan2(b, a)`.
+    ///
+    /// Matches ffprobe's `side_data_list[].rotation` convention:
+    /// - identity → returns nil (no side data emitted)
+    /// - portrait phone video (recorded sideways) → -90
+    /// - upside-down → -180 (or equivalently 180)
+    /// - 90° CCW → 90
+    ///
+    /// Matrix offset depends on the FullBox version: 40 bytes from the start
+    /// for v0 (32-bit times), 52 bytes for v1 (64-bit times).
+    private static func parseTKHDRotation(_ data: Data) -> Int? {
+        guard data.count >= 4 else { return nil }
+        let s = data.startIndex
+        let version = data[s]
+        let matrixOffset = (version == 1) ? 52 : 40
+        guard data.count >= matrixOffset + 8 else { return nil }
+
+        func readSignedFixed(_ relOffset: Int) -> Double {
+            let p = s + matrixOffset + relOffset
+            let raw = (UInt32(data[p]) << 24)
+                | (UInt32(data[p + 1]) << 16)
+                | (UInt32(data[p + 2]) << 8)
+                | UInt32(data[p + 3])
+            return Double(Int32(bitPattern: raw)) / 65536.0
+        }
+
+        let a = readSignedFixed(0)
+        let b = readSignedFixed(4)
+        if a == 0 && b == 0 { return nil }
+
+        let degrees = -atan2(b, a) * 180.0 / .pi
+        let rounded = Int(degrees.rounded())
+        return rounded == 0 ? nil : rounded
     }
 
     /// tkhd `track_ID` (UInt32). Layout:
