@@ -367,6 +367,26 @@ public struct FormatDetector: Sendable {
             }
         }
 
+        // WAV: "RIFF" + 4-byte size + "WAVE" — disambiguate against AVI
+        // (which carries the same RIFF prefix but a different form id).
+        if data.count >= 12 {
+            let b = [UInt8](data.prefix(12))
+            if b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 {
+                if b[8] == 0x57 && b[9] == 0x41 && b[10] == 0x56 && b[11] == 0x45 {
+                    return .wav
+                }
+            }
+        }
+
+        // AIFF / AIFC: "FORM" + 4-byte size + ("AIFF" | "AIFC")
+        if data.count >= 12 {
+            let b = [UInt8](data.prefix(12))
+            if b[0] == 0x46 && b[1] == 0x4F && b[2] == 0x52 && b[3] == 0x4D {
+                let form = String(bytes: b[8..<12], encoding: .ascii)
+                if form == "AIFF" || form == "AIFC" { return .aiff }
+            }
+        }
+
         return nil
     }
 
@@ -378,6 +398,8 @@ public struct FormatDetector: Sendable {
         case "m4a": return .m4a
         case "opus": return .opus
         case "ogg", "oga": return .oggVorbis
+        case "wav", "wave", "bwf": return .wav
+        case "aiff", "aif", "aifc": return .aiff
         default: return nil
         }
     }

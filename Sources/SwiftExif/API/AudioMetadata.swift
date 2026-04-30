@@ -26,6 +26,10 @@ public struct AudioMetadata: Sendable {
     public var albumArtist: String?
     public var composer: String?
     public var coverArt: Data?
+    /// Broadcast Wave (`bext` + iXML) metadata when the source is a WAV /
+    /// BWF file. Nil for non-WAV inputs and for plain RIFF WAVs that omit
+    /// the BWF chunk.
+    public var bwf: BWFMetadata?
     public var warnings: [String]
 
     internal var originalData: Data?
@@ -90,6 +94,14 @@ public struct AudioMetadata: Sendable {
 
             m.originalData = data
             return m
+        case .wav:
+            var m = try WAVParser.parse(data)
+            m.originalData = data
+            return m
+        case .aiff:
+            var m = try AIFFParser.parse(data)
+            m.originalData = data
+            return m
         }
     }
 
@@ -113,6 +125,10 @@ public struct AudioMetadata: Sendable {
             return try MP4Writer.write(vm, to: original)
         case .opus, .oggVorbis:
             throw MetadataError.writeNotSupported("Writing Ogg \(format == .opus ? "Opus" : "Vorbis") files is not supported")
+        case .wav:
+            throw MetadataError.writeNotSupported("Writing WAV / BWF files is not yet supported")
+        case .aiff:
+            throw MetadataError.writeNotSupported("Writing AIFF files is not yet supported")
         }
     }
 

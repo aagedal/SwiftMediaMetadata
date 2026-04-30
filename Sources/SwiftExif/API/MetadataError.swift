@@ -42,6 +42,8 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
     case invalidMP3(String)
     case invalidFLAC(String)
     case invalidAAE(String)
+    case invalidWAV(String)
+    case invalidAIFF(String)
 
     public var description: String {
         switch self {
@@ -127,6 +129,10 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid FLAC file: \(detail)"
         case .invalidAAE(let detail):
             return "Invalid AAE sidecar: \(detail)"
+        case .invalidWAV(let detail):
+            return "Invalid WAV / BWF file: \(detail)"
+        case .invalidAIFF(let detail):
+            return "Invalid AIFF file: \(detail)"
         }
     }
 }

@@ -90,6 +90,7 @@ final class FormatDetectorTests: XCTestCase {
         XCTAssertEqual(FormatDetector.detectAudioFromExtension("mp3"), .mp3)
         XCTAssertEqual(FormatDetector.detectAudioFromExtension("flac"), .flac)
         XCTAssertEqual(FormatDetector.detectAudioFromExtension("m4a"), .m4a)
-        XCTAssertNil(FormatDetector.detectAudioFromExtension("wav"))
+        XCTAssertEqual(FormatDetector.detectAudioFromExtension("wav"), .wav)
+        XCTAssertEqual(FormatDetector.detectAudioFromExtension("aiff"), .aiff)
     }
 }
