@@ -218,6 +218,49 @@ final class CBORDecoderTests: XCTestCase {
         XCTAssertThrowsError(try CBORDecoder.decode(from: data))
     }
 
+    func testDecodeDeeplyNestedArraysThrows() {
+        // (maxDepth + 50) layers of array(1) — 0x81 wraps the next byte as the sole element.
+        // Without the depth cap, this descends recursively until the stack overflows.
+        let layers = CBORDecoder.maxDepth + 50
+        var data = Data(repeating: 0x81, count: layers)
+        data.append(0x00) // innermost: unsigned int 0
+        XCTAssertThrowsError(try CBORDecoder.decode(from: data)) { error in
+            guard case MetadataError.invalidCBOR = error else {
+                XCTFail("Expected invalidCBOR, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testDecodeDeeplyNestedMapsThrows() {
+        // map(1) {0: <next>} repeated. Each 0xA1 0x00 is "{integer 0: <value>}".
+        let layers = CBORDecoder.maxDepth + 50
+        var data = Data()
+        for _ in 0..<layers {
+            data.append(contentsOf: [0xA1, 0x00])
+        }
+        data.append(0x00) // innermost value
+        XCTAssertThrowsError(try CBORDecoder.decode(from: data)) { error in
+            guard case MetadataError.invalidCBOR = error else {
+                XCTFail("Expected invalidCBOR, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testDecodeDeeplyNestedTagsThrows() {
+        // 0xC0 = tag(0) wrapping the next value. Repeated layers force tag-recursion.
+        let layers = CBORDecoder.maxDepth + 50
+        var data = Data(repeating: 0xC0, count: layers)
+        data.append(0x00) // innermost: unsigned int 0
+        XCTAssertThrowsError(try CBORDecoder.decode(from: data)) { error in
+            guard case MetadataError.invalidCBOR = error else {
+                XCTFail("Expected invalidCBOR, got \(error)")
+                return
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private func cborTextString(_ string: String) -> [UInt8] {

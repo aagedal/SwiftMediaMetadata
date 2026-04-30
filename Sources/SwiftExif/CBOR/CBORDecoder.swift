@@ -3,15 +3,23 @@ import Foundation
 /// Decodes CBOR (RFC 8949) binary data into CBORValue.
 public struct CBORDecoder: Sendable {
 
+    /// Maximum nesting depth for arrays, maps, and tags. C2PA manifests in
+    /// the wild stay well under 10 — the cap exists to stop a crafted
+    /// payload from exhausting the stack.
+    static let maxDepth = 100
+
     /// Decode a single CBOR value from the given data.
     public static func decode(from data: Data) throws -> CBORValue {
         var reader = BinaryReader(data: data)
-        return try decodeValue(from: &reader)
+        return try decodeValue(from: &reader, depth: 0)
     }
 
     // MARK: - Internal
 
-    static func decodeValue(from reader: inout BinaryReader) throws -> CBORValue {
+    static func decodeValue(from reader: inout BinaryReader, depth: Int) throws -> CBORValue {
+        guard depth <= Self.maxDepth else {
+            throw MetadataError.invalidCBOR("Nesting depth exceeds limit (\(Self.maxDepth))")
+        }
         let initial = try reader.readUInt8()
         let majorType = initial >> 5
         let additionalInfo = initial & 0x1F
@@ -32,7 +40,7 @@ public struct CBORDecoder: Sendable {
         case 2: // Byte string
             if additionalInfo == 31 {
                 // Indefinite-length byte string
-                return .byteString(try decodeIndefiniteBytes(from: &reader))
+                return .byteString(try decodeIndefiniteBytes(from: &reader, depth: depth + 1))
             }
             let length = try decodeLength(additionalInfo, from: &reader)
             // Bound the UInt64 length by remaining data before converting to Int —
@@ -46,7 +54,7 @@ public struct CBORDecoder: Sendable {
         case 3: // Text string
             if additionalInfo == 31 {
                 // Indefinite-length text string
-                let data = try decodeIndefiniteBytes(from: &reader)
+                let data = try decodeIndefiniteBytes(from: &reader, depth: depth + 1)
                 guard let string = String(data: data, encoding: .utf8) else {
                     throw MetadataError.invalidCBOR("Invalid UTF-8 in text string")
                 }
@@ -71,7 +79,7 @@ public struct CBORDecoder: Sendable {
                         _ = try reader.readUInt8() // consume break
                         break
                     }
-                    items.append(try decodeValue(from: &reader))
+                    items.append(try decodeValue(from: &reader, depth: depth + 1))
                 }
                 return .array(items)
             }
@@ -82,7 +90,7 @@ public struct CBORDecoder: Sendable {
             var items: [CBORValue] = []
             items.reserveCapacity(min(Int(count), 1024))
             for _ in 0..<count {
-                items.append(try decodeValue(from: &reader))
+                items.append(try decodeValue(from: &reader, depth: depth + 1))
             }
             return .array(items)
 
@@ -95,8 +103,8 @@ public struct CBORDecoder: Sendable {
                         _ = try reader.readUInt8() // consume break
                         break
                     }
-                    let key = try decodeValue(from: &reader)
-                    let value = try decodeValue(from: &reader)
+                    let key = try decodeValue(from: &reader, depth: depth + 1)
+                    let value = try decodeValue(from: &reader, depth: depth + 1)
                     entries.append(CBORMapEntry(key: key, value: value))
                 }
                 return .map(entries)
@@ -108,15 +116,15 @@ public struct CBORDecoder: Sendable {
             var entries: [CBORMapEntry] = []
             entries.reserveCapacity(min(Int(count), 1024))
             for _ in 0..<count {
-                let key = try decodeValue(from: &reader)
-                let value = try decodeValue(from: &reader)
+                let key = try decodeValue(from: &reader, depth: depth + 1)
+                let value = try decodeValue(from: &reader, depth: depth + 1)
                 entries.append(CBORMapEntry(key: key, value: value))
             }
             return .map(entries)
 
         case 6: // Semantic tag
             let tag = try decodeLength(additionalInfo, from: &reader)
-            let content = try decodeValue(from: &reader)
+            let content = try decodeValue(from: &reader, depth: depth + 1)
             return .tagged(tag, content)
 
         case 7: // Simple values and floats
@@ -179,14 +187,14 @@ public struct CBORDecoder: Sendable {
     }
 
     /// Decode an indefinite-length byte/text string (concatenate chunks until break).
-    private static func decodeIndefiniteBytes(from reader: inout BinaryReader) throws -> Data {
+    private static func decodeIndefiniteBytes(from reader: inout BinaryReader, depth: Int) throws -> Data {
         var result = Data()
         while true {
             if try reader.peek() == 0xFF {
                 _ = try reader.readUInt8() // consume break
                 break
             }
-            let chunk = try decodeValue(from: &reader)
+            let chunk = try decodeValue(from: &reader, depth: depth)
             guard let bytes = chunk.byteStringValue else {
                 throw MetadataError.invalidCBOR("Non-byte-string chunk in indefinite-length byte string")
             }

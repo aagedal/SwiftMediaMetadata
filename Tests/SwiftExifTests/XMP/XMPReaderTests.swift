@@ -97,4 +97,29 @@ final class XMPReaderTests: XCTestCase {
         let data = Data("Not XMP data".utf8)
         XCTAssertThrowsError(try XMPReader.read(from: data))
     }
+
+    /// Frame-stack depth cap: a packet with deeply nested struct fields should
+    /// abort cleanly with an `invalidXMP` error instead of unbounded growth or
+    /// stack overflow.
+    func testRejectsDeeplyNestedStructures() throws {
+        let ns = "http://ns.adobe.com/camera-raw-settings/1.0/"
+        let layers = XMPReader.maxFrameDepth + 20
+
+        // Build {Field0: {Field1: {Field2: ... {FieldN: "leaf"}}}} programmatically.
+        var current: XMPValue = .simple("leaf")
+        for i in (0..<layers).reversed() {
+            current = .structure(["\(ns)Field\(i)": current])
+        }
+
+        var xmp = XMPData()
+        xmp.setValue(current, namespace: ns, property: "Top")
+
+        let xml = XMPWriter.generateXML(xmp)
+        XCTAssertThrowsError(try XMPReader.readFromXML(Data(xml.utf8))) { error in
+            guard case MetadataError.invalidXMP = error else {
+                XCTFail("Expected invalidXMP, got \(error)")
+                return
+            }
+        }
+    }
 }

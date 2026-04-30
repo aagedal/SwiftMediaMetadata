@@ -109,6 +109,56 @@ final class JUMBFParserTests: XCTestCase {
         XCTAssertThrowsError(try JUMBFParser.parseSuperbox(from: payload))
     }
 
+    func testParseSuperboxThrowsBeyondMaxDepth() throws {
+        // Direct invocation of the depth-aware internal entry point with a starting depth
+        // already past the cap. Verifies the guard at the top of parseSuperbox(from:depth:).
+        var jumdPayload = Data()
+        appendBox(to: &jumdPayload, type: "jumd",
+                  data: buildJUMDPayload(prefix: "c2pa", label: "c2pa"))
+        let boxes = try ISOBMFFBoxReader.parseBoxes(from: jumdPayload)
+
+        XCTAssertThrowsError(
+            try JUMBFParser.parseSuperbox(from: boxes, depth: JUMBFParser.maxDepth + 1)
+        ) { error in
+            guard case MetadataError.invalidJUMBF = error else {
+                XCTFail("Expected invalidJUMBF, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testParseSuperboxTruncatesDeeplyNestedTree() throws {
+        // Build (maxDepth + 50) levels of nested jumb superboxes. The public API
+        // tolerates malformed/deep children (try? in the recursion), so this
+        // doesn't throw — but it must not stack-overflow either, and the resulting
+        // tree must be truncated at the cap.
+        let layers = JUMBFParser.maxDepth + 50
+
+        // Build innermost-first: each layer wraps the previous payload as a jumb child.
+        let innermostJumd = buildJUMDPayload(prefix: "c2pa", label: "c2pa")
+        var current = Data()
+        appendBox(to: &current, type: "jumd", data: innermostJumd)
+
+        for _ in 0..<layers {
+            var next = Data()
+            appendBox(to: &next, type: "jumd", data: innermostJumd)
+            appendBox(to: &next, type: "jumb", data: current)
+            current = next
+        }
+
+        let superbox = try JUMBFParser.parseSuperbox(from: current)
+
+        // Walk children, count actual depth — should be capped.
+        var depth = 0
+        var node = superbox
+        while let child = node.children.first {
+            depth += 1
+            node = child
+        }
+        XCTAssertLessThanOrEqual(depth, JUMBFParser.maxDepth,
+                                 "Tree depth \(depth) should be capped at maxDepth")
+    }
+
     // MARK: - APP11 Reassembly
 
     func testReassembleSingleAPP11Segment() throws {

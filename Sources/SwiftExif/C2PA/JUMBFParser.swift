@@ -31,6 +31,12 @@ public struct JUMBFDescription: Sendable {
 /// Parse JUMBF box hierarchies from raw ISOBMFF box data.
 public struct JUMBFParser: Sendable {
 
+    /// Maximum nesting depth for JUMBF superboxes. Real-world C2PA trees stay
+    /// under ~4 levels (manifest store → manifest → assertion store → assertion);
+    /// the cap stops a crafted file from exhausting the stack via deeply nested
+    /// `jumb` boxes.
+    static let maxDepth = 32
+
     /// C2PA UUID suffix (bytes 4-15): 0011-0010-8000-00AA00389B71
     static let c2paUUIDSuffix: [UInt8] = [
         0x00, 0x11, 0x00, 0x10, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71
@@ -62,6 +68,13 @@ public struct JUMBFParser: Sendable {
 
     /// Parse a JUMBF superbox from pre-parsed child boxes.
     public static func parseSuperbox(from boxes: [ISOBMFFBox]) throws -> JUMBFBox {
+        return try parseSuperbox(from: boxes, depth: 0)
+    }
+
+    static func parseSuperbox(from boxes: [ISOBMFFBox], depth: Int) throws -> JUMBFBox {
+        guard depth <= Self.maxDepth else {
+            throw MetadataError.invalidJUMBF("Nesting depth exceeds limit (\(Self.maxDepth))")
+        }
         guard let first = boxes.first, first.type == "jumd" else {
             throw MetadataError.invalidJUMBF("Missing jumd description box")
         }
@@ -72,7 +85,12 @@ public struct JUMBFParser: Sendable {
 
         for box in boxes.dropFirst() {
             if box.type == "jumb" {
-                if let child = try? parseSuperbox(from: box.data) {
+                // try? matches the original behaviour of tolerating malformed
+                // children (don't fail the whole image read for one corrupt
+                // assertion). The depth guard above still stops recursion at
+                // maxDepth even when this swallows the resulting throw.
+                if let childBoxes = try? ISOBMFFBoxReader.parseBoxes(from: box.data),
+                   let child = try? parseSuperbox(from: childBoxes, depth: depth + 1) {
                     children.append(child)
                 }
             } else {

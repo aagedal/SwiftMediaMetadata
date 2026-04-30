@@ -6,6 +6,12 @@ import FoundationXML
 /// Parse XMP XML from an APP1 segment or raw XML data.
 public struct XMPReader: Sendable {
 
+    /// Maximum frameStack depth for the SAX parser. Real-world XMP nests at most a
+    /// few levels; the cap stops a crafted packet from growing the stack
+    /// unboundedly via deeply nested `rdf:Bag`/`Seq`/`Alt`/`Description`
+    /// containers.
+    static let maxFrameDepth = 64
+
     /// Parse XMP data from APP1 segment payload (after XMP namespace identifier).
     public static func read(from data: Data) throws -> XMPData {
         // Skip the XMP identifier prefix
@@ -225,8 +231,8 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         // element supplies that field's value: push the outer frame, parse the inner container
         // fresh, and let the matching close-tag pop and assign.
         if shouldDescend(elementName: elementName) {
-            if descend(triggeringElement: elementName, attributes: attributeDict) {
-                return  // Description trigger fully handled in descend().
+            if descend(triggeringElement: elementName, attributes: attributeDict, parser: parser) {
+                return  // Description trigger fully handled in descend(), or depth cap hit.
             }
             // Bag/Seq/Alt: fall through so the existing element-start branches fire at the
             // inner frame's reset state.
@@ -577,10 +583,18 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     }
 
     /// Push the current frame and reset state to begin parsing a nested container fresh.
-    /// Returns true if the trigger element was fully handled (Description trigger), in which case
-    /// the caller should return from didStartElement immediately. False otherwise (Bag/Seq/Alt) —
-    /// the existing handlers run at the inner level after descend.
-    private func descend(triggeringElement: String, attributes: [String: String]) -> Bool {
+    /// Returns true if the trigger element was fully handled (Description trigger, or the
+    /// depth cap was hit and parsing was aborted), in which case the caller should return
+    /// from didStartElement immediately. False otherwise (Bag/Seq/Alt) — the existing
+    /// handlers run at the inner level after descend.
+    private func descend(triggeringElement: String, attributes: [String: String], parser: XMLParser) -> Bool {
+        guard frameStack.count < XMPReader.maxFrameDepth else {
+            parseError = MetadataError.invalidXMP(
+                "Frame stack depth exceeds limit (\(XMPReader.maxFrameDepth))"
+            )
+            parser.abortParsing()
+            return true
+        }
         let parentKey = "\(structureChildNamespace)\(structureChildElement)"
         frameStack.append(NestedFrame(
             triggeringElement: triggeringElement,
