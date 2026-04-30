@@ -309,6 +309,19 @@ public struct AudioStream: Sendable, Equatable {
     public var isDefault: Bool?
     /// Optional human-readable track title / label set by the muxer.
     public var title: String?
+    /// SMPTE ST 377-4 MCA Tag Symbol attached to this track via an
+    /// AudioChannelLabelSubDescriptor (e.g. "chL", "chR", "chM1"). Only MXF
+    /// files with bmxtools-style audio labelling populate this.
+    public var mcaChannelLabel: String?
+    /// SMPTE ST 377-4 MCA Tag Name (e.g. "Left", "Right", "Mono One").
+    public var mcaChannelName: String?
+    /// Soundfield-group symbol the channel belongs to (e.g. "sgST", "sgM").
+    public var mcaSoundfieldGroup: String?
+    /// Group-of-soundfield-groups symbol the channel rolls up to (e.g.
+    /// "ggMPg", "ggDcm", "ggME"). When the channel sits in more than one
+    /// group, the first one in declaration order wins; the full graph is
+    /// available in `VideoMetadata.mcaAudioLabeling`.
+    public var mcaGroupOfSoundfieldGroups: String?
 
     public init(index: Int) {
         self.index = index

@@ -54,6 +54,10 @@ struct ReadCommand: ParsableCommand {
         var imageNames: [String] = []
         var videoNames: [String] = []
         var audioNames: [String] = []
+        // Raw video clip-level blocks preserved with nested arrays/dicts (Timecodes,
+        // MCAAudioLabeling, …) for the JSON output path. Index-aligned with
+        // `videoDicts` so we can swap one for the other when emitting JSON.
+        var videoRawDicts: [[String: Any]] = []
         // `format` carries the video "clip-level" block — emitted via JSON
         // serialization, so the value type is `[String: Any]` to preserve
         // nested arrays (e.g. Timecodes: [{ value, source, frameRate }]).
@@ -73,6 +77,7 @@ struct ReadCommand: ParsableCommand {
                 // like Timecodes serialise as real JSON arrays.
                 let dict = rawDict.mapValues { String(describing: $0) }
                 videoDicts.append(dict)
+                videoRawDicts.append(rawDict)
                 videoNames.append(url.lastPathComponent)
                 if streams {
                     perStreamReports.append((url.lastPathComponent, rawDict, buildStreamDicts(vm)))
@@ -105,8 +110,17 @@ struct ReadCommand: ParsableCommand {
         case .json:
             if streams && !perStreamReports.isEmpty {
                 printStreamsJSON(perStreamReports)
-            } else if let data = try? JSONSerialization.data(withJSONObject: allDicts, options: [.prettyPrinted, .sortedKeys]) {
-                print(String(data: data, encoding: .utf8) ?? "[]")
+            } else {
+                // For JSON we want nested arrays/dicts (Timecodes, MCAAudioLabeling,
+                // …) to come through structured, not stringified. Substitute the raw
+                // typed video dicts back into the combined ordering.
+                var mixedAny: [Any] = []
+                for d in imageDicts { mixedAny.append(d) }
+                for d in videoRawDicts { mixedAny.append(d) }
+                for d in audioDicts { mixedAny.append(d) }
+                if let data = try? JSONSerialization.data(withJSONObject: mixedAny, options: [.prettyPrinted, .sortedKeys]) {
+                    print(String(data: data, encoding: .utf8) ?? "[]")
+                }
             }
         case .csv:
             printCSV(allDicts)
@@ -197,6 +211,10 @@ struct ReadCommand: ParsableCommand {
             if let v = stream.language      { d["Language"]      = v }
             d["IsDefault"] = String(stream.isDefault ?? true)
             if let v = stream.title         { d["Title"]         = v }
+            if let v = stream.mcaChannelLabel             { d["MCAChannelLabel"]             = v }
+            if let v = stream.mcaChannelName              { d["MCAChannelName"]              = v }
+            if let v = stream.mcaSoundfieldGroup          { d["MCASoundfieldGroup"]          = v }
+            if let v = stream.mcaGroupOfSoundfieldGroups  { d["MCAGroupOfSoundfieldGroups"]  = v }
             rows.append(d)
         }
         for stream in vm.subtitleStreams {

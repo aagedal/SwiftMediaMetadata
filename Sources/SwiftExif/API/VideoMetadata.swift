@@ -73,6 +73,12 @@ public struct VideoMetadata: Sendable {
     public var c2pa: C2PAData?
     /// Camera/clip metadata from Sony NonRealTimeMeta (embedded or sidecar XML).
     public var camera: CameraMetadata?
+    /// SMPTE ST 377-4 / ST 2020-1 Multi-Channel Audio labelling carried by
+    /// MXF files with bmxtools-style audio metadata. Channels resolve to
+    /// AudioStream slots by `trackIndex`; soundfield groups and groups-of-
+    /// groups link to channels via UUIDs. `nil` for containers that don't
+    /// support MCA labelling (everything except MXF, today).
+    public var mcaAudioLabeling: MCAAudioLabeling?
     public var warnings: [String]
 
     /// The original file data (needed for writing back).

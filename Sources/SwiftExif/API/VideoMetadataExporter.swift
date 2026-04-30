@@ -154,6 +154,45 @@ public struct VideoMetadataExporter: Sendable {
             }
         }
 
+        if let labeling = metadata.mcaAudioLabeling, !labeling.isEmpty {
+            // Top-level MCA labelling block (SMPTE ST 377-4 / ST 2020-1).
+            // Channels resolve to AudioStream slots by `TrackIndex`; the
+            // soundfield-group and group-of-groups arrays carry the full link
+            // graph so consumers can reconstruct bmxtools-style labels.txt.
+            var mcaDict: [String: Any] = [:]
+            mcaDict["Channels"] = labeling.channels.map { ch -> [String: Any] in
+                var d: [String: Any] = [:]
+                if let v = ch.trackIndex            { d["TrackIndex"]            = v }
+                if let v = ch.symbol                { d["Symbol"]                = v }
+                if let v = ch.name                  { d["Name"]                  = v }
+                if let v = ch.channelID             { d["ChannelID"]             = v }
+                if let v = ch.linkID                { d["LinkID"]                = v.uuidString }
+                if let v = ch.soundfieldGroupLinkID { d["SoundfieldGroupLinkID"] = v.uuidString }
+                if let v = ch.language              { d["Language"]              = v }
+                return d
+            }
+            mcaDict["SoundfieldGroups"] = labeling.soundfieldGroups.map { sg -> [String: Any] in
+                var d: [String: Any] = [:]
+                if let v = sg.symbol   { d["Symbol"]   = v }
+                if let v = sg.name     { d["Name"]     = v }
+                if let v = sg.linkID   { d["LinkID"]   = v.uuidString }
+                if !sg.groupOfGroupsLinkIDs.isEmpty {
+                    d["GroupOfSoundfieldGroupsLinkIDs"] = sg.groupOfGroupsLinkIDs.map(\.uuidString)
+                }
+                if let v = sg.language { d["Language"] = v }
+                return d
+            }
+            mcaDict["GroupsOfSoundfieldGroups"] = labeling.groupsOfSoundfieldGroups.map { gg -> [String: Any] in
+                var d: [String: Any] = [:]
+                if let v = gg.symbol   { d["Symbol"]   = v }
+                if let v = gg.name     { d["Name"]     = v }
+                if let v = gg.linkID   { d["LinkID"]   = v.uuidString }
+                if let v = gg.language { d["Language"] = v }
+                return d
+            }
+            dict["MCAAudioLabeling"] = mcaDict
+        }
+
         if let c2pa = metadata.c2pa {
             dict["HasContentCredentials"] = true
             if let manifest = c2pa.activeManifest {

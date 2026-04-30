@@ -26,6 +26,7 @@ struct SwiftExifCLI: ParsableCommand {
             GPXExportCommand.self,
             ImportCommand.self,
             DeleteOriginalCommand.self,
+            MXFLabelsCommand.self,
         ],
         defaultSubcommand: ReadCommand.self
     )

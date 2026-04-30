@@ -70,6 +70,10 @@ public struct MXFReader: Sendable {
         // Ordinal of the next TimecodeComponent we decode. MaterialPackage
         // comes first in header metadata, FilePackage(s) after.
         var timecodeComponentsSeen = 0
+        // SMPTE ST 377-4 Multi-Channel Audio labelling state (Primer Pack
+        // tag map + per-subdescriptor parsed fields + per-track SubDescriptors
+        // UID arrays). Filled inside the loop, resolved after the loop.
+        var mca = MCAState()
 
         var reader = BinaryReader(data: data)
         while reader.remainingCount >= 17 {
@@ -88,9 +92,12 @@ public struct MXFReader: Sendable {
             let keyIsSoundDescriptor = isSoundEssenceDescriptorKey(key)
             let keyIsDurationSet = isDurationBearingSetKey(key)
             let keyIsTimecodeComponent = isTimecodeComponentKey(key)
+            let keyIsPrimerPack = isPrimerPackKey(key)
+            let mcaKind = mcaSubDescriptorKind(key)
             let isMetadata = keyIsC2PA || peekIsXML || peekIsJUMBF
                 || keyIsPictureDescriptor || keyIsSoundDescriptor
                 || keyIsDurationSet || keyIsTimecodeComponent
+                || keyIsPrimerPack || (mcaKind != nil)
 
             // Skip anything that doesn't look like metadata, plus anything
             // larger than the hard cap (defensive — metadata payloads are
@@ -176,9 +183,29 @@ public struct MXFReader: Sendable {
                 }
                 if stream.sampleRate != nil || stream.channels != nil {
                     metadata.audioStreams.append(stream)
+                    // Capture the SubDescriptors strong-reference array so we
+                    // can later resolve which MCA channel labels belong to
+                    // this track.
+                    let subUIDs = extractSubDescriptorUIDs(from: value, primer: mca.primer)
+                    mca.soundDescriptorSubUIDs.append(subUIDs)
                     if metadata.audioCodec == nil { metadata.audioCodec = stream.codec }
                     if metadata.audioSampleRate == nil { metadata.audioSampleRate = stream.sampleRate }
                     if metadata.audioChannels == nil { metadata.audioChannels = stream.channels }
+                }
+            }
+
+            if keyIsPrimerPack {
+                mca.primer.ingest(value)
+            }
+
+            if let kind = mcaKind,
+               let parsed = parseMCASubDescriptor(value, kind: kind, primer: mca.primer),
+               let uid = parsed.instanceUID {
+                switch kind {
+                case 0x6B: mca.channels[uid] = parsed
+                case 0x6C: mca.soundfields[uid] = parsed
+                case 0x6D: mca.groupsOfGroups[uid] = parsed
+                default: break
                 }
             }
         }
@@ -198,6 +225,28 @@ public struct MXFReader: Sendable {
         // Surface any Sony NRT LtcChangeTable start timecode. Dedupes
         // against MXF Material / File package values via recordTimecode.
         metadata.ingestNRTTimecode()
+
+        // Resolve MCA labelling now that all subdescriptors and sound
+        // descriptors have been collected.
+        let labeling = assembleAudioLabeling(state: mca)
+        if !labeling.isEmpty {
+            metadata.mcaAudioLabeling = labeling
+            // Back-fill each AudioStream with the per-track summary symbols.
+            for ch in labeling.channels {
+                guard let trackIndex = ch.trackIndex,
+                      trackIndex < metadata.audioStreams.count else { continue }
+                metadata.audioStreams[trackIndex].mcaChannelLabel = ch.symbol
+                metadata.audioStreams[trackIndex].mcaChannelName = ch.name
+                if let sgUID = ch.soundfieldGroupLinkID,
+                   let sg = labeling.soundfieldGroups.first(where: { $0.linkID == sgUID }) {
+                    metadata.audioStreams[trackIndex].mcaSoundfieldGroup = sg.symbol
+                    if let ggUID = sg.groupOfGroupsLinkIDs.first,
+                       let gg = labeling.groupsOfSoundfieldGroups.first(where: { $0.linkID == ggUID }) {
+                        metadata.audioStreams[trackIndex].mcaGroupOfSoundfieldGroups = gg.symbol
+                    }
+                }
+            }
+        }
 
         for i in 0..<metadata.videoStreams.count {
             // ISOBMFF-style colour-range default: most broadcast MXF essence is
@@ -775,7 +824,7 @@ public struct MXFReader: Sendable {
         }
     }
 
-    private static func walkLocalSet(_ data: Data, _ body: (UInt16, Data) -> Void) {
+    static func walkLocalSet(_ data: Data, _ body: (UInt16, Data) -> Void) {
         var reader = BinaryReader(data: data)
         while reader.remainingCount >= 4 {
             guard let tag = try? reader.readUInt16BigEndian(),
@@ -787,7 +836,7 @@ public struct MXFReader: Sendable {
         }
     }
 
-    private static func parseUInt32(_ data: Data) -> UInt32? {
+    static func parseUInt32(_ data: Data) -> UInt32? {
         guard data.count >= 4 else { return nil }
         var r = BinaryReader(data: data)
         return try? r.readUInt32BigEndian()
