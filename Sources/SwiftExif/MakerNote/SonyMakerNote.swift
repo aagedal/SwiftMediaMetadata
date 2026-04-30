@@ -6,7 +6,11 @@ import Foundation
 struct SonyMakerNote: Sendable {
 
     // Sony MakerNote tag IDs
-    private static let quality: UInt16         = 0x0102
+    private static let quality: UInt16         = 0xB047
+    private static let macro: UInt16           = 0xB040
+    private static let flashLevel: UInt16      = 0xB048
+    private static let releaseMode: UInt16     = 0xB049
+    private static let whiteBalance: UInt16    = 0xB054
     private static let serialNumber: UInt16    = 0xB020
     private static let lensType: UInt16        = 0xB027
     private static let temperature: UInt16     = 0xB023
@@ -42,12 +46,19 @@ struct SonyMakerNote: Sendable {
             }
         }
 
-        // Lens type (tag 0xB027) — UInt32 or UInt16
+        // Lens type (tag 0xB027) — UInt32 or UInt16 — surface numeric ID and human name when known.
         if let entry = ifd.entry(for: lensType) {
+            var resolved: UInt32?
             if let value = entry.uint32Value(endian: byteOrder) {
-                tags["LensType"] = .int(Int(value))
+                resolved = value
             } else if let value = entry.uint16Value(endian: byteOrder) {
+                resolved = UInt32(value)
+            }
+            if let value = resolved {
                 tags["LensType"] = .int(Int(value))
+                if let name = sonyLensTypeNames[UInt16(clamping: value)] {
+                    tags["LensTypeName"] = .string(name)
+                }
             }
         }
 
@@ -59,6 +70,47 @@ struct SonyMakerNote: Sendable {
             }
         }
 
+        if let entry = ifd.entry(for: quality),
+           let value = entry.uint16Value(endian: byteOrder) {
+            tags["Quality"] = .int(Int(value))
+        }
+
+        if let entry = ifd.entry(for: macro),
+           let value = entry.uint16Value(endian: byteOrder) {
+            tags["Macro"] = .int(Int(value))
+        }
+
+        if let entry = ifd.entry(for: flashLevel),
+           let value = entry.uint16Value(endian: byteOrder) {
+            tags["FlashLevel"] = .int(Int(Int16(bitPattern: value)))
+        }
+
+        if let entry = ifd.entry(for: releaseMode),
+           let value = entry.uint16Value(endian: byteOrder) {
+            tags["ReleaseMode"] = .int(Int(value))
+        }
+
+        if let entry = ifd.entry(for: whiteBalance),
+           let value = entry.uint16Value(endian: byteOrder) {
+            tags["WhiteBalance"] = .int(Int(value))
+        }
+
         return tags
     }
+
+    /// Human-readable names for common Sony LensType IDs (not exhaustive — covers the FE-mount
+    /// lenses Scandinavian press photographers most commonly carry plus a handful of A-mount
+    /// staples). Extend as needed; the table is data, not policy.
+    static let sonyLensTypeNames: [UInt16: String] = [
+        0:    "Minolta AF 28-85mm F3.5-4.5",
+        1:    "Minolta AF 80-200mm F2.8 HS-APO G",
+        2:    "Minolta AF 28-70mm F2.8 G",
+        16:   "Sony 70-200mm F2.8 G SSM",
+        18:   "Sony DT 18-250mm F3.5-6.3",
+        25:   "Sony DT 18-200mm F3.5-6.3",
+        27:   "Sony 70-400mm F4-5.6 G SSM",
+        32:   "Sony 500mm F4 G SSM",
+        51:   "Sony FE 28-70mm F3.5-5.6 OSS",
+        61:   "Sony LA-EA1/3 Adapter",
+    ]
 }

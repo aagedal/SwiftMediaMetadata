@@ -26,9 +26,128 @@ public struct MakerNoteWriter: Sendable {
             return writeDJI(makerNote, byteOrder: byteOrder)
         case .samsung:
             return writeSamsung(makerNote, byteOrder: byteOrder)
+        case .apple:
+            return writeApple(makerNote, byteOrder: byteOrder)
+        case .pentax:
+            return writePentax(makerNote, byteOrder: byteOrder)
+        case .leica:
+            return writeLeica(makerNote, byteOrder: byteOrder)
+        case .sigma:
+            return writeSigma(makerNote, byteOrder: byteOrder)
         case .unknown:
             return makerNote.rawData
         }
+    }
+
+    // MARK: - Apple
+
+    /// Apple: "Apple iOS\0" (10B) + optional 2-byte BOM + 2-byte version + IFD.
+    /// When BOM bytes aren't recognizable the IFD starts at offset 10.
+    private static func writeApple(_ makerNote: MakerNoteData, byteOrder: ByteOrder) -> Data {
+        let rawData = makerNote.rawData
+        guard rawData.count > 14, rawData.prefix(10) == AppleMakerNote.headerPrefix else {
+            return rawData
+        }
+
+        let bom0 = rawData[rawData.startIndex + 10]
+        let bom1 = rawData[rawData.startIndex + 11]
+        let endian: ByteOrder
+        let ifdOffset: Int
+        if bom0 == 0x4D && bom1 == 0x4D {
+            endian = .bigEndian
+            ifdOffset = 14
+        } else if bom0 == 0x49 && bom1 == 0x49 {
+            endian = .littleEndian
+            ifdOffset = 14
+        } else {
+            endian = byteOrder
+            ifdOffset = 10
+        }
+
+        let header = Data(rawData.prefix(ifdOffset))
+        guard let entries = reparse(rawData, tiffStart: 0, ifdOffset: ifdOffset, endian: endian) else {
+            return rawData
+        }
+        let updated = applyTagChanges(entries: entries, tags: makerNote.tags, endian: endian, tagMap: appleTagMap)
+        return serializeIFD(entries: updated, endian: endian, headerData: header, tiffStart: 0)
+    }
+
+    // MARK: - Pentax
+
+    /// Pentax: "AOC\0" + 2-byte BOM + IFD (offset 6), or bare IFD for older bodies.
+    private static func writePentax(_ makerNote: MakerNoteData, byteOrder: ByteOrder) -> Data {
+        let rawData = makerNote.rawData
+        guard rawData.count > 8 else { return rawData }
+
+        let header: Data
+        let endian: ByteOrder
+        let ifdOffset: Int
+        if rawData.prefix(4) == PentaxMakerNote.aocPrefix {
+            let bom0 = rawData[rawData.startIndex + 4]
+            let bom1 = rawData[rawData.startIndex + 5]
+            if bom0 == 0x4D && bom1 == 0x4D {
+                endian = .bigEndian
+            } else if bom0 == 0x49 && bom1 == 0x49 {
+                endian = .littleEndian
+            } else {
+                endian = byteOrder
+            }
+            header = Data(rawData.prefix(6))
+            ifdOffset = 6
+        } else {
+            header = Data()
+            endian = byteOrder
+            ifdOffset = 0
+        }
+
+        guard let entries = reparse(rawData, tiffStart: 0, ifdOffset: ifdOffset, endian: endian) else {
+            return rawData
+        }
+        let updated = applyTagChanges(entries: entries, tags: makerNote.tags, endian: endian, tagMap: pentaxTagMap)
+        return serializeIFD(entries: updated, endian: endian, headerData: header, tiffStart: 0)
+    }
+
+    // MARK: - Leica
+
+    /// Leica: "LEICA\0" + 2 type/version bytes + IFD (offset 8), or bare IFD for Type 4 bodies.
+    private static func writeLeica(_ makerNote: MakerNoteData, byteOrder: ByteOrder) -> Data {
+        let rawData = makerNote.rawData
+        guard rawData.count > 8 else { return rawData }
+
+        let header: Data
+        let ifdOffset: Int
+        if rawData.prefix(6) == LeicaMakerNote.leicaPrefix {
+            header = Data(rawData.prefix(8))
+            ifdOffset = 8
+        } else {
+            header = Data()
+            ifdOffset = 0
+        }
+
+        guard let entries = reparse(rawData, tiffStart: 0, ifdOffset: ifdOffset, endian: byteOrder) else {
+            return rawData
+        }
+        let updated = applyTagChanges(entries: entries, tags: makerNote.tags, endian: byteOrder, tagMap: leicaTagMap)
+        return serializeIFD(entries: updated, endian: byteOrder, headerData: header, tiffStart: 0)
+    }
+
+    // MARK: - Sigma
+
+    /// Sigma: "SIGMA\0\0\0" or "FOVEON\0\0" (8B) + IFD.
+    private static func writeSigma(_ makerNote: MakerNoteData, byteOrder: ByteOrder) -> Data {
+        let rawData = makerNote.rawData
+        guard rawData.count > 10 else { return rawData }
+        guard rawData.prefix(8) == SigmaMakerNote.sigmaPrefix
+                || rawData.prefix(8) == SigmaMakerNote.foveonPrefix else {
+            return rawData
+        }
+
+        let header = Data(rawData.prefix(8))
+        guard let entries = reparse(rawData, tiffStart: 0, ifdOffset: 8, endian: byteOrder) else {
+            return rawData
+        }
+        let updated = applyTagChanges(entries: entries, tags: makerNote.tags, endian: byteOrder, tagMap: sigmaTagMap)
+        return serializeIFD(entries: updated, endian: byteOrder, headerData: header, tiffStart: 0)
     }
 
     // MARK: - Canon
@@ -320,9 +439,45 @@ public struct MakerNoteWriter: Sendable {
     ]
 
     private static let sonyTagMap: [String: UInt16] = [
-        "SerialNumber": 0x00B0,
-        "LensType": 0x00B1,
-        "Quality": 0x0102,
+        "SerialNumber": 0xB020,
+        "LensType": 0xB027,
+        "Quality": 0xB047,
+        "Macro": 0xB040,
+        "FlashLevel": 0xB048,
+        "ReleaseMode": 0xB049,
+        "WhiteBalance": 0xB054,
+    ]
+
+    private static let appleTagMap: [String: UInt16] = [
+        "MakerNoteVersion": 0x0001,
+        "HDRImageType": 0x000A,
+        "BurstUUID": 0x000B,
+        "ContentIdentifier": 0x0011,
+        "ImageCaptureType": 0x0014,
+        "LivePhotoVideoIndex": 0x0017,
+        "ImageProcessingFlags": 0x0019,
+    ]
+
+    private static let pentaxTagMap: [String: UInt16] = [
+        "ModelID": 0x0005,
+        "Quality": 0x0008,
+        "PictureMode": 0x000B,
+        "SerialNumber": 0x0229,
+    ]
+
+    private static let leicaTagMap: [String: UInt16] = [
+        "LensType": 0x0301,
+        "LensSerialNumber": 0x0303,
+        "SerialNumber": 0x0307,
+        "FirmwareVersion": 0x0501,
+    ]
+
+    private static let sigmaTagMap: [String: UInt16] = [
+        "SerialNumber": 0x0002,
+        "Resolution": 0x0011,
+        "LensType": 0x0012,
+        "WhiteBalance": 0x0017,
+        "LensRange": 0x002A,
     ]
 
     private static let fujifilmTagMap: [String: UInt16] = [

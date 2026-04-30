@@ -1967,12 +1967,76 @@ public struct MP4Parser: Sendable {
 
         if let ilst = children.first(where: { $0.type == "ilst" }) {
             parseILST(ilst.data, into: &metadata)
+            // QuickTime mdta-style metadata: ilst entries are keyed by 1-based index into
+            // the `keys` table. Walk that path to recover Apple Live Photo IDs and similar
+            // namespaced values.
+            if let keysBox = children.first(where: { $0.type == "keys" }) {
+                let keys = parseQuickTimeKeys(keysBox.data)
+                parseMDTAValues(ilst.data, keys: keys, into: &metadata)
+            }
         }
 
         // Check for xml box (XMP)
         if let xml = children.first(where: { $0.type == "xml " }) {
             if let xmpData = try? XMPReader.readFromXML(xml.data) {
                 metadata.xmp = xmpData
+            }
+        }
+    }
+
+    /// Parse the QuickTime `keys` box into an array of namespaced key strings, indexed 1-based
+    /// (the encoding ilst uses to point at them).
+    private static func parseQuickTimeKeys(_ data: Data) -> [String] {
+        guard data.count >= 8 else { return [] }
+        var reader = BinaryReader(data: data)
+        var keys: [String] = []
+        do {
+            _ = try reader.readUInt32BigEndian() // version + flags
+            let entryCount = try reader.readUInt32BigEndian()
+            for _ in 0..<entryCount {
+                guard reader.remainingCount >= 8 else { break }
+                let keySize = try reader.readUInt32BigEndian()
+                guard keySize >= 8, Int(keySize) - 8 <= reader.remainingCount else { break }
+                _ = try reader.readBytes(4) // key_namespace (e.g. "mdta")
+                let valueLength = Int(keySize) - 8
+                let valueBytes = try reader.readBytes(valueLength)
+                keys.append(String(data: valueBytes, encoding: .utf8) ?? "")
+            }
+        } catch {
+            // Best-effort.
+        }
+        return keys
+    }
+
+    /// Walk an ilst whose entries are keyed by 1-based index into the QuickTime `keys` table
+    /// and pull out the values we care about.
+    private static func parseMDTAValues(_ ilstData: Data, keys: [String], into metadata: inout VideoMetadata) {
+        guard !keys.isEmpty,
+              let items = try? ISOBMFFBoxReader.parseBoxes(from: ilstData) else { return }
+
+        for item in items {
+            // Each item's box "type" is actually a 4-byte big-endian index into keys.
+            let typeBytes = item.type.unicodeScalars.compactMap { UInt8(exactly: $0.value) }
+            guard typeBytes.count == 4 else { continue }
+            let index = (UInt32(typeBytes[0]) << 24)
+                      | (UInt32(typeBytes[1]) << 16)
+                      | (UInt32(typeBytes[2]) << 8)
+                      |  UInt32(typeBytes[3])
+            guard index >= 1, Int(index) <= keys.count else { continue }
+            let key = keys[Int(index) - 1]
+
+            guard let dataBox = (try? ISOBMFFBoxReader.parseBoxes(from: item.data))?
+                    .first(where: { $0.type == "data" }),
+                  dataBox.data.count > 8 else { continue }
+            let payload = dataBox.data.suffix(from: dataBox.data.startIndex + 8)
+
+            switch key {
+            case "com.apple.quicktime.content.identifier":
+                if let s = String(data: payload, encoding: .utf8) {
+                    metadata.contentIdentifier = s
+                }
+            default:
+                break
             }
         }
     }

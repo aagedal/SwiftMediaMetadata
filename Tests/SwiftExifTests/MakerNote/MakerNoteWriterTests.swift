@@ -184,6 +184,100 @@ final class MakerNoteWriterTests: XCTestCase {
         }
     }
 
+    // MARK: - Apple Round-Trip
+
+    func testAppleRoundTrip() {
+        let originalUUID = "B12C123E-4567-89AB-CDEF-012345678901"
+        let rawData = buildAppleMakerNote(contentIdentifier: originalUUID, byteOrder: .bigEndian)
+        let ifd = buildExifIFDWithMakerNote(rawData, byteOrder: .bigEndian)
+        guard let parsed = MakerNoteReader.parse(from: ifd, make: "Apple", byteOrder: .bigEndian) else {
+            XCTFail("Failed to parse Apple MakerNote"); return
+        }
+
+        let updatedUUID = "DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF"
+        var modified = parsed
+        modified.setTag("ContentIdentifier", value: .string(updatedUUID))
+
+        let written = MakerNoteWriter.write(modified, byteOrder: .bigEndian)
+        let newIFD = buildExifIFDWithMakerNote(written, byteOrder: .bigEndian)
+        let reparsed = MakerNoteReader.parse(from: newIFD, make: "Apple", byteOrder: .bigEndian)
+
+        if case .string(let s) = reparsed?.tags["ContentIdentifier"] {
+            XCTAssertEqual(s, updatedUUID)
+        } else {
+            XCTFail("ContentIdentifier not found after round-trip")
+        }
+    }
+
+    // MARK: - Pentax Round-Trip
+
+    func testPentaxRoundTrip() {
+        let rawData = buildPentaxMakerNote(serialNumber: "PENT-001", byteOrder: .bigEndian)
+        let ifd = buildExifIFDWithMakerNote(rawData, byteOrder: .bigEndian)
+        guard let parsed = MakerNoteReader.parse(from: ifd, make: "PENTAX", byteOrder: .bigEndian) else {
+            XCTFail("Failed to parse Pentax MakerNote"); return
+        }
+
+        var modified = parsed
+        modified.setTag("SerialNumber", value: .string("PENT-NEW"))
+
+        let written = MakerNoteWriter.write(modified, byteOrder: .bigEndian)
+        let newIFD = buildExifIFDWithMakerNote(written, byteOrder: .bigEndian)
+        let reparsed = MakerNoteReader.parse(from: newIFD, make: "PENTAX", byteOrder: .bigEndian)
+
+        if case .string(let s) = reparsed?.tags["SerialNumber"] {
+            XCTAssertEqual(s, "PENT-NEW")
+        } else {
+            XCTFail("SerialNumber not found after round-trip")
+        }
+    }
+
+    // MARK: - Leica Round-Trip
+
+    func testLeicaRoundTrip() {
+        let rawData = buildLeicaMakerNote(serialNumber: "LEICA-1", byteOrder: .littleEndian)
+        let ifd = buildExifIFDWithMakerNote(rawData, byteOrder: .littleEndian)
+        guard let parsed = MakerNoteReader.parse(from: ifd, make: "LEICA", byteOrder: .littleEndian) else {
+            XCTFail("Failed to parse Leica MakerNote"); return
+        }
+
+        var modified = parsed
+        modified.setTag("SerialNumber", value: .string("LEICA-N"))
+
+        let written = MakerNoteWriter.write(modified, byteOrder: .littleEndian)
+        let newIFD = buildExifIFDWithMakerNote(written, byteOrder: .littleEndian)
+        let reparsed = MakerNoteReader.parse(from: newIFD, make: "LEICA", byteOrder: .littleEndian)
+
+        if case .string(let s) = reparsed?.tags["SerialNumber"] {
+            XCTAssertEqual(s, "LEICA-N")
+        } else {
+            XCTFail("SerialNumber not found after round-trip")
+        }
+    }
+
+    // MARK: - Sigma Round-Trip
+
+    func testSigmaRoundTrip() {
+        let rawData = buildSigmaMakerNote(serialNumber: "SIGMA-001", byteOrder: .littleEndian)
+        let ifd = buildExifIFDWithMakerNote(rawData, byteOrder: .littleEndian)
+        guard let parsed = MakerNoteReader.parse(from: ifd, make: "SIGMA", byteOrder: .littleEndian) else {
+            XCTFail("Failed to parse Sigma MakerNote"); return
+        }
+
+        var modified = parsed
+        modified.setTag("SerialNumber", value: .string("SIGMA-N"))
+
+        let written = MakerNoteWriter.write(modified, byteOrder: .littleEndian)
+        let newIFD = buildExifIFDWithMakerNote(written, byteOrder: .littleEndian)
+        let reparsed = MakerNoteReader.parse(from: newIFD, make: "SIGMA", byteOrder: .littleEndian)
+
+        if case .string(let s) = reparsed?.tags["SerialNumber"] {
+            XCTAssertEqual(s, "SIGMA-N")
+        } else {
+            XCTFail("SerialNumber not found after round-trip")
+        }
+    }
+
     // MARK: - ImageMetadata Convenience
 
     func testSetMakerNoteTagConvenience() {
@@ -317,6 +411,70 @@ final class MakerNoteWriterTests: XCTestCase {
 
         entries.sort { $0.tag < $1.tag }
         return buildMiniIFD(entries: entries, byteOrder: byteOrder)
+    }
+
+    /// Build an Apple iOS MakerNote: "Apple iOS\0" (10B) + 4-byte BOM/version + IFD.
+    private func buildAppleMakerNote(contentIdentifier: String, byteOrder: ByteOrder = .bigEndian) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+        let idBytes = Data(contentIdentifier.utf8) + Data([0x00])
+        entries.append((0x0011, .ascii, UInt32(idBytes.count), idBytes))
+        entries.sort { $0.tag < $1.tag }
+
+        var writer = BinaryWriter(capacity: 256)
+        writer.writeBytes(Data([0x41, 0x70, 0x70, 0x6C, 0x65, 0x20, 0x69, 0x4F, 0x53, 0x00])) // "Apple iOS\0"
+        if byteOrder == .bigEndian {
+            writer.writeBytes([0x4D, 0x4D])
+        } else {
+            writer.writeBytes([0x49, 0x49])
+        }
+        writer.writeBytes([0x00, 0x01]) // version
+        writer.writeBytes(buildMiniIFD(entries: entries, byteOrder: byteOrder, offsetBase: 14))
+        return writer.data
+    }
+
+    /// Build a Pentax MakerNote: "AOC\0" (4B) + 2-byte BOM + IFD.
+    private func buildPentaxMakerNote(serialNumber: String, byteOrder: ByteOrder = .bigEndian) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+        let snBytes = Data(serialNumber.utf8) + Data([0x00])
+        entries.append((0x0229, .ascii, UInt32(snBytes.count), snBytes))
+        entries.sort { $0.tag < $1.tag }
+
+        var writer = BinaryWriter(capacity: 256)
+        writer.writeBytes(Data([0x41, 0x4F, 0x43, 0x00])) // "AOC\0"
+        if byteOrder == .bigEndian {
+            writer.writeBytes([0x4D, 0x4D])
+        } else {
+            writer.writeBytes([0x49, 0x49])
+        }
+        writer.writeBytes(buildMiniIFD(entries: entries, byteOrder: byteOrder, offsetBase: 6))
+        return writer.data
+    }
+
+    /// Build a Leica Type-2 MakerNote: "LEICA\0" + 2-byte type/version + IFD.
+    private func buildLeicaMakerNote(serialNumber: String, byteOrder: ByteOrder = .littleEndian) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+        let snBytes = Data(serialNumber.utf8) + Data([0x00])
+        entries.append((0x0307, .ascii, UInt32(snBytes.count), snBytes))
+        entries.sort { $0.tag < $1.tag }
+
+        var writer = BinaryWriter(capacity: 256)
+        writer.writeBytes(Data([0x4C, 0x45, 0x49, 0x43, 0x41, 0x00])) // "LEICA\0"
+        writer.writeBytes([0x00, 0x00])                                // type/version
+        writer.writeBytes(buildMiniIFD(entries: entries, byteOrder: byteOrder, offsetBase: 8))
+        return writer.data
+    }
+
+    /// Build a Sigma MakerNote: "SIGMA\0\0\0" (8B) + IFD.
+    private func buildSigmaMakerNote(serialNumber: String, byteOrder: ByteOrder = .littleEndian) -> Data {
+        var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
+        let snBytes = Data(serialNumber.utf8) + Data([0x00])
+        entries.append((0x0002, .ascii, UInt32(snBytes.count), snBytes))
+        entries.sort { $0.tag < $1.tag }
+
+        var writer = BinaryWriter(capacity: 256)
+        writer.writeBytes(Data([0x53, 0x49, 0x47, 0x4D, 0x41, 0x00, 0x00, 0x00])) // "SIGMA\0\0\0"
+        writer.writeBytes(buildMiniIFD(entries: entries, byteOrder: byteOrder, offsetBase: 8))
+        return writer.data
     }
 
     /// Build a Samsung MakerNote: IFD starting immediately, like Canon.

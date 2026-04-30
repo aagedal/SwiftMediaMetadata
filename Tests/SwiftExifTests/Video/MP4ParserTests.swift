@@ -321,6 +321,70 @@ final class MP4ParserTests: XCTestCase {
     }
 
     /// Build an MP4 with QuickTime metadata (ilst items).
+    func testParseLivePhotoContentIdentifier() throws {
+        let uuid = "B12C123E-4567-89AB-CDEF-012345678901"
+        let data = buildMP4WithContentIdentifier(uuid)
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.contentIdentifier, uuid)
+    }
+
+    /// Build an MP4 whose moov/udta/meta box exposes the QuickTime mdta key
+    /// `com.apple.quicktime.content.identifier` — the standard Apple Live Photo identifier.
+    private func buildMP4WithContentIdentifier(_ uuid: String) -> Data {
+        var writer = BinaryWriter(capacity: 512)
+        writeFtyp(&writer, brand: "isom")
+
+        var mvhdWriter = BinaryWriter(capacity: 128)
+        mvhdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhdWriter.writeBytes(Data(repeating: 0, count: 96))
+        let mvhdBox = buildBox("mvhd", data: mvhdWriter.data)
+
+        // keys: FullBox + entry_count + per entry (key_size, "mdta", key_value)
+        let key = "com.apple.quicktime.content.identifier"
+        var keysWriter = BinaryWriter(capacity: 64)
+        keysWriter.writeBytes([0x00, 0x00, 0x00, 0x00]) // version + flags
+        keysWriter.writeUInt32BigEndian(1)              // entry_count
+        let keyBytes = Data(key.utf8)
+        keysWriter.writeUInt32BigEndian(UInt32(8 + keyBytes.count)) // key_size
+        keysWriter.writeString("mdta", encoding: .ascii)
+        keysWriter.writeBytes(keyBytes)
+        let keysBox = buildBox("keys", data: keysWriter.data)
+
+        // ilst entry whose box type is the 4-byte BE encoding of key index 1.
+        var dataPayload = BinaryWriter(capacity: 32)
+        dataPayload.writeUInt32BigEndian(1) // type indicator: UTF-8
+        dataPayload.writeUInt32BigEndian(0) // locale
+        dataPayload.writeBytes(Data(uuid.utf8))
+        let dataBox = buildBox("data", data: dataPayload.data)
+
+        // Item box: size + 4-byte index (UInt32 BE = 1) + dataBox
+        let indexBytes = Data([0x00, 0x00, 0x00, 0x01])
+        var itemWriter = BinaryWriter(capacity: 8 + dataBox.count)
+        itemWriter.writeUInt32BigEndian(UInt32(8 + dataBox.count))
+        itemWriter.writeBytes(indexBytes)
+        itemWriter.writeBytes(dataBox)
+        let ilstBox = buildBox("ilst", data: itemWriter.data)
+
+        // hdlr ("mdta")
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4))
+        hdlrWriter.writeString("mdta", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12))
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        var metaPayload = Data([0x00, 0x00, 0x00, 0x00]) // version + flags
+        metaPayload.append(hdlrBox)
+        metaPayload.append(keysBox)
+        metaPayload.append(ilstBox)
+
+        let metaBox = buildBox("meta", data: metaPayload)
+        let udtaBox = buildBox("udta", data: metaBox)
+        let moovBox = buildBox("moov", data: mvhdBox + udtaBox)
+        writer.writeBytes(moovBox)
+        return writer.data
+    }
+
     private func buildMP4WithMetadata(title: String?, artist: String?, comment: String?, gps: String?) -> Data {
         var writer = BinaryWriter(capacity: 512)
         writeFtyp(&writer, brand: "isom")

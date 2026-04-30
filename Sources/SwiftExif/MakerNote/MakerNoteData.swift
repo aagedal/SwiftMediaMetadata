@@ -10,6 +10,10 @@ public enum MakerNoteManufacturer: String, Sendable, Equatable {
     case panasonic = "Panasonic"
     case dji = "DJI"
     case samsung = "Samsung"
+    case apple = "Apple"
+    case pentax = "Pentax"
+    case leica = "Leica"
+    case sigma = "Sigma"
     case unknown = "Unknown"
 }
 

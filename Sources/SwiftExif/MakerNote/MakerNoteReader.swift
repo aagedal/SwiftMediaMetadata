@@ -40,6 +40,14 @@ public struct MakerNoteReader: Sendable {
             tags = DJIMakerNote.parse(data: rawData, byteOrder: byteOrder)
         case .samsung:
             tags = SamsungMakerNote.parse(data: rawData, byteOrder: byteOrder)
+        case .apple:
+            tags = AppleMakerNote.parse(data: rawData, byteOrder: byteOrder)
+        case .pentax:
+            tags = PentaxMakerNote.parse(data: rawData, byteOrder: byteOrder)
+        case .leica:
+            tags = LeicaMakerNote.parse(data: rawData, byteOrder: byteOrder)
+        case .sigma:
+            tags = SigmaMakerNote.parse(data: rawData, byteOrder: byteOrder)
         case .unknown:
             return nil
         }
@@ -56,9 +64,13 @@ public struct MakerNoteReader: Sendable {
         if make.hasPrefix("sony") { return .sony }
         if make.hasPrefix("fujifilm") || make.hasPrefix("fuji") { return .fujifilm }
         if make.hasPrefix("olympus") || make.hasPrefix("om ") { return .olympus }
+        if make.hasPrefix("leica") { return .leica }
         if make.hasPrefix("panasonic") { return .panasonic }
         if make.hasPrefix("dji") { return .dji }
         if make.hasPrefix("samsung") { return .samsung }
+        if make.hasPrefix("apple") { return .apple }
+        if make.hasPrefix("pentax") || make.hasPrefix("ricoh imaging") || make.hasPrefix("asahi") { return .pentax }
+        if make.hasPrefix("sigma") { return .sigma }
         return .unknown
     }
 }

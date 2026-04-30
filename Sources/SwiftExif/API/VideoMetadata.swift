@@ -68,6 +68,10 @@ public struct VideoMetadata: Sendable {
     public var gpsLatitude: Double?
     public var gpsLongitude: Double?
     public var gpsAltitude: Double?
+    /// Apple Live Photo `com.apple.quicktime.content.identifier` UUID. When the same UUID
+    /// appears on a HEIC's Apple MakerNote `ContentIdentifier` and on the matching MOV's
+    /// QuickTime metadata, the two files form a Live Photo pair.
+    public var contentIdentifier: String?
     public var xmp: XMPData?
     /// Parsed C2PA manifests (if the video is C2PA-signed).
     public var c2pa: C2PAData?
