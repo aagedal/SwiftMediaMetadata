@@ -48,6 +48,50 @@ final class MPEGReaderTests: XCTestCase {
         }
     }
 
+    // MARK: - HEVC SPS
+
+    /// Real-world H.265 SPS pulled from `~/Downloads/HGT_test_fra_DVR_CR.mov`
+    /// via `ffmpeg -c:v copy -bsf:v hevc_mp4toannexb -f hevc`. Profile
+    /// Main 10, level 4.0, 1920×1080, 4:2:0 10-bit, SAR 1:1 → DAR 16:9.
+    /// Includes the 2-byte NAL header (`0x42 0x01`, nal_unit_type 33).
+    /// Frame rate is *not* signalled in this SPS — most MOV-encoded HEVC
+    /// elementary streams carry timing in the container's edit list, not
+    /// in the SPS VUI, so `vui_timing_info_present_flag` is 0 here.
+    private static let hgtHEVCSPS: [UInt8] = [
+        0x42, 0x01, 0x01, 0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0xB0,
+        0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x78, 0xA0, 0x03,
+        0xC0, 0x80, 0x11, 0x07, 0xCA, 0xD8, 0x81, 0x5E, 0xE4, 0x59,
+        0x56, 0x02, 0xD4, 0x04, 0x04, 0x04, 0x02,
+    ]
+
+    func testParseHEVCSPSExtractsResolutionProfileBitDepthAspect() {
+        // HEVC NAL header is 2 bytes; parseHEVCSPS expects RBSP starting
+        // after the header, mirroring MPEGReader.extractHEVCFields.
+        let nal = Data(MPEGReaderTests.hgtHEVCSPS)
+        let raw = nal.subdata(in: 2..<nal.count)
+        let rbsp = MPEGBitstream.stripEmulationPrevention(raw)
+        let f = MPEGBitstream.parseHEVCSPS(rbsp)
+        XCTAssertNotNil(f)
+        XCTAssertEqual(f?.profile, "Main 10")
+        XCTAssertEqual(f?.level, "4")
+        XCTAssertEqual(f?.width, 1920)
+        XCTAssertEqual(f?.height, 1080)
+        XCTAssertEqual(f?.chromaSubsampling, "4:2:0")
+        XCTAssertEqual(f?.bitDepth, 10)
+        if let sar = f?.sampleAspect {
+            XCTAssertEqual(sar.0, 1)
+            XCTAssertEqual(sar.1, 1)
+        } else {
+            XCTFail("expected sample aspect ratio from SPS VUI")
+        }
+        if let dar = f?.displayAspect {
+            XCTAssertEqual(dar.0, 16)
+            XCTAssertEqual(dar.1, 9)
+        } else {
+            XCTFail("expected display aspect ratio derived from SAR×size")
+        }
+    }
+
     // MARK: - AAC ADTS
 
     func testParseAACADTSExtractsProfileSampleRateChannels() {
