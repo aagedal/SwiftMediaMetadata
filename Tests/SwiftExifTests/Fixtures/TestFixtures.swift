@@ -250,6 +250,63 @@ enum TestFixtures {
         writer.writeUInt32BigEndian(crc)
     }
 
+    // MARK: - Minimal GIF
+
+    /// Generate a minimal valid GIF: header + 1×1 LSD (no GCT) + extra blocks + trailer.
+    static func minimalGIF(version: String = "89a", extraBlocks: [Data] = []) -> Data {
+        var data = Data()
+        data.append(contentsOf: "GIF\(version)".utf8)
+        // Logical Screen Descriptor: width=1 (LE), height=1 (LE), packed=0 (no GCT), bg=0, aspect=0
+        data.append(contentsOf: [0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00])
+        for block in extraBlocks { data.append(block) }
+        data.append(0x3B) // Trailer
+        return data
+    }
+
+    /// Build a GIF Application Extension block carrying XMP. Mirrors the format
+    /// produced by GIFWriter.writeXMPExtension — sub-block-chunked XML with no
+    /// magic trailer (the parser trims at `</x:xmpmeta>` / `<?xpacket end`).
+    static func gifXMPAppExtensionBlock(xml: String) -> Data {
+        var data = Data()
+        data.append(0x21)               // Extension introducer
+        data.append(0xFF)               // Application Extension label
+        data.append(0x0B)               // Block size: 11
+        data.append(contentsOf: "XMP Data".utf8) // Identifier (8 bytes)
+        data.append(contentsOf: "XMP".utf8)      // Auth code (3 bytes)
+        let payload = Data(xml.utf8)
+        var off = 0
+        while off < payload.count {
+            let chunk = min(payload.count - off, 255)
+            data.append(UInt8(chunk))
+            data.append(payload[off..<off + chunk])
+            off += chunk
+        }
+        data.append(0x00) // Block terminator
+        return data
+    }
+
+    /// Build a GIF Comment Extension block with the given UTF-8 text.
+    static func gifCommentBlock(_ text: String) -> Data {
+        var data = Data()
+        data.append(0x21) // Extension introducer
+        data.append(0xFE) // Comment Extension label
+        let payload = Data(text.utf8)
+        var off = 0
+        while off < payload.count {
+            let chunk = min(payload.count - off, 255)
+            data.append(UInt8(chunk))
+            data.append(payload[off..<off + chunk])
+            off += chunk
+        }
+        data.append(0x00) // Block terminator
+        return data
+    }
+
+    /// Generate a GIF containing an XMP Application Extension.
+    static func gifWithXMP(xml: String) -> Data {
+        minimalGIF(extraBlocks: [gifXMPAppExtensionBlock(xml: xml)])
+    }
+
     // MARK: - Minimal JPEG XL (Container)
 
     /// Generate a minimal JPEG XL container with optional Exif/XMP boxes.
