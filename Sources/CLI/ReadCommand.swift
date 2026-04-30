@@ -186,6 +186,25 @@ struct ReadCommand: ParsableCommand {
             if let v = stream.timecode       { d["Timecode"]         = v }
             if let v = stream.title          { d["Title"]            = v }
             if let v = stream.rotation       { d["Rotation"]         = String(v) }
+            if let hdr = stream.hdr {
+                if let md = hdr.masteringDisplay {
+                    d["MasteringDisplayPrimariesR"] = String(format: "%.4f,%.4f", md.redX, md.redY)
+                    d["MasteringDisplayPrimariesG"] = String(format: "%.4f,%.4f", md.greenX, md.greenY)
+                    d["MasteringDisplayPrimariesB"] = String(format: "%.4f,%.4f", md.blueX, md.blueY)
+                    d["MasteringDisplayWhitePoint"] = String(format: "%.4f,%.4f", md.whitePointX, md.whitePointY)
+                    d["MasteringDisplayLuminance"]  = String(format: "%.1f-%.4f cd/m^2", md.maxLuminance, md.minLuminance)
+                }
+                if let cll = hdr.contentLightLevel {
+                    d["MaxCLL"]  = String(cll.maxCLL)
+                    d["MaxFALL"] = String(cll.maxFALL)
+                }
+                if let dv = hdr.dolbyVision {
+                    d["DolbyVisionProfile"] = String(dv.profile)
+                    d["DolbyVisionLevel"]   = String(dv.level)
+                    d["DolbyVisionVersion"] = "\(dv.versionMajor).\(dv.versionMinor)"
+                    d["DolbyVisionBLCompatibility"] = String(dv.blSignalCompatibilityID)
+                }
+            }
             if let c = stream.colorInfo {
                 if let p = c.primaries { d["ColorPrimaries"] = String(p) }
                 if let t = c.transfer  { d["TransferCharacteristics"] = String(t) }

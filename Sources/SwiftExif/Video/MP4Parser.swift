@@ -1296,6 +1296,21 @@ public struct MP4Parser: Sendable {
             if let info = parseColrBox(box.data) {
                 stream.colorInfo = info
             }
+        case "mdcv":
+            if let md = parseMDCVBox(box.data) {
+                if stream.hdr == nil { stream.hdr = HDRMetadata() }
+                stream.hdr?.masteringDisplay = md
+            }
+        case "clli":
+            if let cll = parseCLLIBox(box.data) {
+                if stream.hdr == nil { stream.hdr = HDRMetadata() }
+                stream.hdr?.contentLightLevel = cll
+            }
+        case "dvcC", "dvvC":
+            if let dv = parseDVCConfig(box.data) {
+                if stream.hdr == nil { stream.hdr = HDRMetadata() }
+                stream.hdr?.dolbyVision = dv
+            }
         case "fiel":
             if let fo = parseFielBox(box.data) {
                 stream.fieldOrder = fo
@@ -1500,6 +1515,86 @@ public struct MP4Parser: Sendable {
               let v = try? reader.readUInt32BigEndian(),
               h > 0, v > 0 else { return nil }
         return (Int(h), Int(v))
+    }
+
+    /// `mdcv` box (SMPTE ST 2086 Mastering Display Color Volume), 24 bytes.
+    /// All values big-endian. Display primaries and white point are stored as
+    /// uint16 values in 0.00002 chromaticity units (so 50000 = 1.0 on the CIE
+    /// 1931 xy plane). Luminance values are uint32 in 0.0001 cd/m^2 units.
+    private static func parseMDCVBox(_ data: Data) -> HDRMasteringDisplay? {
+        guard data.count >= 24 else { return nil }
+        var reader = BinaryReader(data: data)
+        guard let rx = try? reader.readUInt16BigEndian(),
+              let ry = try? reader.readUInt16BigEndian(),
+              let gx = try? reader.readUInt16BigEndian(),
+              let gy = try? reader.readUInt16BigEndian(),
+              let bx = try? reader.readUInt16BigEndian(),
+              let by = try? reader.readUInt16BigEndian(),
+              let wx = try? reader.readUInt16BigEndian(),
+              let wy = try? reader.readUInt16BigEndian(),
+              let maxL = try? reader.readUInt32BigEndian(),
+              let minL = try? reader.readUInt32BigEndian() else { return nil }
+
+        let chromaScale = 0.00002
+        let lumaScale = 0.0001
+        return HDRMasteringDisplay(
+            redX: Double(rx) * chromaScale,
+            redY: Double(ry) * chromaScale,
+            greenX: Double(gx) * chromaScale,
+            greenY: Double(gy) * chromaScale,
+            blueX: Double(bx) * chromaScale,
+            blueY: Double(by) * chromaScale,
+            whitePointX: Double(wx) * chromaScale,
+            whitePointY: Double(wy) * chromaScale,
+            maxLuminance: Double(maxL) * lumaScale,
+            minLuminance: Double(minL) * lumaScale
+        )
+    }
+
+    /// `clli` box (CTA-861.3 Content Light Level Information), 4 bytes.
+    /// Both values big-endian uint16, in cd/m^2.
+    private static func parseCLLIBox(_ data: Data) -> HDRContentLightLevel? {
+        guard data.count >= 4 else { return nil }
+        var reader = BinaryReader(data: data)
+        guard let maxCLL = try? reader.readUInt16BigEndian(),
+              let maxFALL = try? reader.readUInt16BigEndian() else { return nil }
+        return HDRContentLightLevel(maxCLL: Int(maxCLL), maxFALL: Int(maxFALL))
+    }
+
+    /// `dvcC` / `dvvC` box — DOVIDecoderConfigurationRecord (Dolby Vision spec).
+    /// Layout (24 bytes total, but the layout-bearing portion is just the
+    /// first 6 bytes — the rest is reserved):
+    ///   byte 0       dv_version_major
+    ///   byte 1       dv_version_minor
+    ///   bytes 2..5   dv_profile (7) + dv_level (6) + rpu (1) + el (1) +
+    ///                 bl (1) + dv_bl_signal_compatibility_id (4) +
+    ///                 reserved (12) — read as one big-endian UInt32.
+    ///   bytes 6..23  reserved (must be zero)
+    private static func parseDVCConfig(_ data: Data) -> HDRDolbyVisionConfig? {
+        guard data.count >= 6 else { return nil }
+        let s = data.startIndex
+        let versionMajor = Int(data[s])
+        let versionMinor = Int(data[s + 1])
+        let word = (UInt32(data[s + 2]) << 24)
+            | (UInt32(data[s + 3]) << 16)
+            | (UInt32(data[s + 4]) << 8)
+            | UInt32(data[s + 5])
+        let profile = Int((word >> 25) & 0x7F)
+        let level = Int((word >> 19) & 0x3F)
+        let rpuPresent = ((word >> 18) & 1) == 1
+        let elPresent = ((word >> 17) & 1) == 1
+        let blPresent = ((word >> 16) & 1) == 1
+        let blCompat = Int((word >> 12) & 0x0F)
+        return HDRDolbyVisionConfig(
+            versionMajor: versionMajor,
+            versionMinor: versionMinor,
+            profile: profile,
+            level: level,
+            rpuPresent: rpuPresent,
+            elPresent: elPresent,
+            blPresent: blPresent,
+            blSignalCompatibilityID: blCompat
+        )
     }
 
     /// HEVCDecoderConfigurationRecord (ISO/IEC 14496-15, §8.3.3.1.2). The box is

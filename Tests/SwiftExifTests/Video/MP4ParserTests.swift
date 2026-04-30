@@ -423,6 +423,154 @@ final class MP4ParserTests: XCTestCase {
         return w.data
     }
 
+    // MARK: - HDR side-data: mdcv / clli / dvcC
+
+    func testMasteringDisplayColorVolumeBox() throws {
+        // BT.2020 primaries with 1000-nit peak, 0.005-nit floor — typical
+        // Apple Pro Display XDR mastering profile.
+        var w = BinaryWriter(capacity: 24)
+        // R / G / B primaries in 0.00002 units (BT.2020 reference).
+        w.writeUInt16BigEndian(34000); w.writeUInt16BigEndian(16000)   // R: 0.680, 0.320
+        w.writeUInt16BigEndian(13250); w.writeUInt16BigEndian(34500)   // G: 0.265, 0.690
+        w.writeUInt16BigEndian( 7500); w.writeUInt16BigEndian( 3000)   // B: 0.150, 0.060
+        w.writeUInt16BigEndian(15635); w.writeUInt16BigEndian(16450)   // W: 0.31271, 0.32902
+        w.writeUInt32BigEndian(10_000_000)  // 1000.0 cd/m^2 (in 0.0001 units)
+        w.writeUInt32BigEndian(50)          // 0.005 cd/m^2
+        let data = buildMP4WithVisualChildBox(boxType: "mdcv", boxData: w.data)
+
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        let md = try XCTUnwrap(stream.hdr?.masteringDisplay)
+        XCTAssertEqual(md.redX, 0.680, accuracy: 0.001)
+        XCTAssertEqual(md.redY, 0.320, accuracy: 0.001)
+        XCTAssertEqual(md.greenX, 0.265, accuracy: 0.001)
+        XCTAssertEqual(md.greenY, 0.690, accuracy: 0.001)
+        XCTAssertEqual(md.blueX, 0.150, accuracy: 0.001)
+        XCTAssertEqual(md.blueY, 0.060, accuracy: 0.001)
+        XCTAssertEqual(md.whitePointX, 0.31270, accuracy: 0.001)
+        XCTAssertEqual(md.whitePointY, 0.32900, accuracy: 0.001)
+        XCTAssertEqual(md.maxLuminance, 1000.0, accuracy: 0.01)
+        XCTAssertEqual(md.minLuminance, 0.005, accuracy: 0.0001)
+    }
+
+    func testContentLightLevelBox() throws {
+        var w = BinaryWriter(capacity: 4)
+        w.writeUInt16BigEndian(1100)  // MaxCLL  — single brightest pixel
+        w.writeUInt16BigEndian(400)   // MaxFALL — frame-average peak
+        let data = buildMP4WithVisualChildBox(boxType: "clli", boxData: w.data)
+
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        let cll = try XCTUnwrap(stream.hdr?.contentLightLevel)
+        XCTAssertEqual(cll.maxCLL, 1100)
+        XCTAssertEqual(cll.maxFALL, 400)
+    }
+
+    func testDolbyVisionConfigurationBox() throws {
+        // Dolby Vision Profile 8.4 (HLG-compatible), version 1.0, level 4,
+        // RPU + BL present (no enhancement layer), bl_compat_id = 4 (HLG).
+        // Layout (24 bytes):
+        //   byte 0: dv_version_major = 1
+        //   byte 1: dv_version_minor = 0
+        //   bytes 2-5: profile(7) | level(6) | rpu(1) | el(1) | bl(1) | bl_compat(4) | reserved(12)
+        //     profile=8, level=4, rpu=1, el=0, bl=1, bl_compat=4
+        //     word = (8 << 25) | (4 << 19) | (1 << 18) | (0 << 17) | (1 << 16) | (4 << 12)
+        //          = 0x10260000 | 0x00050000 | 0x00004000
+        //          = 0x10254000  + (0x00040000 from rpu) = ...
+        // Easier to just compute it explicitly:
+        let profile: UInt32 = 8
+        let level: UInt32 = 4
+        let word = (profile << 25) | (level << 19) | (1 << 18) | (0 << 17) | (1 << 16) | (4 << 12)
+        var w = BinaryWriter(capacity: 24)
+        w.writeUInt8(1)                            // dv_version_major
+        w.writeUInt8(0)                            // dv_version_minor
+        w.writeUInt32BigEndian(word)               // profile/level/flags/compat/reserved
+        w.writeBytes(Data(repeating: 0, count: 18)) // 4×UInt32 reserved + extra padding (24 total)
+        let data = buildMP4WithVisualChildBox(boxType: "dvcC", boxData: w.data)
+
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        let dv = try XCTUnwrap(stream.hdr?.dolbyVision)
+        XCTAssertEqual(dv.versionMajor, 1)
+        XCTAssertEqual(dv.versionMinor, 0)
+        XCTAssertEqual(dv.profile, 8)
+        XCTAssertEqual(dv.level, 4)
+        XCTAssertTrue(dv.rpuPresent)
+        XCTAssertFalse(dv.elPresent)
+        XCTAssertTrue(dv.blPresent)
+        XCTAssertEqual(dv.blSignalCompatibilityID, 4)  // HLG-compatible
+    }
+
+    func testStreamWithoutHDRBoxesHasNilHDR() throws {
+        let data = buildMP4WithTrack(width: 1920, height: 1080, handlerType: "vide", codec: "avc1")
+        let metadata = try VideoMetadata.read(from: data)
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        XCTAssertNil(stream.hdr, "SDR streams should not synthesize an empty HDRMetadata")
+    }
+
+    /// Build an MP4 with a single video track whose visual sample entry contains
+    /// the requested child box (e.g. "mdcv", "clli", "dvcC"). The fixed-size
+    /// portion of the VisualSampleEntry is constructed precisely so the parser
+    /// finds its width, height, and depth fields where ISO/IEC 14496-12 §8.5.2
+    /// expects them.
+    private func buildMP4WithVisualChildBox(boxType: String, boxData: Data) -> Data {
+        var writer = BinaryWriter(capacity: 1024)
+        writeFtyp(&writer, brand: "isom")
+
+        var mvhdWriter = BinaryWriter(capacity: 128)
+        mvhdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhdWriter.writeBytes(Data(repeating: 0, count: 96))
+        let mvhdBox = buildBox("mvhd", data: mvhdWriter.data)
+
+        var tkhdWriter = BinaryWriter(capacity: 128)
+        tkhdWriter.writeBytes([0x00, 0x00, 0x00, 0x03])
+        tkhdWriter.writeBytes(Data(repeating: 0, count: 76))
+        tkhdWriter.writeUInt32BigEndian(UInt32(1920) << 16)
+        tkhdWriter.writeUInt32BigEndian(UInt32(1080) << 16)
+        let tkhdBox = buildBox("tkhd", data: tkhdWriter.data)
+
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4))
+        hdlrWriter.writeString("vide", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12))
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        // Build a properly-sized avc1 VisualSampleEntry (78 bytes payload after
+        // the 8-byte box header, plus the child HDR box).
+        var avc1Payload = BinaryWriter(capacity: 256)
+        avc1Payload.writeBytes(Data(repeating: 0, count: 6))     // SampleEntry reserved
+        avc1Payload.writeUInt16BigEndian(1)                       // data_reference_index
+        avc1Payload.writeBytes(Data(repeating: 0, count: 16))    // pre_defined + reserved + pre_defined[3]
+        avc1Payload.writeUInt16BigEndian(1920)                    // width
+        avc1Payload.writeUInt16BigEndian(1080)                    // height
+        avc1Payload.writeUInt32BigEndian(0x00480000)              // horizresolution (72 dpi)
+        avc1Payload.writeUInt32BigEndian(0x00480000)              // vertresolution
+        avc1Payload.writeUInt32BigEndian(0)                       // reserved
+        avc1Payload.writeUInt16BigEndian(1)                       // frame_count
+        avc1Payload.writeBytes(Data(repeating: 0, count: 32))    // compressorname (Pascal-padded)
+        avc1Payload.writeUInt16BigEndian(0x0018)                  // depth = 24
+        avc1Payload.writeUInt16BigEndian(0xFFFF)                  // pre_defined = -1
+        let childBox = buildBox(boxType, data: boxData)
+        avc1Payload.writeBytes(childBox)
+        let avc1Box = buildBox("avc1", data: avc1Payload.data)
+
+        var stsdWriter = BinaryWriter(capacity: 256)
+        stsdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        stsdWriter.writeUInt32BigEndian(1)                        // entry_count
+        stsdWriter.writeBytes(avc1Box)
+        let stsdBox = buildBox("stsd", data: stsdWriter.data)
+
+        let stblBox = buildBox("stbl", data: stsdBox)
+        let minfBox = buildBox("minf", data: stblBox)
+        let mdiaBox = buildBox("mdia", data: hdlrBox + minfBox)
+        let trakBox = buildBox("trak", data: tkhdBox + mdiaBox)
+
+        let moovBox = buildBox("moov", data: mvhdBox + trakBox)
+        writer.writeBytes(moovBox)
+        return writer.data
+    }
+
     /// Build an MP4 with QuickTime metadata (ilst items).
     func testParseLivePhotoContentIdentifier() throws {
         let uuid = "B12C123E-4567-89AB-CDEF-012345678901"

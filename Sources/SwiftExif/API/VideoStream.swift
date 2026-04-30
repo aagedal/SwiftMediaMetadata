@@ -161,6 +161,11 @@ public struct VideoStream: Sendable, Equatable {
     /// (negative = clockwise). `-90` is the typical iPhone-portrait value.
     /// Nil when the matrix is identity or the container has no display matrix.
     public var rotation: Int?
+    /// HDR side-data: SMPTE ST 2086 mastering display color volume,
+    /// CTA-861.3 content light level, Dolby Vision configuration. Populated
+    /// from `mdcv`, `clli`, and `dvcC`/`dvvC` boxes inside the visual sample
+    /// entry. Nil for SDR streams.
+    public var hdr: HDRMetadata?
 
     public init(index: Int) {
         self.index = index
@@ -218,6 +223,109 @@ public struct VideoStream: Sendable, Equatable {
             && lhs.timecode == rhs.timecode
             && lhs.title == rhs.title
             && lhs.rotation == rhs.rotation
+            && lhs.hdr == rhs.hdr
+    }
+}
+
+/// HDR side-data attached to a video stream.
+///
+/// Carries any combination of SMPTE ST 2086 mastering display color volume,
+/// CTA-861.3 content light level, and Dolby Vision configuration records
+/// found in container-level boxes (`mdcv`, `clli`, `dvcC`/`dvvC`). Each field
+/// is optional because containers can declare any subset.
+public struct HDRMetadata: Sendable, Equatable {
+    public var masteringDisplay: HDRMasteringDisplay?
+    public var contentLightLevel: HDRContentLightLevel?
+    public var dolbyVision: HDRDolbyVisionConfig?
+
+    public init(
+        masteringDisplay: HDRMasteringDisplay? = nil,
+        contentLightLevel: HDRContentLightLevel? = nil,
+        dolbyVision: HDRDolbyVisionConfig? = nil
+    ) {
+        self.masteringDisplay = masteringDisplay
+        self.contentLightLevel = contentLightLevel
+        self.dolbyVision = dolbyVision
+    }
+
+    /// True when at least one HDR signal is present.
+    public var isPresent: Bool {
+        masteringDisplay != nil || contentLightLevel != nil || dolbyVision != nil
+    }
+}
+
+/// SMPTE ST 2086 mastering-display primaries and luminance bounds. Coordinates
+/// are CIE 1931 xy chromaticities; luminance is in cd/m^2 (nits).
+public struct HDRMasteringDisplay: Sendable, Equatable {
+    public var redX: Double
+    public var redY: Double
+    public var greenX: Double
+    public var greenY: Double
+    public var blueX: Double
+    public var blueY: Double
+    public var whitePointX: Double
+    public var whitePointY: Double
+    public var maxLuminance: Double
+    public var minLuminance: Double
+
+    public init(
+        redX: Double, redY: Double,
+        greenX: Double, greenY: Double,
+        blueX: Double, blueY: Double,
+        whitePointX: Double, whitePointY: Double,
+        maxLuminance: Double, minLuminance: Double
+    ) {
+        self.redX = redX; self.redY = redY
+        self.greenX = greenX; self.greenY = greenY
+        self.blueX = blueX; self.blueY = blueY
+        self.whitePointX = whitePointX; self.whitePointY = whitePointY
+        self.maxLuminance = maxLuminance; self.minLuminance = minLuminance
+    }
+}
+
+/// CTA-861.3 content light level — peak frame brightness (MaxCLL) and peak
+/// frame-average brightness (MaxFALL), both in cd/m^2.
+public struct HDRContentLightLevel: Sendable, Equatable {
+    public var maxCLL: Int
+    public var maxFALL: Int
+
+    public init(maxCLL: Int, maxFALL: Int) {
+        self.maxCLL = maxCLL
+        self.maxFALL = maxFALL
+    }
+}
+
+/// DOVIDecoderConfigurationRecord (Dolby Vision spec, ETSI TS 103 572).
+/// Carried in `dvcC` (legacy / single-layer) and `dvvC` (cross-layer) boxes
+/// inside the HEVC / AVC / AV1 visual sample entry on iPhone, recent Apple
+/// silicon Macs, and Dolby-mastered broadcast streams.
+public struct HDRDolbyVisionConfig: Sendable, Equatable {
+    public var versionMajor: Int
+    public var versionMinor: Int
+    public var profile: Int
+    public var level: Int
+    public var rpuPresent: Bool
+    public var elPresent: Bool
+    public var blPresent: Bool
+    /// Backward-compatibility identifier. 0 = Dolby Vision only,
+    /// 1 = HDR10, 2 = SDR, 4 = HLG, 6 = Dolby Vision DV+. Other values
+    /// reserved.
+    public var blSignalCompatibilityID: Int
+
+    public init(
+        versionMajor: Int, versionMinor: Int,
+        profile: Int, level: Int,
+        rpuPresent: Bool, elPresent: Bool, blPresent: Bool,
+        blSignalCompatibilityID: Int
+    ) {
+        self.versionMajor = versionMajor
+        self.versionMinor = versionMinor
+        self.profile = profile
+        self.level = level
+        self.rpuPresent = rpuPresent
+        self.elPresent = elPresent
+        self.blPresent = blPresent
+        self.blSignalCompatibilityID = blSignalCompatibilityID
     }
 }
 
