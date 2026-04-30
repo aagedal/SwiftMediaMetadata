@@ -25,6 +25,38 @@ public enum XMPNamespace: Sendable {
     public static let pdf       = "http://ns.adobe.com/pdf/1.3/"
     public static let crs       = "http://ns.adobe.com/camera-raw-settings/1.0/"
     public static let xmpDM     = "http://ns.adobe.com/xmp/1.0/DynamicMedia/"
+    /// Adobe Lightroom — `lr:hierarchicalSubject` (Bag of "Family|Vacation|Beach"-style
+    /// pipe-delimited paths) is how Lightroom Classic and Photo Mechanic store
+    /// hierarchical keywords.
+    public static let lr        = "http://ns.adobe.com/lightroom/1.0/"
+    /// Creative Commons rights namespace (cc:license, cc:attributionURL, etc.).
+    public static let cc        = "http://creativecommons.org/ns#"
+    /// Publishing Requirements for Industry Standard Metadata — used by news
+    /// wire services and DAMs alongside IPTC photometadata.
+    public static let prism     = "http://prismstandard.org/namespaces/basic/2.0/"
+    /// C2PA / CAI provenance carried in XMP (claim generators, hard bindings).
+    /// Survives even when the JUMBF block is stripped from the carrier file.
+    public static let c2pa      = "http://ns.c2pa.org/c2pa/1.0/"
+
+    // MARK: - Google Spatial / MotionPhoto namespaces (https://developers.google.com/streetview/spherical-metadata)
+
+    /// Google panorama metadata — full/cropped image dimensions, projection
+    /// type, initial view direction. Standard for 360 / spherical images
+    /// (Pixel, Ricoh Theta, Insta360, GoPro Max).
+    public static let gPano     = "http://ns.google.com/photos/1.0/panorama/"
+    /// Google MotionPhoto / spatial-media schema (`GCamera:MicroVideo`,
+    /// `GCamera:MotionPhoto`, etc.). Embedded MOVs in Pixel / Samsung
+    /// MotionPhoto JPEGs and HEICs.
+    public static let gCamera   = "http://ns.google.com/photos/1.0/camera/"
+    /// Spatial-audio companion to `gCamera`.
+    public static let gAudio    = "http://ns.google.com/photos/1.0/audio/"
+    /// Google motion-photo image-track schema (start frame, MIME, etc.).
+    public static let gImage    = "http://ns.google.com/photos/1.0/image/"
+    /// Google depth-map schema — depth/format/units for portrait-mode photos
+    /// (Pixel "Photos by Google" depth maps, ARCore output).
+    public static let gDepth    = "http://ns.google.com/photos/1.0/depthmap/"
+    /// Google focus / refocus namespace (blur radius, focal-table metadata).
+    public static let gFocus    = "http://ns.google.com/photos/1.0/focus/"
 
     /// Mapping from IPTC IIM tags to XMP namespace + property.
     public static let iimToXMP: [IPTCTag: (namespace: String, property: String)] = [
@@ -76,5 +108,15 @@ public enum XMPNamespace: Sendable {
         pdf: "pdf",
         crs: "crs",
         xmpDM: "xmpDM",
+        lr: "lr",
+        cc: "cc",
+        prism: "prism",
+        c2pa: "c2pa",
+        gPano: "GPano",
+        gCamera: "GCamera",
+        gAudio: "GAudio",
+        gImage: "GImage",
+        gDepth: "GDepth",
+        gFocus: "GFocus",
     ]
 }

@@ -937,4 +937,79 @@ public struct XMPData: Equatable, Sendable {
         guard let value = fields["\(ns)timeValue"], !value.isEmpty else { return nil }
         return XMPTimecode(timeValue: value, timeFormat: fields["\(ns)timeFormat"])
     }
+
+    // MARK: - Lightroom (lr:)
+
+    /// `lr:hierarchicalSubject` — a Bag of pipe-delimited keyword paths
+    /// (e.g. `["Family|Vacation|Beach", "Locations|Norway|Oslo"]`). Lightroom
+    /// Classic and Photo Mechanic both store hierarchical keywords here; the
+    /// flat tag list lives in `dc:subject`.
+    public var hierarchicalSubject: [String] {
+        get { arrayValue(namespace: XMPNamespace.lr, property: "hierarchicalSubject") }
+        set {
+            if newValue.isEmpty {
+                removeValue(namespace: XMPNamespace.lr, property: "hierarchicalSubject")
+            } else {
+                setValue(.array(newValue), namespace: XMPNamespace.lr, property: "hierarchicalSubject")
+            }
+        }
+    }
+
+    // MARK: - Creative Commons (cc:)
+
+    /// `cc:license` — Creative Commons license URI (e.g.
+    /// `https://creativecommons.org/licenses/by-sa/4.0/`).
+    public var creativeCommonsLicense: String? {
+        get { simpleValue(namespace: XMPNamespace.cc, property: "license") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.cc, property: "license") }
+            else { removeValue(namespace: XMPNamespace.cc, property: "license") }
+        }
+    }
+
+    /// `cc:attributionURL` — canonical URL the user should link to when
+    /// crediting the work.
+    public var creativeCommonsAttributionURL: String? {
+        get { simpleValue(namespace: XMPNamespace.cc, property: "attributionURL") }
+        set {
+            if let v = newValue { setValue(.simple(v), namespace: XMPNamespace.cc, property: "attributionURL") }
+            else { removeValue(namespace: XMPNamespace.cc, property: "attributionURL") }
+        }
+    }
+
+    // MARK: - Google Spatial / MotionPhoto (GCamera:, GPano:)
+
+    /// `GCamera:MotionPhoto` — set to "1" by Google's MotionPhoto encoders
+    /// (Pixel, recent Samsung phones) when the carrier file embeds a MOV
+    /// micro-video alongside the still image.
+    public var isGoogleMotionPhoto: Bool {
+        guard let s = simpleValue(namespace: XMPNamespace.gCamera, property: "MotionPhoto") else {
+            return false
+        }
+        return s == "1" || s.lowercased() == "true"
+    }
+
+    /// `GCamera:MicroVideoOffset` — byte offset from the end of file to the
+    /// start of the embedded MOV. Use this to extract the motion-photo MOV
+    /// without re-parsing the whole carrier.
+    public var googleMicroVideoOffset: Int? {
+        simpleValue(namespace: XMPNamespace.gCamera, property: "MicroVideoOffset").flatMap(Int.init)
+    }
+
+    /// `GPano:ProjectionType` — usually `"equirectangular"` for 360 photos.
+    public var panoramaProjectionType: String? {
+        simpleValue(namespace: XMPNamespace.gPano, property: "ProjectionType")
+    }
+
+    /// `GPano:FullPanoWidthPixels` — width of the *full* spherical canvas
+    /// the cropped image is sampled from. May exceed the JPEG's pixel width
+    /// for partial / cropped panoramas.
+    public var panoramaFullWidth: Int? {
+        simpleValue(namespace: XMPNamespace.gPano, property: "FullPanoWidthPixels").flatMap(Int.init)
+    }
+
+    /// `GPano:FullPanoHeightPixels` — height of the full spherical canvas.
+    public var panoramaFullHeight: Int? {
+        simpleValue(namespace: XMPNamespace.gPano, property: "FullPanoHeightPixels").flatMap(Int.init)
+    }
 }
