@@ -63,13 +63,16 @@ public struct MPEGReader: Sendable {
         if data.count >= 4 {
             let s = data.startIndex
             if data[s] == 0x47 {
+                metadata.formatLongName = "MPEG-TS (MPEG-2 Transport Stream)"
                 parseTransportStream(data, into: &metadata, packetOffset: 0, packetStride: 188)
             } else if data.count >= 192 * 4,
                       data[s + 4] == 0x47,
                       data[s + 196] == 0x47 {
                 // M2TS: 4-byte TP_extra_header + 188-byte TS packet = 192-byte stride.
+                metadata.formatLongName = "BDAV / M2TS"
                 parseTransportStream(data, into: &metadata, packetOffset: 4, packetStride: 192)
             } else {
+                metadata.formatLongName = "MPEG-PS (MPEG Program Stream)"
                 parseProgramStream(data, into: &metadata)
             }
         }
@@ -162,19 +165,23 @@ public struct MPEGReader: Sendable {
         packetStride: Int
     ) {
         // Walk up to ~9 MB of packet payload, enough to cover PAT/PMT and the
-        // first video sequence header in any typical stream.
+        // first SPS / sequence header / ADTS frame on every PID in any
+        // typical stream.
         let available = max(0, data.count - packetOffset)
         let maxPackets = min(available / packetStride, 48_000)
         let packetPayloadSize = 188
         var videoPIDs: [Int: TSStreamInfo] = [:]
         var audioPIDs: [Int: TSStreamInfo] = [:]
         var subtitlePIDs: [Int: TSStreamInfo] = [:]
+        var pcrPid: Int? = nil
+        var firstPCR: Double? = nil
+        var lastPCR: Double? = nil
 
         // Pass 1: find PAT → PMT → elementary stream types.
         var patPMTPids: Set<Int> = []
         for i in 0..<maxPackets {
             let packetStart = packetOffset + i * packetStride
-            let (pid, unitStart, payloadStart) = parseTSHeader(data, at: packetStart)
+            let (pid, unitStart, _, payloadStart) = parseTSHeaderExtended(data, at: packetStart)
             guard pid >= 0, let payloadStart else { continue }
             if pid == 0, unitStart {
                 let pmtPids = parsePAT(data, from: payloadStart, end: packetStart + packetPayloadSize)
@@ -184,34 +191,84 @@ public struct MPEGReader: Sendable {
             if patPMTPids.contains(pid), unitStart {
                 parsePMT(data, from: payloadStart, end: packetStart + packetPayloadSize,
                          videoPIDs: &videoPIDs, audioPIDs: &audioPIDs,
-                         subtitlePIDs: &subtitlePIDs)
+                         subtitlePIDs: &subtitlePIDs, pcrPid: &pcrPid)
             }
         }
 
-        // Pass 2: find the first video sequence header in any video PID's PES.
+        // Pass 2: PES reassembly per video/audio PID + PCR / PTS tracking.
         for i in 0..<maxPackets {
             let packetStart = packetOffset + i * packetStride
-            let (pid, unitStart, payloadStart) = parseTSHeader(data, at: packetStart)
-            guard pid >= 0, var info = videoPIDs[pid], let payloadStart else { continue }
-            if info.sequenceHeaderParsed { continue }
+            let (pid, unitStart, adaptationLen, payloadStart) =
+                parseTSHeaderExtended(data, at: packetStart)
+            guard pid >= 0 else { continue }
 
-            // Skip the PES header when this is a unit-start packet.
-            var esStart = payloadStart
-            if unitStart {
-                esStart = skipPESHeader(data, at: payloadStart, end: packetStart + packetPayloadSize) ?? payloadStart
+            // PCR carried in the adaptation field.
+            if let pcrPid, pid == pcrPid, adaptationLen > 0 {
+                if let pcr = parsePCRFromAdaptation(data, packetStart: packetStart, adaptationLen: adaptationLen) {
+                    if firstPCR == nil { firstPCR = pcr }
+                    lastPCR = pcr
+                }
             }
-            if esStart >= packetStart + packetPayloadSize { continue }
 
-            // Scan this packet's ES payload for a sequence header.
-            if let (w, h, fps, br, aspect) = findSequenceHeader(data, from: esStart, end: packetStart + packetPayloadSize) {
-                info.width = w
-                info.height = h
-                info.frameRate = fps
-                info.bitRate = br
-                info.displayWidth = aspect?.0
-                info.displayHeight = aspect?.1
-                info.sequenceHeaderParsed = true
-                videoPIDs[pid] = info
+            guard let payloadStart else { continue }
+            let payloadEnd = packetStart + packetPayloadSize
+
+            if videoPIDs[pid] != nil {
+                accumulatePES(
+                    data, payloadStart: payloadStart, payloadEnd: payloadEnd,
+                    unitStart: unitStart, info: &videoPIDs[pid]!, isVideo: true
+                )
+            } else if audioPIDs[pid] != nil {
+                accumulatePES(
+                    data, payloadStart: payloadStart, payloadEnd: payloadEnd,
+                    unitStart: unitStart, info: &audioPIDs[pid]!, isVideo: false
+                )
+            }
+        }
+
+        // Pass 3: tail-walk to capture the closing PCR. The head walk
+        // capped at 48 000 packets, so for files larger than ~9 MB the
+        // last PCR seen above is somewhere near the start. Re-scan the
+        // last 9 MB to pick up the actual final PCR for an accurate
+        // duration. Files under the head cap need no tail pass.
+        if pcrPid != nil, available > maxPackets * packetStride {
+            let tailBytes = min(available, 48_000 * packetStride)
+            let tailStart = packetOffset + available - tailBytes
+            // Realign to the next packet boundary.
+            let alignDelta = (tailStart - packetOffset) % packetStride
+            let alignedStart = tailStart - alignDelta
+            let tailPackets = (packetOffset + available - alignedStart) / packetStride
+            for i in 0..<tailPackets {
+                let packetStart = alignedStart + i * packetStride
+                let (pid, _, adaptationLen, _) = parseTSHeaderExtended(data, at: packetStart)
+                if pid == pcrPid, adaptationLen > 0 {
+                    if let pcr = parsePCRFromAdaptation(data, packetStart: packetStart, adaptationLen: adaptationLen) {
+                        lastPCR = pcr
+                    }
+                }
+            }
+        }
+
+        // Flush any residual PES buffers and run codec extractors so even
+        // streams where the closing access unit was only seen mid-walk
+        // surface their fields.
+        for (pid, var info) in videoPIDs where !info.done && !info.pesBuffer.isEmpty {
+            applyVideoExtractor(&info)
+            videoPIDs[pid] = info
+        }
+        for (pid, var info) in audioPIDs where !info.done && !info.pesBuffer.isEmpty {
+            applyAudioExtractor(&info)
+            audioPIDs[pid] = info
+        }
+
+        // Duration from PCR bookends. Handle 33-bit PCR wrap (~26 h).
+        if let f = firstPCR, let l = lastPCR {
+            var duration = l - f
+            if duration < 0 {
+                duration += Double(1 << 33) / 90_000.0
+            }
+            if duration > 0 {
+                metadata.duration = duration
             }
         }
 
@@ -221,6 +278,7 @@ public struct MPEGReader: Sendable {
             var stream = VideoStream(index: nextIndex); nextIndex += 1
             stream.codec = info.codec
             stream.codecName = info.codecName
+            stream.profile = info.profile
             stream.width = info.width
             stream.height = info.height
             stream.frameRate = info.frameRate
@@ -229,6 +287,17 @@ public struct MPEGReader: Sendable {
                dw != info.width || dh != info.height {
                 stream.displayWidth = dw
                 stream.displayHeight = dh
+            }
+            if let sar = info.sampleAspect { stream.pixelAspectRatio = sar }
+            stream.chromaSubsampling = info.chromaSubsampling
+            stream.bitDepth = info.bitDepth
+            stream.chromaLocation = info.chromaLocation
+            stream.colorInfo = info.color
+            stream.fieldOrder = info.fieldOrder
+            // Per-stream bit rate from PES byte / PTS-span if not advertised.
+            if stream.bitRate == nil,
+               let f = info.firstPTS, let l = info.lastPTS, l > f, info.byteCount > 0 {
+                stream.bitRate = Int(Double(info.byteCount) * 8.0 / (l - f))
             }
             metadata.videoStreams.append(stream)
             if metadata.bitRate == nil, let br = info.bitRate, br > 0 {
@@ -241,8 +310,16 @@ public struct MPEGReader: Sendable {
             var stream = AudioStream(index: audioIdx); audioIdx += 1
             stream.codec = info.codec
             stream.codecName = info.codecName
+            stream.profile = info.profile
+            stream.sampleRate = info.sampleRate
+            stream.channels = info.channels
+            stream.channelLayout = info.channelLayout
             stream.language = info.language
             if let br = info.bitRate, br > 0 { stream.bitRate = br }
+            if stream.bitRate == nil,
+               let f = info.firstPTS, let l = info.lastPTS, l > f, info.byteCount > 0 {
+                stream.bitRate = Int(Double(info.byteCount) * 8.0 / (l - f))
+            }
             metadata.audioStreams.append(stream)
             if metadata.audioCodec == nil { metadata.audioCodec = info.codec }
         }
@@ -256,27 +333,348 @@ public struct MPEGReader: Sendable {
             stream.isHearingImpaired = info.isHearingImpaired
             metadata.subtitleStreams.append(stream)
         }
+
+        // File-level bit rate falls out of duration + file size when the
+        // container didn't advertise one explicitly. Use Data byte count
+        // as a stand-in for fileSize here — the public read path overrides
+        // metadata.fileSize from the URL afterwards anyway.
+        if metadata.bitRate == nil, let duration = metadata.duration, duration > 0 {
+            let bytes = Int64(data.count)
+            metadata.bitRate = Int(Double(bytes) * 8.0 / duration)
+        }
     }
 
-    private struct TSStreamInfo {
-        var codec: String?
-        var codecName: String?
-        var width: Int?
-        var height: Int?
-        var frameRate: Double?
-        var bitRate: Int?
-        var displayWidth: Int?
-        var displayHeight: Int?
-        var language: String?
-        var isHearingImpaired: Bool?
-        var sequenceHeaderParsed: Bool = false
+    /// Per-PID PES accumulator. On a unit-start packet, flush the
+    /// accumulated payload via the codec extractor and start a fresh PES
+    /// buffer at the byte after the PES header. Tracks PTS bookends and
+    /// total byte counts for per-stream bit-rate calculation — those keep
+    /// growing even after codec extraction has succeeded, so we can divide
+    /// total bytes by total PTS span at the end.
+    private static func accumulatePES(
+        _ data: Data,
+        payloadStart: Int,
+        payloadEnd: Int,
+        unitStart: Bool,
+        info: inout TSStreamInfo,
+        isVideo: Bool
+    ) {
+        if unitStart {
+            // Flush any prior PES buffer before resetting (only matters
+            // when we haven't yet extracted codec params).
+            if !info.done, !info.pesBuffer.isEmpty {
+                if isVideo { applyVideoExtractor(&info) }
+                else { applyAudioExtractor(&info) }
+            }
+            info.pesBuffer.removeAll(keepingCapacity: true)
+            // Decode the PES header at payloadStart; consume PTS when present.
+            if let parsed = parsePESHeader(data, at: payloadStart, end: payloadEnd) {
+                if let pts = parsed.pts {
+                    if info.firstPTS == nil { info.firstPTS = pts }
+                    info.lastPTS = pts
+                }
+                let esStart = parsed.esStart
+                if esStart < payloadEnd {
+                    if !info.done {
+                        appendToPES(&info, data: data, from: esStart, end: payloadEnd)
+                    } else {
+                        // Just count bytes for per-stream bit-rate calc.
+                        info.byteCount += payloadEnd - esStart
+                    }
+                }
+            }
+            info.pesUnitStarted = true
+        } else if info.pesUnitStarted {
+            if !info.done {
+                appendToPES(&info, data: data, from: payloadStart, end: payloadEnd)
+            } else {
+                info.byteCount += payloadEnd - payloadStart
+            }
+        }
+
+        // Try to extract codec params eagerly. Some codecs (ADTS, AC-3)
+        // give us everything from a single sync frame and don't need a
+        // full PES.
+        if !info.done, info.pesBuffer.count >= 32 {
+            if isVideo { applyVideoExtractor(&info) }
+            else { applyAudioExtractor(&info) }
+        }
+
+        // Cap memory.
+        if info.pesBuffer.count > pesAccumulatorCap {
+            info.pesBuffer.removeFirst(info.pesBuffer.count - pesAccumulatorCap)
+        }
     }
 
-    /// Parse a single 188-byte TS packet header. Returns (pid, payloadUnitStart, payloadOffset-or-nil).
-    /// `payloadOffset` is nil when there is no payload (adaptation-field-only packet).
-    private static func parseTSHeader(_ data: Data, at packetStart: Int) -> (Int, Bool, Int?) {
+    private static func appendToPES(
+        _ info: inout TSStreamInfo,
+        data: Data,
+        from start: Int,
+        end: Int
+    ) {
+        guard start < end, end <= data.count else { return }
+        let chunk = data.subdata(in: (data.startIndex + start)..<(data.startIndex + end))
+        info.pesBuffer.append(chunk)
+        info.byteCount += chunk.count
+    }
+
+    /// Run the H.264 / H.265 / MPEG-2 SPS / sequence-header extractor
+    /// over the accumulated PES buffer. Sets `done` once all fields the
+    /// codec advertises have been collected.
+    private static func applyVideoExtractor(_ info: inout TSStreamInfo) {
+        guard !info.done else { return }
+        let buf = info.pesBuffer
+        switch info.codec {
+        case "avc1":
+            if extractH264Fields(from: buf, into: &info) {
+                info.sequenceHeaderParsed = true
+                info.done = true
+            }
+        case "hvc1":
+            if extractHEVCFields(from: buf, into: &info) {
+                info.sequenceHeaderParsed = true
+                info.done = true
+            }
+        case "mpeg1video", "mpeg2video":
+            if extractMPEGVideoFields(from: buf, into: &info) {
+                info.sequenceHeaderParsed = true
+                info.done = true
+            }
+        default:
+            break
+        }
+    }
+
+    private static func applyAudioExtractor(_ info: inout TSStreamInfo) {
+        guard !info.done else { return }
+        let buf = info.pesBuffer
+        switch info.codec {
+        case "aac":
+            if let f = MPEGBitstream.parseAACADTS(buf) {
+                applyAACFields(f, to: &info)
+                info.done = true
+            } else if let f = MPEGBitstream.parseAACLATM(buf) {
+                applyAACFields(f, to: &info)
+                info.done = true
+            }
+        case "ac3":
+            if let f = MPEGBitstream.parseAC3(buf) {
+                applyAC3Fields(f, to: &info)
+                info.done = true
+            }
+        case "eac3":
+            if let f = MPEGBitstream.parseEAC3(buf) {
+                applyAC3Fields(f, to: &info)
+                info.done = true
+            }
+        default:
+            break
+        }
+    }
+
+    private static func applyAACFields(_ f: MPEGBitstream.ADTSFields, to info: inout TSStreamInfo) {
+        if let p = f.profile {
+            info.profile = p
+            info.codecName = "AAC \(p)"
+        }
+        if let sr = f.sampleRate { info.sampleRate = sr }
+        if let ch = f.channels { info.channels = ch }
+        if let cl = f.channelLayout { info.channelLayout = cl }
+    }
+
+    private static func applyAC3Fields(_ f: MPEGBitstream.AC3Fields, to info: inout TSStreamInfo) {
+        if let sr = f.sampleRate { info.sampleRate = sr }
+        if let ch = f.channels { info.channels = ch }
+        if let cl = f.channelLayout { info.channelLayout = cl }
+        if info.bitRate == nil, let br = f.bitRate, br > 0 { info.bitRate = br }
+    }
+
+    /// Walk the accumulated PES buffer looking for an H.264 SPS NAL
+    /// (`nal_unit_type == 7`) and decode it. Returns true on success.
+    private static func extractH264Fields(from buf: Data, into info: inout TSStreamInfo) -> Bool {
+        for range in MPEGBitstream.annexBNALRanges(buf) {
+            guard !range.isEmpty else { continue }
+            let nalHeader = buf[buf.startIndex + range.lowerBound]
+            let nalType = Int(nalHeader & 0x1F)
+            if nalType != 7 { continue }
+            // Skip the 1-byte NAL header.
+            let rbspLower = range.lowerBound + 1
+            let rbspUpper = range.upperBound
+            guard rbspLower < rbspUpper else { continue }
+            let lo = buf.startIndex + rbspLower
+            let hi = buf.startIndex + rbspUpper
+            let raw = buf.subdata(in: lo..<hi)
+            let rbsp = MPEGBitstream.stripEmulationPrevention(raw)
+            guard let f = MPEGBitstream.parseH264SPS(rbsp) else { continue }
+            applyH264Fields(f, to: &info)
+            return true
+        }
+        return false
+    }
+
+    private static func extractHEVCFields(from buf: Data, into info: inout TSStreamInfo) -> Bool {
+        for range in MPEGBitstream.annexBNALRanges(buf) {
+            guard range.upperBound - range.lowerBound >= 2 else { continue }
+            let header0 = buf[buf.startIndex + range.lowerBound]
+            // HEVC NAL header is 2 bytes; nal_unit_type is bits 1-6 of byte 0.
+            let nalType = Int((header0 >> 1) & 0x3F)
+            if nalType != 33 { continue }
+            let rbspLower = range.lowerBound + 2
+            let rbspUpper = range.upperBound
+            guard rbspLower < rbspUpper else { continue }
+            let lo = buf.startIndex + rbspLower
+            let hi = buf.startIndex + rbspUpper
+            let raw = buf.subdata(in: lo..<hi)
+            let rbsp = MPEGBitstream.stripEmulationPrevention(raw)
+            guard let f = MPEGBitstream.parseHEVCSPS(rbsp) else { continue }
+            applyHEVCFields(f, to: &info)
+            return true
+        }
+        return false
+    }
+
+    private static func extractMPEGVideoFields(from buf: Data, into info: inout TSStreamInfo) -> Bool {
+        guard let header = findSequenceHeader(buf, from: 0, end: buf.count) else { return false }
+        let (w, h, fps, br, aspect) = header
+        info.width = w
+        info.height = h
+        info.frameRate = fps
+        if br > 0, info.bitRate == nil { info.bitRate = br }
+        if let aspect, aspect.0 > 0, aspect.1 > 0, aspect != (w, h) {
+            info.displayWidth = aspect.0
+            info.displayHeight = aspect.1
+        }
+        // Optional sequence_extension that follows sets progressive_sequence
+        // and finer chroma_format / size_extension. Best-effort.
+        applyMPEG2SequenceExtension(from: buf, into: &info)
+        return true
+    }
+
+    private static func applyH264Fields(_ f: MPEGBitstream.H264SPSFields, to info: inout TSStreamInfo) {
+        if let p = f.profile { info.profile = p }
+        if let w = f.width, w > 0 { info.width = w }
+        if let h = f.height, h > 0 { info.height = h }
+        if let cs = f.chromaSubsampling { info.chromaSubsampling = cs }
+        if let bd = f.bitDepth { info.bitDepth = bd }
+        if let sar = f.sampleAspect { info.sampleAspect = sar }
+        if let dar = f.displayAspect { info.displayWidth = dar.0; info.displayHeight = dar.1 }
+        if let fps = f.frameRate, fps > 0 { info.frameRate = fps }
+        if let color = f.color { info.color = color }
+        if let cl = f.chromaLocation { info.chromaLocation = cl }
+        if let order = f.fieldOrder { info.fieldOrder = order }
+    }
+
+    private static func applyHEVCFields(_ f: MPEGBitstream.HEVCSPSFields, to info: inout TSStreamInfo) {
+        if let p = f.profile { info.profile = p }
+        if let w = f.width, w > 0 { info.width = w }
+        if let h = f.height, h > 0 { info.height = h }
+        if let cs = f.chromaSubsampling { info.chromaSubsampling = cs }
+        if let bd = f.bitDepth { info.bitDepth = bd }
+        if let sar = f.sampleAspect { info.sampleAspect = sar }
+        if let dar = f.displayAspect { info.displayWidth = dar.0; info.displayHeight = dar.1 }
+        if let fps = f.frameRate, fps > 0 { info.frameRate = fps }
+        if let color = f.color { info.color = color }
+        if let cl = f.chromaLocation { info.chromaLocation = cl }
+    }
+
+    /// Best-effort MPEG-2 sequence_extension scan. Looks for the
+    /// `00 00 01 B5` extension start code followed by `1` (sequence
+    /// extension identifier in the high nibble of the next byte) and
+    /// pulls out progressive_sequence, chroma_format, and the
+    /// horizontal/vertical_size_extension bits.
+    private static func applyMPEG2SequenceExtension(from buf: Data, into info: inout TSStreamInfo) {
+        let n = buf.count
+        var i = 0
+        while i + 8 < n {
+            if buf[buf.startIndex + i] == 0,
+               buf[buf.startIndex + i + 1] == 0,
+               buf[buf.startIndex + i + 2] == 1,
+               buf[buf.startIndex + i + 3] == 0xB5 {
+                let b4 = buf[buf.startIndex + i + 4]
+                if (b4 >> 4) == 0x1 {
+                    // sequence_extension layout (after the 4-bit ID):
+                    //   8 bits profile_and_level
+                    //   1 bit progressive_sequence
+                    //   2 bits chroma_format
+                    //   2 bits horizontal_size_extension
+                    //   2 bits vertical_size_extension
+                    let b5 = buf[buf.startIndex + i + 5]
+                    let progressive = (b5 & 0x08) != 0
+                    let chromaFmt = (b5 >> 1) & 0x03
+                    if progressive { info.fieldOrder = .progressive }
+                    switch chromaFmt {
+                    case 1: info.chromaSubsampling = "4:2:0"
+                    case 2: info.chromaSubsampling = "4:2:2"
+                    case 3: info.chromaSubsampling = "4:4:4"
+                    default: break
+                    }
+                    return
+                }
+            }
+            i += 1
+        }
+    }
+
+    /// Parse a PES header at the given offset. Returns the offset at
+    /// which ES data starts, plus the optional PTS (in seconds at 90 kHz).
+    private static func parsePESHeader(_ data: Data, at offset: Int, end: Int) -> (esStart: Int, pts: Double?)? {
+        guard offset + 9 <= end else { return nil }
+        let s = data.startIndex + offset
+        guard data[s] == 0x00, data[s + 1] == 0x00, data[s + 2] == 0x01 else { return nil }
+        let flags = data[s + 7]
+        let headerDataLen = Int(data[s + 8])
+        let esStart = offset + 9 + headerDataLen
+        var pts: Double? = nil
+        let ptsFlags = (flags & 0xC0) >> 6
+        if ptsFlags != 0, headerDataLen >= 5, offset + 9 + 5 <= end {
+            let p0 = UInt64(data[s + 9])
+            let p1 = UInt64(data[s + 10])
+            let p2 = UInt64(data[s + 11])
+            let p3 = UInt64(data[s + 12])
+            let p4 = UInt64(data[s + 13])
+            // 33-bit PTS reassembled across 5 bytes per ISO/IEC 13818-1.
+            let raw = ((p0 >> 1) & 0x07) << 30
+                | (p1 << 22)
+                | ((p2 >> 1) & 0x7F) << 15
+                | (p3 << 7)
+                | ((p4 >> 1) & 0x7F)
+            pts = Double(raw) / 90_000.0
+        }
+        return esStart < end ? (esStart, pts) : nil
+    }
+
+    /// Decode a 6-byte PCR field from the adaptation field of a TS
+    /// packet. Returns the PCR in seconds, or nil when the PCR_flag
+    /// isn't set or the bytes aren't present.
+    private static func parsePCRFromAdaptation(_ data: Data, packetStart: Int, adaptationLen: Int) -> Double? {
+        // adaptation_field begins at packetStart + 4; byte 0 is the
+        // length, byte 1 is the flags byte. PCR field needs 6 bytes
+        // after the flags byte → total ≥ length(1) + flags(1) + 6 = 8.
+        guard adaptationLen >= 8 else { return nil }
+        let s = data.startIndex + packetStart + 4
+        guard s + 8 <= data.endIndex else { return nil }
+        let flags = data[s + 1]
+        guard (flags & 0x10) != 0 else { return nil } // PCR_flag
+        let p0 = UInt64(data[s + 2])
+        let p1 = UInt64(data[s + 3])
+        let p2 = UInt64(data[s + 4])
+        let p3 = UInt64(data[s + 5])
+        let p4 = UInt64(data[s + 6])
+        let p5 = UInt64(data[s + 7])
+        let pcrBase = (p0 << 25) | (p1 << 17) | (p2 << 9) | (p3 << 1) | ((p4 >> 7) & 0x1)
+        let pcrExt = ((p4 & 0x01) << 8) | p5
+        return Double(pcrBase) / 90_000.0 + Double(pcrExt) / 27_000_000.0
+    }
+
+    /// Parse a 188-byte TS packet header. Returns (pid,
+    /// payloadUnitStart, total adaptation-field bytes including the
+    /// length byte, payloadOffset-or-nil). `adaptationLen == 0` means
+    /// no adaptation field; `payloadOffset == nil` means the packet has
+    /// no payload (adaptation-field-only or out-of-bounds).
+    private static func parseTSHeaderExtended(_ data: Data, at packetStart: Int)
+        -> (pid: Int, payloadUnitStart: Bool, adaptationLen: Int, payloadOffset: Int?)
+    {
         guard packetStart + 4 <= data.count, data[data.startIndex + packetStart] == 0x47 else {
-            return (-1, false, nil)
+            return (-1, false, 0, nil)
         }
         let s = data.startIndex + packetStart
         let flags1 = data[s + 1]
@@ -288,16 +686,61 @@ public struct MPEGReader: Sendable {
         let hasAdaptation = (adaptationByte & 0x20) != 0
         let hasPayload = (adaptationByte & 0x10) != 0
 
-        guard hasPayload else { return (pid, payloadUnitStart, nil) }
+        var adaptationLen = 0
         var payloadOffset = 4
         if hasAdaptation {
-            guard packetStart + 4 + 1 <= data.count else { return (pid, payloadUnitStart, nil) }
-            let adLen = Int(data[s + 4])
-            payloadOffset = 4 + 1 + adLen
+            guard packetStart + 4 + 1 <= data.count else { return (pid, payloadUnitStart, 0, nil) }
+            adaptationLen = Int(data[s + 4]) + 1 // include the length byte itself
+            payloadOffset = 4 + adaptationLen
         }
-        if payloadOffset >= 188 { return (pid, payloadUnitStart, nil) }
-        return (pid, payloadUnitStart, packetStart + payloadOffset)
+        if !hasPayload || payloadOffset >= 188 {
+            return (pid, payloadUnitStart, adaptationLen, nil)
+        }
+        return (pid, payloadUnitStart, adaptationLen, packetStart + payloadOffset)
     }
+
+    private struct TSStreamInfo {
+        var codec: String?
+        var codecName: String?
+        var profile: String?
+        var level: String?
+        var width: Int?
+        var height: Int?
+        var frameRate: Double?
+        var bitRate: Int?
+        var displayWidth: Int?
+        var displayHeight: Int?
+        var sampleAspect: (Int, Int)?
+        var language: String?
+        var isHearingImpaired: Bool?
+        var sequenceHeaderParsed: Bool = false
+        // Codec-parameter extraction state.
+        var chromaSubsampling: String?
+        var bitDepth: Int?
+        var chromaLocation: String?
+        var color: VideoColorInfo?
+        var fieldOrder: VideoFieldOrder?
+        // Audio-only fields.
+        var sampleRate: Int?
+        var channels: Int?
+        var channelLayout: String?
+        // PES reassembly state — accumulated PES payload bytes for the
+        // current access unit, plus a flag set once we've seen the first
+        // unit-start so we know when to flush.
+        var pesBuffer: Data = Data()
+        var pesUnitStarted: Bool = false
+        // Per-stream timing for ffprobe-parity per-stream bit rate.
+        var firstPTS: Double?
+        var lastPTS: Double?
+        var byteCount: Int = 0
+        var done: Bool = false
+    }
+
+    /// Cap on the per-PID PES accumulator. The first SPS / PPS / IDR
+    /// access unit in any sane H.264/H.265 stream is well under this; the
+    /// cap exists purely to bound memory on bizarre encoders that hold
+    /// codec parameters back behind hundreds of KB of B-frames.
+    private static let pesAccumulatorCap: Int = 256 * 1024
 
     /// PAT body layout (after the pointer field, once we've skipped it):
     ///   table_id(1) + section_syntax(1) + section_length(2) + transport_stream_id(2) +
@@ -330,7 +773,8 @@ public struct MPEGReader: Sendable {
         end: Int,
         videoPIDs: inout [Int: TSStreamInfo],
         audioPIDs: inout [Int: TSStreamInfo],
-        subtitlePIDs: inout [Int: TSStreamInfo]
+        subtitlePIDs: inout [Int: TSStreamInfo],
+        pcrPid: inout Int?
     ) {
         guard start < end else { return }
         var s = start
@@ -340,6 +784,13 @@ public struct MPEGReader: Sendable {
 
         let sectionLength = (Int(data[data.startIndex + s + 1] & 0x0F) << 8) | Int(data[data.startIndex + s + 2])
         let sectionEnd = min(s + 3 + sectionLength - 4, end)
+
+        // PCR_PID at offset s+8..9 (13 bits, top 3 bits are reserved).
+        if pcrPid == nil {
+            let pid = (Int(data[data.startIndex + s + 8] & 0x1F) << 8)
+                | Int(data[data.startIndex + s + 9])
+            if pid != 0x1FFF { pcrPid = pid }
+        }
 
         // Program_info_length at offset s+10..11
         let programInfoLength = (Int(data[data.startIndex + s + 10] & 0x0F) << 8) | Int(data[data.startIndex + s + 11])
@@ -364,20 +815,20 @@ public struct MPEGReader: Sendable {
                 var info = videoPIDs[pid] ?? TSStreamInfo()
                 info.codec = "avc1"
                 info.codecName = "H.264 / AVC"
-                info.sequenceHeaderParsed = true // SPS parsing is out of scope
                 applyMaxBitRate(esDescriptors, to: &info)
                 videoPIDs[pid] = info
             case 0x24:
                 var info = videoPIDs[pid] ?? TSStreamInfo()
                 info.codec = "hvc1"
                 info.codecName = "H.265 / HEVC"
-                info.sequenceHeaderParsed = true
                 applyMaxBitRate(esDescriptors, to: &info)
                 videoPIDs[pid] = info
             case 0x10:
                 var info = videoPIDs[pid] ?? TSStreamInfo()
                 info.codec = "mp4v"
                 info.codecName = "MPEG-4 Visual"
+                // No bitstream parser yet for MPEG-4 Visual — keep the
+                // codec-only behaviour by marking it pre-parsed.
                 info.sequenceHeaderParsed = true
                 applyMaxBitRate(esDescriptors, to: &info)
                 videoPIDs[pid] = info
