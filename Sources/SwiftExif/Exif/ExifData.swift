@@ -71,6 +71,30 @@ public struct ExifData: Equatable, Sendable {
         exifIFD?.entry(for: ExifTag.lensMake)?.stringValue(endian: byteOrder)
     }
 
+    public var bodySerialNumber: String? {
+        exifIFD?.entry(for: ExifTag.bodySerialNumber)?.stringValue(endian: byteOrder)
+    }
+
+    public var lensSerialNumber: String? {
+        exifIFD?.entry(for: ExifTag.lensSerialNumber)?.stringValue(endian: byteOrder)
+    }
+
+    public var cameraOwnerName: String? {
+        exifIFD?.entry(for: ExifTag.cameraOwnerName)?.stringValue(endian: byteOrder)
+    }
+
+    public var imageUniqueID: String? {
+        exifIFD?.entry(for: ExifTag.imageUniqueID)?.stringValue(endian: byteOrder)
+    }
+
+    /// Subject distance in meters. Returns nil if absent or denominator is zero.
+    /// Spec: a numerator of 0xFFFFFFFF means "infinity"; 0 means "unknown".
+    public var subjectDistance: Double? {
+        guard let r = exifIFD?.entry(for: ExifTag.subjectDistance)?.rationalValue(endian: byteOrder),
+              r.denominator > 0 else { return nil }
+        return Double(r.numerator) / Double(r.denominator)
+    }
+
     public var apertureValue: (numerator: UInt32, denominator: UInt32)? {
         exifIFD?.entry(for: ExifTag.apertureValue)?.rationalValue(endian: byteOrder)
     }
@@ -143,6 +167,52 @@ public struct ExifData: Equatable, Sendable {
               let lon = gpsIFD?.entry(for: ExifTag.gpsLongitude) else { return nil }
         let degrees = parseGPSCoordinate(lon, endian: byteOrder)
         return ref == "W" ? -degrees : degrees
+    }
+
+    /// Altitude in meters. Sign comes from GPSAltitudeRef (0 = above sea level, 1 = below).
+    public var gpsAltitude: Double? {
+        guard let r = gpsIFD?.entry(for: ExifTag.gpsAltitude)?.rationalValue(endian: byteOrder),
+              r.denominator > 0 else { return nil }
+        let value = Double(r.numerator) / Double(r.denominator)
+        let ref = gpsIFD?.entry(for: ExifTag.gpsAltitudeRef)?.valueData.first ?? 0
+        return ref == 1 ? -value : value
+    }
+
+    /// Image direction in degrees (0–360). Use `gpsImgDirectionRef` to know if true or magnetic north.
+    public var gpsImgDirection: Double? {
+        guard let r = gpsIFD?.entry(for: ExifTag.gpsImgDirection)?.rationalValue(endian: byteOrder),
+              r.denominator > 0 else { return nil }
+        return Double(r.numerator) / Double(r.denominator)
+    }
+
+    /// "T" (true north) or "M" (magnetic north).
+    public var gpsImgDirectionRef: String? {
+        gpsIFD?.entry(for: ExifTag.gpsImgDirectionRef)?.stringValue(endian: byteOrder)
+    }
+
+    /// Bearing to destination in degrees. Use `gpsDestBearingRef` to know if true or magnetic.
+    public var gpsDestBearing: Double? {
+        guard let r = gpsIFD?.entry(for: ExifTag.gpsDestBearing)?.rationalValue(endian: byteOrder),
+              r.denominator > 0 else { return nil }
+        return Double(r.numerator) / Double(r.denominator)
+    }
+
+    public var gpsDestBearingRef: String? {
+        gpsIFD?.entry(for: ExifTag.gpsDestBearingRef)?.stringValue(endian: byteOrder)
+    }
+
+    /// Dilution of precision. Lower is better (typical good fix < 5).
+    public var gpsDOP: Double? {
+        guard let r = gpsIFD?.entry(for: ExifTag.gpsDOP)?.rationalValue(endian: byteOrder),
+              r.denominator > 0 else { return nil }
+        return Double(r.numerator) / Double(r.denominator)
+    }
+
+    /// Horizontal positioning error in meters (EXIF 2.31+).
+    public var gpsHPositioningError: Double? {
+        guard let r = gpsIFD?.entry(for: ExifTag.gpsHPositioningError)?.rationalValue(endian: byteOrder),
+              r.denominator > 0 else { return nil }
+        return Double(r.numerator) / Double(r.denominator)
     }
 
     private func parseGPSCoordinate(_ entry: IFDEntry, endian: ByteOrder) -> Double {

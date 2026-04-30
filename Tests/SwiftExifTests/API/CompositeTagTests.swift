@@ -132,12 +132,157 @@ final class CompositeTagTests: XCTestCase {
         XCTAssertNil(CompositeTagCalculator.gpsPosition(exif))
     }
 
+    // MARK: - ImageSize
+
+    func testImageSize() {
+        let exif = makeExif(pixelX: 6000, pixelY: 4000)
+        XCTAssertEqual(CompositeTagCalculator.imageSize(exif), "6000x4000")
+    }
+
+    func testImageSizeMissing() {
+        let exif = ExifData(byteOrder: .bigEndian)
+        XCTAssertNil(CompositeTagCalculator.imageSize(exif))
+    }
+
+    // MARK: - SubSec date composites
+
+    func testSubSecDateTimeOriginal_baseOnly() {
+        let exif = makeExifWithDates(dateTimeOriginal: "2024:01:15 14:30:45")
+        XCTAssertEqual(
+            CompositeTagCalculator.subSecDateTimeOriginal(exif),
+            "2024:01:15 14:30:45"
+        )
+    }
+
+    func testSubSecDateTimeOriginal_withSubSec() {
+        let exif = makeExifWithDates(
+            dateTimeOriginal: "2024:01:15 14:30:45",
+            subSecTimeOriginal: "123"
+        )
+        XCTAssertEqual(
+            CompositeTagCalculator.subSecDateTimeOriginal(exif),
+            "2024:01:15 14:30:45.123"
+        )
+    }
+
+    func testSubSecDateTimeOriginal_withSubSecAndOffset() {
+        let exif = makeExifWithDates(
+            dateTimeOriginal: "2024:01:15 14:30:45",
+            subSecTimeOriginal: "456",
+            offsetTimeOriginal: "+02:00"
+        )
+        XCTAssertEqual(
+            CompositeTagCalculator.subSecDateTimeOriginal(exif),
+            "2024:01:15 14:30:45.456+02:00"
+        )
+    }
+
+    func testSubSecCreateDate() {
+        let exif = makeExifWithDates(
+            dateTimeDigitized: "2024:01:15 14:30:45",
+            subSecTimeDigitized: "789",
+            offsetTimeDigitized: "-05:00"
+        )
+        XCTAssertEqual(
+            CompositeTagCalculator.subSecCreateDate(exif),
+            "2024:01:15 14:30:45.789-05:00"
+        )
+    }
+
+    func testSubSecModifyDate() {
+        let exif = makeExifWithDates(
+            dateTime: "2024:01:15 14:30:45",
+            subSecTime: "001",
+            offsetTime: "Z"
+        )
+        XCTAssertEqual(
+            CompositeTagCalculator.subSecModifyDate(exif),
+            "2024:01:15 14:30:45.001Z"
+        )
+    }
+
+    func testSubSecMissingReturnsNil() {
+        let exif = ExifData(byteOrder: .bigEndian)
+        XCTAssertNil(CompositeTagCalculator.subSecDateTimeOriginal(exif))
+        XCTAssertNil(CompositeTagCalculator.subSecCreateDate(exif))
+        XCTAssertNil(CompositeTagCalculator.subSecModifyDate(exif))
+    }
+
+    // MARK: - GPSDateTime
+
+    func testGPSDateTime() {
+        let exif = makeExifWithGPSDateTime(date: "2024:01:15", h: 14, m: 30, s: 45.0)
+        XCTAssertEqual(CompositeTagCalculator.gpsDateTime(exif), "2024:01:15 14:30:45Z")
+    }
+
+    func testGPSDateTimeFractionalSeconds() {
+        let exif = makeExifWithGPSDateTime(date: "2024:01:15", h: 14, m: 30, s: 45.125)
+        XCTAssertEqual(CompositeTagCalculator.gpsDateTime(exif), "2024:01:15 14:30:45.125Z")
+    }
+
+    func testGPSDateTimeMissing() {
+        let exif = ExifData(byteOrder: .bigEndian)
+        XCTAssertNil(CompositeTagCalculator.gpsDateTime(exif))
+    }
+
+    // MARK: - CircleOfConfusion / Hyperfocal / DOF
+
+    func testCircleOfConfusionFullFrame() {
+        // 50mm lens, 50mm equiv → scale=1.0 → CoC=0.030 mm.
+        let exif = makeExif(focalLength: (50, 1), fl35mm: 50)
+        let coc = CompositeTagCalculator.circleOfConfusion(exif)
+        XCTAssertEqual(coc ?? 0, 0.030, accuracy: 0.0005)
+    }
+
+    func testCircleOfConfusionAPSC() {
+        // 50mm on APS-C reading 75mm equiv → scale=1.5 → CoC=0.020 mm.
+        let exif = makeExif(focalLength: (50, 1), fl35mm: 75)
+        let coc = CompositeTagCalculator.circleOfConfusion(exif)
+        XCTAssertEqual(coc ?? 0, 0.020, accuracy: 0.0005)
+    }
+
+    func testHyperfocalDistance() {
+        // 50mm f/8 full-frame → H ≈ 50²/(8·0.030)/1000 + 0.05 ≈ 10.46 m.
+        let exif = makeExif(focalLength: (50, 1), fl35mm: 50, fNumber: (8, 1))
+        let h = CompositeTagCalculator.hyperfocalDistance(exif)
+        XCTAssertEqual(h ?? 0, 10.46, accuracy: 0.1)
+    }
+
+    func testDepthOfFieldFiniteRange() {
+        // 50mm f/8 full-frame, subject at 5 m → near < 5 < far, both finite.
+        var exif = makeExif(focalLength: (50, 1), fl35mm: 50, fNumber: (8, 1))
+        addRationalToExifIFD(&exif, tag: ExifTag.subjectDistance, value: (500, 100))
+        guard let dof = CompositeTagCalculator.depthOfField(exif) else {
+            XCTFail("expected DOF")
+            return
+        }
+        XCTAssertTrue(dof.contains(" - "), "got: \(dof)")
+        XCTAssertFalse(dof.contains("inf"), "DOF at 5m should be finite, got: \(dof)")
+    }
+
+    func testDepthOfFieldInfiniteAtHyperfocal() {
+        // Subject distance equal to or beyond hyperfocal → far is "inf".
+        var exif = makeExif(focalLength: (50, 1), fl35mm: 50, fNumber: (8, 1))
+        addRationalToExifIFD(&exif, tag: ExifTag.subjectDistance, value: (10000, 100))  // 100 m
+        let dof = CompositeTagCalculator.depthOfField(exif)
+        XCTAssertNotNil(dof)
+        XCTAssertTrue(dof!.contains("inf"), "got: \(dof!)")
+    }
+
     // MARK: - Calculate All
 
     func testCalculateReturnsCompositePrefix() {
         let exif = makeExif(pixelX: 4000, pixelY: 3000)
         let result = CompositeTagCalculator.calculate(from: exif)
         XCTAssertTrue(result.keys.allSatisfy { $0.hasPrefix("Composite:") })
+    }
+
+    func testCalculateIncludesNewComposites() {
+        let exif = makeExif(pixelX: 6000, pixelY: 4000, focalLength: (50, 1), fl35mm: 50, fNumber: (8, 1))
+        let result = CompositeTagCalculator.calculate(from: exif)
+        XCTAssertEqual(result["Composite:ImageSize"] as? String, "6000x4000")
+        XCTAssertNotNil(result["Composite:CircleOfConfusion"] as? Double)
+        XCTAssertNotNil(result["Composite:HyperfocalDistance"] as? Double)
     }
 
     // MARK: - MetadataExporter Integration
@@ -239,6 +384,82 @@ final class CompositeTagTests: XCTestCase {
         var exifData = ExifData(byteOrder: endian)
         exifData.exifIFD = IFD(entries: exifEntries)
         return exifData
+    }
+
+    private func makeExifWithDates(
+        dateTime: String? = nil,
+        dateTimeOriginal: String? = nil,
+        dateTimeDigitized: String? = nil,
+        subSecTime: String? = nil,
+        subSecTimeOriginal: String? = nil,
+        subSecTimeDigitized: String? = nil,
+        offsetTime: String? = nil,
+        offsetTimeOriginal: String? = nil,
+        offsetTimeDigitized: String? = nil
+    ) -> ExifData {
+        let endian = ByteOrder.bigEndian
+        var exifEntries: [IFDEntry] = []
+        var ifd0Entries: [IFDEntry] = []
+
+        func ascii(_ tag: UInt16, _ s: String) -> IFDEntry {
+            let bytes = Data(s.utf8) + Data([0x00])
+            return IFDEntry(tag: tag, type: .ascii, count: UInt32(bytes.count), valueData: bytes)
+        }
+
+        if let s = dateTime { ifd0Entries.append(ascii(ExifTag.dateTime, s)) }
+        if let s = dateTimeOriginal { exifEntries.append(ascii(ExifTag.dateTimeOriginal, s)) }
+        if let s = dateTimeDigitized { exifEntries.append(ascii(ExifTag.dateTimeDigitized, s)) }
+        if let s = subSecTime { exifEntries.append(ascii(ExifTag.subSecTime, s)) }
+        if let s = subSecTimeOriginal { exifEntries.append(ascii(ExifTag.subSecTimeOriginal, s)) }
+        if let s = subSecTimeDigitized { exifEntries.append(ascii(ExifTag.subSecTimeDigitized, s)) }
+        if let s = offsetTime { exifEntries.append(ascii(ExifTag.offsetTime, s)) }
+        if let s = offsetTimeOriginal { exifEntries.append(ascii(ExifTag.offsetTimeOriginal, s)) }
+        if let s = offsetTimeDigitized { exifEntries.append(ascii(ExifTag.offsetTimeDigitized, s)) }
+
+        var exifData = ExifData(byteOrder: endian)
+        if !ifd0Entries.isEmpty { exifData.ifd0 = IFD(entries: ifd0Entries) }
+        exifData.exifIFD = IFD(entries: exifEntries)
+        return exifData
+    }
+
+    private func makeExifWithGPSDateTime(date: String, h: UInt32, m: UInt32, s: Double) -> ExifData {
+        let endian = ByteOrder.bigEndian
+        let dateBytes = Data(date.utf8) + Data([0x00])
+        let dateEntry = IFDEntry(tag: ExifTag.gpsDateStamp, type: .ascii,
+                                 count: UInt32(dateBytes.count), valueData: dateBytes)
+
+        // Encode H, M, S as three rationals. For S, scale by 1000 if fractional.
+        let sNum: UInt32
+        let sDen: UInt32
+        if s == floor(s) {
+            sNum = UInt32(s)
+            sDen = 1
+        } else {
+            sNum = UInt32(s * 1000.0 + 0.5)
+            sDen = 1000
+        }
+
+        var w = BinaryWriter(capacity: 24)
+        w.writeUInt32(h, endian: endian); w.writeUInt32(1, endian: endian)
+        w.writeUInt32(m, endian: endian); w.writeUInt32(1, endian: endian)
+        w.writeUInt32(sNum, endian: endian); w.writeUInt32(sDen, endian: endian)
+        let timeEntry = IFDEntry(tag: ExifTag.gpsTimeStamp, type: .rational,
+                                 count: 3, valueData: w.data)
+
+        var exif = ExifData(byteOrder: endian)
+        exif.gpsIFD = IFD(entries: [dateEntry, timeEntry])
+        return exif
+    }
+
+    private func addRationalToExifIFD(_ exif: inout ExifData, tag: UInt16, value: (UInt32, UInt32)) {
+        let endian = exif.byteOrder
+        var w = BinaryWriter(capacity: 8)
+        w.writeUInt32(value.0, endian: endian)
+        w.writeUInt32(value.1, endian: endian)
+        let entry = IFDEntry(tag: tag, type: .rational, count: 1, valueData: w.data)
+        var entries = exif.exifIFD?.entries ?? []
+        entries.append(entry)
+        exif.exifIFD = IFD(entries: entries)
     }
 
     private func makeExifWithGPS(lat: Double, lon: Double) -> ExifData {

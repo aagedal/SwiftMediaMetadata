@@ -17,6 +17,14 @@ public struct CompositeTagCalculator: Sendable {
         if let v = lightValue(exif) { dict["Composite:LightValue"] = v }
         if let v = fieldOfView(exif) { dict["Composite:FOV"] = v }
         if let v = gpsPosition(exif) { dict["Composite:GPSPosition"] = v }
+        if let v = imageSize(exif) { dict["Composite:ImageSize"] = v }
+        if let v = subSecDateTimeOriginal(exif) { dict["Composite:SubSecDateTimeOriginal"] = v }
+        if let v = subSecCreateDate(exif) { dict["Composite:SubSecCreateDate"] = v }
+        if let v = subSecModifyDate(exif) { dict["Composite:SubSecModifyDate"] = v }
+        if let v = gpsDateTime(exif) { dict["Composite:GPSDateTime"] = v }
+        if let v = circleOfConfusion(exif) { dict["Composite:CircleOfConfusion"] = v }
+        if let v = hyperfocalDistance(exif) { dict["Composite:HyperfocalDistance"] = v }
+        if let v = depthOfField(exif) { dict["Composite:DOF"] = v }
 
         return dict
     }
@@ -124,5 +132,137 @@ public struct CompositeTagCalculator: Sendable {
     public static func gpsPosition(_ exif: ExifData) -> String? {
         guard let lat = exif.gpsLatitude, let lon = exif.gpsLongitude else { return nil }
         return String(format: "%.6f, %.6f", lat, lon)
+    }
+
+    /// "WIDTHxHEIGHT" string from PixelXDimension/PixelYDimension.
+    public static func imageSize(_ exif: ExifData) -> String? {
+        guard let w = exif.pixelXDimension, let h = exif.pixelYDimension,
+              w > 0, h > 0 else { return nil }
+        return "\(w)x\(h)"
+    }
+
+    /// DateTimeOriginal merged with SubSecTimeOriginal and OffsetTimeOriginal.
+    /// Format: "YYYY:MM:DD HH:MM:SS[.SSS][±HH:MM]".
+    public static func subSecDateTimeOriginal(_ exif: ExifData) -> String? {
+        return mergeDateSubSecOffset(
+            base: exif.dateTimeOriginal,
+            subSec: exif.subSecTimeOriginal,
+            offset: exif.offsetTimeOriginal
+        )
+    }
+
+    /// DateTimeDigitized merged with SubSecTimeDigitized and OffsetTimeDigitized.
+    /// (ExifTool calls this "CreateDate"; the EXIF tag is DateTimeDigitized.)
+    public static func subSecCreateDate(_ exif: ExifData) -> String? {
+        let digitized = exif.exifIFD?
+            .entry(for: ExifTag.dateTimeDigitized)?
+            .stringValue(endian: exif.byteOrder)
+        return mergeDateSubSecOffset(
+            base: digitized,
+            subSec: exif.subSecTimeDigitized,
+            offset: exif.offsetTimeDigitized
+        )
+    }
+
+    /// DateTime (file modify) merged with SubSecTime and OffsetTime.
+    public static func subSecModifyDate(_ exif: ExifData) -> String? {
+        return mergeDateSubSecOffset(
+            base: exif.dateTime,
+            subSec: exif.subSecTime,
+            offset: exif.offsetTime
+        )
+    }
+
+    /// GPSDateStamp + GPSTimeStamp combined into "YYYY:MM:DD HH:MM:SSZ" (UTC).
+    public static func gpsDateTime(_ exif: ExifData) -> String? {
+        guard let dateStamp = exif.gpsIFD?
+                .entry(for: ExifTag.gpsDateStamp)?
+                .stringValue(endian: exif.byteOrder),
+              let timeEntry = exif.gpsIFD?.entry(for: ExifTag.gpsTimeStamp),
+              timeEntry.type == .rational,
+              timeEntry.count == 3,
+              timeEntry.valueData.count >= 24 else { return nil }
+
+        var reader = BinaryReader(data: timeEntry.valueData)
+        guard let hN = try? reader.readUInt32(endian: exif.byteOrder),
+              let hD = try? reader.readUInt32(endian: exif.byteOrder),
+              let mN = try? reader.readUInt32(endian: exif.byteOrder),
+              let mD = try? reader.readUInt32(endian: exif.byteOrder),
+              let sN = try? reader.readUInt32(endian: exif.byteOrder),
+              let sD = try? reader.readUInt32(endian: exif.byteOrder),
+              hD > 0, mD > 0, sD > 0 else { return nil }
+
+        let h = Int(hN / hD)
+        let m = Int(mN / mD)
+        let s = Double(sN) / Double(sD)
+        let secStr = s == floor(s) ? String(format: "%02d", Int(s)) : String(format: "%06.3f", s)
+        return String(format: "%@ %02d:%02d:%@Z", dateStamp, h, m, secStr)
+    }
+
+    /// Circle of confusion in mm. Uses full-frame reference of 0.030 mm scaled by crop factor.
+    public static func circleOfConfusion(_ exif: ExifData) -> Double? {
+        guard let scale = scaleFactor35efl(exif), scale > 0 else { return nil }
+        return 0.030 / scale
+    }
+
+    /// Hyperfocal distance in meters. H = f² / (N · c) + f, where f and c are in mm and result in m.
+    public static func hyperfocalDistance(_ exif: ExifData) -> Double? {
+        guard let fl = exif.focalLength, fl.denominator > 0 else { return nil }
+        let f = Double(fl.numerator) / Double(fl.denominator)
+        guard f > 0 else { return nil }
+
+        let n: Double
+        if let fn = exif.fNumber, fn.denominator > 0 {
+            n = Double(fn.numerator) / Double(fn.denominator)
+        } else if let av = apertureFromAPEX(exif) {
+            n = av
+        } else {
+            return nil
+        }
+        guard n > 0 else { return nil }
+
+        guard let c = circleOfConfusion(exif), c > 0 else { return nil }
+
+        // H in mm, then convert to meters.
+        let hMm = (f * f) / (n * c) + f
+        return hMm / 1000.0
+    }
+
+    /// Depth of field as "near m - far m" (or "near m - inf" beyond hyperfocal).
+    /// Requires SubjectDistance, FocalLength, and FNumber/ApertureValue.
+    public static func depthOfField(_ exif: ExifData) -> String? {
+        guard let s = exif.subjectDistance, s > 0,
+              let h = hyperfocalDistance(exif), h > 0,
+              let fl = exif.focalLength, fl.denominator > 0 else { return nil }
+        let fMm = Double(fl.numerator) / Double(fl.denominator)
+        let f = fMm / 1000.0  // focal length in meters
+        guard f > 0 else { return nil }
+
+        let near = (h * (s - f)) / (h + (s - f))
+        let denomFar = h - (s - f)
+        let nearStr = String(format: "%.2f m", near)
+        if denomFar <= 0 {
+            return "\(nearStr) - inf"
+        }
+        let far = (h * (s - f)) / denomFar
+        return String(format: "%@ - %.2f m", nearStr, far)
+    }
+
+    // MARK: - Private helpers
+
+    private static func mergeDateSubSecOffset(base: String?, subSec: String?, offset: String?) -> String? {
+        guard let base = base, !base.isEmpty else { return nil }
+        var result = base
+        if let sub = subSec?.trimmingCharacters(in: .whitespacesAndNewlines), !sub.isEmpty {
+            // Strip any trailing nulls / non-digits, keep leading digits as fractional seconds.
+            let digits = sub.prefix { $0.isASCII && $0.isNumber }
+            if !digits.isEmpty {
+                result += "." + String(digits)
+            }
+        }
+        if let off = offset?.trimmingCharacters(in: .whitespacesAndNewlines), !off.isEmpty {
+            result += off
+        }
+        return result
     }
 }
