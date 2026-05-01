@@ -79,6 +79,15 @@ struct ReadCommand: ParsableCommand {
                 applyDateFormat(to: &dict, pattern: dateFormat)
                 audioDicts.append(dict)
                 audioNames.append(url.lastPathComponent)
+                if streams {
+                    // Audio files have one stream; emit the same shape as
+                    // ffprobe so downstream tooling can treat .mp3/.m4a/.flac
+                    // exactly like a single-track container.
+                    let format = buildAudioFileFormatDict(am)
+                    let streamDicts = [buildAudioFileStreamDict(am)]
+                    perStreamReports.append((url.lastPathComponent, format,
+                                             streamDicts, []))
+                }
             } else if supportedVideoExtensions.contains(url.pathExtension.lowercased()) {
                 let vm = try VideoMetadata.read(from: url)
                 var rawDict = VideoMetadataExporter.buildDictionary(vm)
@@ -440,6 +449,75 @@ struct ReadCommand: ParsableCommand {
         }
         if let data = try? JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]) {
             print(String(data: data, encoding: .utf8) ?? "[]")
+        }
+    }
+
+    /// Build a single-stream dict for an audio file. ffprobe surfaces the
+    /// same fields for `mp3`/`m4a`/`flac`/`opus`/`ogg` audio under
+    /// `streams[0]` (codec_type=audio).
+    private func buildAudioFileStreamDict(_ am: AudioMetadata) -> [String: Any] {
+        var d: [String: Any] = ["StreamType": "audio", "Index": "0"]
+        if let v = am.codec         { d["Codec"]         = v }
+        if let v = am.codecName     { d["CodecName"]     = v }
+        if let v = am.codec, let s = ffprobeShortAudioCodec(v, bitDepth: am.bitDepth) {
+            d["CodecShort"] = s
+        }
+        if let v = am.sampleRate    { d["SampleRate"]    = String(v) }
+        if let v = am.channels      { d["Channels"]      = String(v) }
+        // ffprobe always emits a channel_layout for audio streams. Fall back
+        // to the channel-count default when the parser didn't set one
+        // explicitly (typical for MP3, where ID3v2 has no layout field).
+        if let layout = am.channelLayout ?? defaultChannelLayout(am.channels) {
+            d["ChannelLayout"] = layout
+        }
+        if let v = am.bitDepth      { d["BitDepth"]      = String(v) }
+        if let v = am.bitrate       { d["BitRate"]       = String(v) }
+        if let v = am.duration      { d["Duration"]      = String(v) }
+        d["IsDefault"] = "true"
+        if let v = am.title         { d["Title"]         = v }
+        return d
+    }
+
+    /// Build the clip-level `format` block for an audio file. Mirrors the
+    /// fields ffprobe puts under `format` for the same input.
+    private func buildAudioFileFormatDict(_ am: AudioMetadata) -> [String: Any] {
+        var f: [String: Any] = [:]
+        f["FileFormat"] = audioFormatLongName(am.format)
+        f["FormatLongName"] = audioFormatLongName(am.format)
+        f["NumStreams"] = 1
+        f["AudioStreamCount"] = 1
+        if let v = am.duration { f["Duration"] = v }
+        if let v = am.bitrate  { f["BitRate"]  = v }
+        if let v = am.codec     { f["AudioCodec"]      = v }
+        if let v = am.sampleRate { f["AudioSampleRate"] = v }
+        if let v = am.channels   { f["AudioChannels"]   = v }
+        if let v = am.title      { f["Title"]    = v }
+        if let v = am.artist     { f["Artist"]   = v }
+        if let v = am.album      { f["Album"]    = v }
+        return f
+    }
+
+    private func defaultChannelLayout(_ channels: Int?) -> String? {
+        switch channels {
+        case 1: return "mono"
+        case 2: return "stereo"
+        case 3: return "3.0"
+        case 4: return "4.0"
+        case 6: return "5.1"
+        case 8: return "7.1"
+        default: return nil
+        }
+    }
+
+    private func audioFormatLongName(_ format: AudioFormat) -> String {
+        switch format {
+        case .mp3:        return "MP3"
+        case .flac:       return "FLAC"
+        case .m4a:        return "MPEG-4 Audio"
+        case .opus:       return "Opus"
+        case .oggVorbis:  return "Ogg Vorbis"
+        case .wav:        return "WAV"
+        case .aiff:       return "AIFF"
         }
     }
 
