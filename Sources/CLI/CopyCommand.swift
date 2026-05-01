@@ -25,6 +25,10 @@ struct CopyCommand: ParsableCommand {
     @Option(name: .long, help: "Exclude tags matching glob pattern.")
     var excludeTags: [String] = []
 
+    @Option(name: .long,
+            help: "Remap a source tag to a different destination tag. Repeatable. Format: 'SRC>DST' or 'SRC=DST' (e.g. 'IPTC:Caption-Abstract>XMP-dc:description'). Mirrors ExifTool's '-tagsFromFile @ -SRC>DST' template syntax.")
+    var map: [String] = []
+
     @Flag(name: .long, help: "Create backup of original file before writing.")
     var backup = false
 
@@ -59,6 +63,15 @@ struct CopyCommand: ParsableCommand {
         }
 
         let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
+        let mappings = try parseTagMappings(map)
+        // Pre-build a flat read of the source dict; -map looks up SRC keys
+        // here and applies their values via the same write path -tag uses.
+        let sourceDict = mappings.isEmpty
+            ? [:]
+            : MetadataExporter.buildDictionary(source).mapValues { value -> String in
+                if let arr = value as? [String] { return arr.joined(separator: "; ") }
+                return String(describing: value)
+            }
         var succeeded = 0
         var failed = 0
 
@@ -70,8 +83,18 @@ struct CopyCommand: ParsableCommand {
                     dest.copyMetadata(from: source, filter: filter)
                 } else if let groupSet {
                     dest.copyMetadata(from: source, groups: groupSet)
-                } else {
+                } else if mappings.isEmpty {
                     dest.copyMetadata(from: source)
+                }
+                // Remap stage runs after the bulk copy so that `--map` can
+                // override or supplement -group/-tags selections, matching
+                // ExifTool's "later assignment wins" semantics.
+                if !mappings.isEmpty {
+                    let synthesized = mappings.compactMap { m -> ParsedTag? in
+                        guard let value = sourceDict[m.src], !value.isEmpty else { return nil }
+                        return ParsedTag(key: m.dst, value: value, operation: .set)
+                    }
+                    applyTags(synthesized, to: &dest)
                 }
                 try dest.write(to: url, options: options)
                 succeeded += 1

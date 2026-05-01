@@ -53,7 +53,7 @@ struct WriteAudioCommand: ParsableCommand {
     }
 
     func run() throws {
-        let audioExtensions: Set<String> = ["mp3", "flac", "m4a"]
+        let audioExtensions: Set<String> = ["mp3", "flac", "m4a", "wav", "aiff", "aif", "aifc"]
         let urls = try resolveFiles(files)
         var succeeded = 0
         var failed = 0

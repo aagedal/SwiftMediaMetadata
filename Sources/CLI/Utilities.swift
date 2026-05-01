@@ -190,6 +190,71 @@ private func parseOneCondition(_ str: String) throws -> MetadataCondition {
     throw ValidationError("Cannot parse condition: '\(str)'. Use Field=Value, Field>N, Field~Substring, or Field?")
 }
 
+// MARK: - Tag mappings (-tagsFromFile template expansion)
+
+/// A single SRC→DST mapping from the `--map` flag.
+struct TagMapping: Sendable, Equatable {
+    let src: String
+    let dst: String
+}
+
+/// Parse `--map` arguments. Accepts either `SRC>DST` (ExifTool-style) or
+/// `SRC=DST`. Whitespace around the separator is tolerated. The same key on
+/// both sides is allowed and means "copy verbatim".
+func parseTagMappings(_ raw: [String]) throws -> [TagMapping] {
+    try raw.map { entry in
+        let separator: String
+        if entry.contains(">") {
+            separator = ">"
+        } else if entry.contains("=") {
+            separator = "="
+        } else {
+            throw ValidationError("Invalid --map '\(entry)'. Expected 'SRC>DST' or 'SRC=DST'.")
+        }
+        let parts = entry.components(separatedBy: separator)
+        guard parts.count == 2 else {
+            throw ValidationError("Invalid --map '\(entry)'. Expected exactly one '\(separator)'.")
+        }
+        let src = parts[0].trimmingCharacters(in: .whitespaces)
+        let dst = parts[1].trimmingCharacters(in: .whitespaces)
+        guard !src.isEmpty, !dst.isEmpty else {
+            throw ValidationError("Invalid --map '\(entry)'. SRC and DST must both be non-empty.")
+        }
+        return TagMapping(src: src, dst: dst)
+    }
+}
+
+// MARK: - Group prefixing (-G)
+
+/// File-system tags that exporters emit bare but belong under the `File` group
+/// when ExifTool prints with `-G`. Keeping this list small means anything else
+/// bare gets the caller-supplied default group (EXIF for images).
+private let fileGroupKeys: Set<String> = [
+    "FileFormat", "FileName", "FileSize", "FileType", "FileTypeExtension",
+    "FileModifyDate", "FileAccessDate", "FileInodeChangeDate",
+    "FilePermissions", "Directory", "MIMEType",
+    "ImageWidth", "ImageHeight",
+]
+
+/// Return a copy of `dict` with every bare key prefixed by its group
+/// (`Make` → `EXIF:Make`). Keys that already carry a colon (`IPTC:Headline`,
+/// `Composite:Aperture`) or an `XMP-` prefix are left untouched. The default
+/// group lets the caller distinguish the image path (`EXIF`) from video/audio
+/// where bare keys come from container parsers, not the EXIF block.
+func applyGroupPrefix<V>(to dict: [String: V], defaultGroup: String) -> [String: V] {
+    var out: [String: V] = [:]
+    out.reserveCapacity(dict.count)
+    for (key, value) in dict {
+        if key.contains(":") || key.hasPrefix("XMP-") {
+            out[key] = value
+            continue
+        }
+        let group = fileGroupKeys.contains(key) ? "File" : defaultGroup
+        out["\(group):\(key)"] = value
+    }
+    return out
+}
+
 // MARK: - Date reformatting (-d)
 
 /// Tag-key suffixes whose values should be passed through the `-d` reformatter.

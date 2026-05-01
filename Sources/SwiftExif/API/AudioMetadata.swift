@@ -53,6 +53,9 @@ public struct AudioMetadata: Sendable {
     public var flacSeekTable: [FLACSeekPoint] = []
     /// FLAC CUESHEET block — track / index point structure for CD-rip-style FLAC files.
     public var flacCueSheet: FLACCueSheet?
+    /// C2PA manifest store, when the source carries one. Currently surfaced
+    /// for WAV/BWF (RIFF "C2PA" chunk).
+    public var c2pa: C2PAData?
     public var warnings: [String]
 
     internal var originalData: Data?
@@ -120,6 +123,13 @@ public struct AudioMetadata: Sendable {
         case .wav:
             var m = try WAVParser.parse(data)
             m.originalData = data
+            if let jumbf = C2PAReader.extractJUMBFFromRIFF(data) {
+                do {
+                    m.c2pa = try C2PAReader.parseManifestStore(from: jumbf)
+                } catch {
+                    m.warnings.append("C2PA parsing failed: \(error)")
+                }
+            }
             return m
         case .aiff:
             var m = try AIFFParser.parse(data)
@@ -149,9 +159,9 @@ public struct AudioMetadata: Sendable {
         case .opus, .oggVorbis:
             throw MetadataError.writeNotSupported("Writing Ogg \(format == .opus ? "Opus" : "Vorbis") files is not supported")
         case .wav:
-            throw MetadataError.writeNotSupported("Writing WAV / BWF files is not yet supported")
+            return try WAVWriter.write(self, to: original)
         case .aiff:
-            throw MetadataError.writeNotSupported("Writing AIFF files is not yet supported")
+            return try AIFFWriter.write(self, to: original)
         }
     }
 

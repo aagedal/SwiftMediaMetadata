@@ -44,6 +44,10 @@ struct ReadCommand: ParsableCommand {
             help: "Reformat date/time tags using a strftime pattern (e.g. \"%Y-%m-%d\", \"%FT%T\"). Applies to DateTime*, GPS*Date*, FileModifyDate, etc.")
     var dateFormat: String?
 
+    @Flag(name: [.customShort("G"), .customLong("show-groups")],
+          help: "Prefix every output key with its metadata group (EXIF:, File:, IPTC:, …) — matches ExifTool's -G flag.")
+    var showGroups = false
+
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
@@ -71,12 +75,14 @@ struct ReadCommand: ParsableCommand {
             if supportedAudioExtensions.contains(url.pathExtension.lowercased()) {
                 let am = try AudioMetadata.read(from: url)
                 var dict = AudioMetadataExporter.buildDictionary(am).mapValues { String(describing: $0) }
+                if showGroups { dict = applyGroupPrefix(to: dict, defaultGroup: "Audio") }
                 applyDateFormat(to: &dict, pattern: dateFormat)
                 audioDicts.append(dict)
                 audioNames.append(url.lastPathComponent)
             } else if supportedVideoExtensions.contains(url.pathExtension.lowercased()) {
                 let vm = try VideoMetadata.read(from: url)
-                let rawDict = VideoMetadataExporter.buildDictionary(vm)
+                var rawDict = VideoMetadataExporter.buildDictionary(vm)
+                if showGroups { rawDict = applyGroupPrefix(to: rawDict, defaultGroup: "Video") }
                 // Stringify for the display/CSV/table path; retain the
                 // native typed dict for JSON stream output so nested arrays
                 // like Timecodes serialise as real JSON arrays.
@@ -104,6 +110,7 @@ struct ReadCommand: ParsableCommand {
                 }
                 var filtered = filterByGroups(dict, groups: groups, fields: fieldList)
                 if let tagFilter { filtered = tagFilter.apply(to: filtered).mapValues { String(describing: $0) } }
+                if showGroups { filtered = applyGroupPrefix(to: filtered, defaultGroup: "EXIF") }
                 applyDateFormat(to: &filtered, pattern: dateFormat)
                 imageDicts.append(filtered)
                 imageNames.append(url.lastPathComponent)

@@ -306,6 +306,68 @@ public struct PDFParser: Sendable {
         return result
     }
 
+    /// Locate a C2PA manifest store embedded as a PDF associated file (`/AF`) and
+    /// return its raw JUMBF byte stream. Returns nil when no C2PA embedded file
+    /// is present.
+    ///
+    /// The C2PA-PDF binding (C2PA spec §9.7) requires the embedded file stream
+    /// to declare `/Subtype /application#2Fc2pa` (URL-encoded "application/c2pa")
+    /// — that token is unique enough to drive a byte scan and avoid replicating
+    /// full PDF object-graph traversal here.
+    public static func extractC2PAJUMBF(from data: Data) -> Data? {
+        let needles: [[UInt8]] = [
+            Array("application#2Fc2pa".utf8),
+            Array("application/c2pa".utf8),
+        ]
+        for needle in needles {
+            var searchStart = 0
+            while let pos = findBytes(needle, in: data, from: searchStart) {
+                searchStart = pos + needle.count
+                guard let objStart = findObjStart(in: data, before: pos) else { continue }
+                if let stream = extractStream(data: data, offset: objStart),
+                   !stream.isEmpty {
+                    return stream
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func findBytes(_ needle: [UInt8], in data: Data, from start: Int) -> Int? {
+        guard !needle.isEmpty, data.count >= needle.count, start <= data.count - needle.count else {
+            return nil
+        }
+        for i in start...(data.count - needle.count) {
+            var match = true
+            for j in 0..<needle.count {
+                if data[data.startIndex + i + j] != needle[j] {
+                    match = false
+                    break
+                }
+            }
+            if match { return i }
+        }
+        return nil
+    }
+
+    /// Walk backward from `pos` to find the byte immediately after the most
+    /// recent "obj" keyword (preceded by whitespace, i.e. the "N G obj" header).
+    private static func findObjStart(in data: Data, before pos: Int) -> Int? {
+        var i = pos
+        while i >= 4 {
+            if data[data.startIndex + i - 3] == 0x6F /*o*/
+                && data[data.startIndex + i - 2] == 0x62 /*b*/
+                && data[data.startIndex + i - 1] == 0x6A /*j*/ {
+                let preceding = data[data.startIndex + i - 4]
+                if preceding == 0x20 || preceding == 0x09 || preceding == 0x0D || preceding == 0x0A {
+                    return i
+                }
+            }
+            i -= 1
+        }
+        return nil
+    }
+
     /// Extract a stream's content from an indirect object.
     private static func extractStream(data: Data, offset: Int) -> Data? {
         let dict = parseDictionary(data: data, offset: offset)

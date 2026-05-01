@@ -43,6 +43,91 @@ public struct C2PAReader: Sendable {
         extractJUMBFFromISOBMFF(avifFile.boxes)
     }
 
+    /// TIFF IFD0 tag carrying a JUMBF byte stream (C2PA spec §9.6 "TIFF, DNG").
+    public static let tiffC2PATag: UInt16 = 0xCD41
+
+    /// Extract JUMBF data from a TIFF IFD0 entry (tag 0xCD41).
+    /// Same path covers DNG and TIFF-based RAW formats since they share IFD0.
+    public static func extractJUMBFFromTIFF(_ tiffFile: TIFFFile) -> Data? {
+        guard let entry = tiffFile.ifd0?.entry(for: tiffC2PATag) else { return nil }
+        guard !entry.valueData.isEmpty else { return nil }
+        return entry.valueData
+    }
+
+    /// Extract JUMBF data from a WebP RIFF "C2PA" chunk.
+    public static func extractJUMBFFromWebP(_ webPFile: WebPFile) -> Data? {
+        webPFile.findChunk("C2PA")?.data
+    }
+
+    /// Extract JUMBF data from a PDF associated file (`/AF`) declaring
+    /// `/Subtype /application#2Fc2pa`.
+    public static func extractJUMBFFromPDF(_ pdfFile: PDFFile) -> Data? {
+        PDFParser.extractC2PAJUMBF(from: pdfFile.rawData)
+    }
+
+    /// Extract JUMBF data from a RIFF "C2PA" chunk. Works for WAV / BWF and
+    /// any other RIFF-based container that follows the C2PA convention.
+    /// `data` is the entire RIFF byte stream starting at the `RIFF` magic.
+    public static func extractJUMBFFromRIFF(_ data: Data) -> Data? {
+        guard data.count >= 12 else { return nil }
+        let s = data.startIndex
+        guard data[s] == 0x52, data[s + 1] == 0x49, data[s + 2] == 0x46, data[s + 3] == 0x46 else {
+            return nil
+        }
+
+        var offset = 12
+        while offset + 8 <= data.count {
+            let idStart = s + offset
+            let chunkID = String(
+                data: data[idStart..<(idStart + 4)],
+                encoding: .ascii
+            ) ?? ""
+            let size = Int(
+                UInt32(data[idStart + 4])
+                | (UInt32(data[idStart + 5]) << 8)
+                | (UInt32(data[idStart + 6]) << 16)
+                | (UInt32(data[idStart + 7]) << 24)
+            )
+            let payloadStart = offset + 8
+            let payloadEnd = payloadStart + size
+            guard payloadEnd <= data.count else { break }
+
+            if chunkID == "C2PA" {
+                return Data(data[(s + payloadStart)..<(s + payloadEnd)])
+            }
+
+            offset = payloadEnd + (size & 1)
+        }
+        return nil
+    }
+
+    /// Extract JUMBF data from a GIF Application Extension with identifier "C2PA_GIF".
+    /// Sub-block payloads are already concatenated by the GIF parser into the block's `data`.
+    public static func extractJUMBFFromGIF(_ gifFile: GIFFile) -> Data? {
+        for block in gifFile.blocks {
+            if case .applicationExtension(let identifier, _, let data) = block.type,
+               identifier == "C2PA_GIF" {
+                return data
+            }
+        }
+        return nil
+    }
+
+    /// Parse a sidecar `.c2pa` byte stream. The file is a raw JUMBF box (or a sequence
+    /// starting with `jumb`), no container — we just hand it to `parseManifestStore`.
+    public static func extractJUMBFFromSidecar(_ data: Data) -> Data? {
+        guard data.count >= 8 else { return nil }
+        // Sanity-check the first box type is "jumb"; otherwise scan for it.
+        let bytes = [UInt8](data.prefix(8))
+        if bytes[4] == 0x6A && bytes[5] == 0x75 && bytes[6] == 0x6D && bytes[7] == 0x62 {
+            return data
+        }
+        if let start = findJUMBFStart(in: data) {
+            return Data(data.suffix(from: data.startIndex + start))
+        }
+        return nil
+    }
+
     /// Shared JUMBF extraction for any ISOBMFF-based format.
     static func extractJUMBFFromISOBMFF(_ boxes: [ISOBMFFBox]) -> Data? {
         // First try: top-level jumb box
@@ -178,7 +263,8 @@ public struct C2PAReader: Sendable {
             title: title,
             algorithm: algorithm,
             assertionReferences: assertionRefs,
-            raw: cbor
+            raw: cbor,
+            rawCBORBytes: cborBox.data
         )
     }
 
@@ -321,8 +407,35 @@ public struct C2PAReader: Sendable {
         if label == "c2pa.hash.data" {
             return parseHashDataAssertion(cbor)
         }
+        if label == "c2pa.hash.boxes" {
+            return parseHashBoxesAssertion(cbor)
+        }
+        if label == "c2pa.hash.bmff.v2" {
+            return parseHashBMFFv2Assertion(cbor)
+        }
+        if label == "c2pa.hash.collection.data" {
+            return parseHashCollectionAssertion(cbor)
+        }
         if label.hasPrefix("c2pa.ingredient") {
             return parseIngredientAssertion(cbor)
+        }
+        if label.hasPrefix("stds.iptc") {
+            return parseIPTCAssertion(cbor)
+        }
+        if label == "stds.exif" {
+            return parseExifAssertion(cbor)
+        }
+        if label == "stds.schema-org.CreativeWork" {
+            return parseSchemaOrgCreativeWorkAssertion(cbor)
+        }
+        if label.hasPrefix("c2pa.training-mining") {
+            return parseTrainingMiningAssertion(cbor)
+        }
+        if label == "c2pa.redactions" {
+            return parseRedactionsAssertion(cbor)
+        }
+        if label == "c2pa.identity.assertion" || label.hasPrefix("cawg.identity") {
+            return parseIdentityAssertion(cbor)
         }
         return .cbor(cbor)
     }
@@ -376,6 +489,99 @@ public struct C2PAReader: Sendable {
         return .hashData(C2PAHashData(algorithm: alg, hash: hash, exclusions: exclusions))
     }
 
+    static func parseHashBoxesAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        guard let boxesArray = cbor["boxes"]?.arrayValue else { return .cbor(cbor) }
+        let alg = cbor["alg"]?.textStringValue
+        let entries: [C2PAHashBoxEntry] = boxesArray.compactMap { item in
+            let names: [String] = item["names"]?.arrayValue?.compactMap { $0.textStringValue } ?? []
+            let entryAlg = item["alg"]?.textStringValue
+            let hash = item["hash"]?.byteStringValue ?? Data()
+            let pad = item["pad"]?.byteStringValue
+            guard !names.isEmpty || !hash.isEmpty else { return nil }
+            return C2PAHashBoxEntry(names: names, algorithm: entryAlg, hash: hash, pad: pad)
+        }
+        guard !entries.isEmpty else { return .cbor(cbor) }
+        return .hashBoxes(C2PAHashBoxes(algorithm: alg, boxes: entries))
+    }
+
+    static func parseHashBMFFv2Assertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        let alg = cbor["alg"]?.textStringValue
+        let hash = cbor["hash"]?.byteStringValue
+
+        var exclusions: [C2PABMFFv2Exclusion] = []
+        if let arr = cbor["exclusions"]?.arrayValue {
+            for item in arr {
+                let xpath = item["xpath"]?.textStringValue
+                let length = item["length"]?.unsignedIntValue
+                let version = item["version"]?.unsignedIntValue
+                let flags = item["flags"]?.unsignedIntValue
+
+                var subset: [C2PAExclusion] = []
+                if let subsetArr = item["subset"]?.arrayValue {
+                    for s in subsetArr {
+                        if let off = s["offset"]?.unsignedIntValue,
+                           let len = s["length"]?.unsignedIntValue {
+                            subset.append(C2PAExclusion(start: off, length: len))
+                        }
+                    }
+                }
+
+                var overlays: [C2PABMFFv2DataOverlay] = []
+                if let dataArr = item["data"]?.arrayValue {
+                    for d in dataArr {
+                        if let off = d["offset"]?.unsignedIntValue,
+                           let val = d["value"]?.byteStringValue {
+                            overlays.append(C2PABMFFv2DataOverlay(offset: off, value: val))
+                        }
+                    }
+                }
+
+                exclusions.append(C2PABMFFv2Exclusion(
+                    xpath: xpath, length: length, version: version, flags: flags,
+                    subset: subset, dataOverlays: overlays
+                ))
+            }
+        }
+
+        var merkle: [C2PABMFFv2Merkle] = []
+        if let arr = cbor["merkle"]?.arrayValue {
+            for item in arr {
+                guard let uniqueId = item["uniqueId"]?.unsignedIntValue,
+                      let localId = item["localId"]?.unsignedIntValue,
+                      let count = item["count"]?.unsignedIntValue else { continue }
+                let mAlg = item["alg"]?.textStringValue
+                let initHash = item["initHash"]?.byteStringValue
+                let hashes = item["hashes"]?.arrayValue?.compactMap { $0.byteStringValue } ?? []
+                merkle.append(C2PABMFFv2Merkle(
+                    uniqueId: uniqueId, localId: localId, count: count,
+                    algorithm: mAlg, initHash: initHash, hashes: hashes
+                ))
+            }
+        }
+
+        if alg == nil && hash == nil && exclusions.isEmpty && merkle.isEmpty {
+            return .cbor(cbor)
+        }
+        return .hashBMFFv2(C2PAHashBMFFv2(
+            algorithm: alg, hash: hash,
+            exclusions: exclusions, merkle: merkle
+        ))
+    }
+
+    static func parseHashCollectionAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        guard let arr = cbor["uris"]?.arrayValue else { return .cbor(cbor) }
+        let alg = cbor["alg"]?.textStringValue
+        let entries: [C2PACollectionEntry] = arr.compactMap { item in
+            guard let uri = item["uri"]?.textStringValue else { return nil }
+            let hash = item["hash"]?.byteStringValue ?? Data()
+            let size = item["size"]?.unsignedIntValue
+            let format = item["dc:format"]?.textStringValue
+            return C2PACollectionEntry(uri: uri, hash: hash, size: size, format: format)
+        }
+        guard !entries.isEmpty else { return .cbor(cbor) }
+        return .hashCollection(C2PAHashCollection(algorithm: alg, uris: entries))
+    }
+
     static func parseIngredientAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
         let ingredient = C2PAIngredient(
             title: cbor["dc:title"]?.textStringValue,
@@ -384,6 +590,91 @@ public struct C2PAReader: Sendable {
             relationship: cbor["relationship"]?.textStringValue
         )
         return .ingredient(ingredient)
+    }
+
+    // MARK: - Phase B Assertion Parsers
+
+    /// Flatten a CBOR map into a `[String: CBORValue]` keyed by text-string
+    /// keys. Non-text keys are dropped. Used by stds.iptc / stds.exif /
+    /// stds.schema-org.CreativeWork which are all JSON-LD-shaped.
+    static func textKeyedMap(_ cbor: CBORValue) -> [String: CBORValue] {
+        guard let entries = cbor.mapEntries else { return [:] }
+        var out: [String: CBORValue] = [:]
+        for entry in entries {
+            if let key = entry.key.textStringValue {
+                out[key] = entry.value
+            }
+        }
+        return out
+    }
+
+    static func parseIPTCAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        let fields = textKeyedMap(cbor)
+        guard !fields.isEmpty else { return .cbor(cbor) }
+        return .iptc(C2PAIPTCAssertion(fields: fields))
+    }
+
+    static func parseExifAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        let fields = textKeyedMap(cbor)
+        guard !fields.isEmpty else { return .cbor(cbor) }
+        return .exif(C2PAExifAssertion(fields: fields))
+    }
+
+    static func parseSchemaOrgCreativeWorkAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        let fields = textKeyedMap(cbor)
+        guard !fields.isEmpty else { return .cbor(cbor) }
+        return .schemaOrgCreativeWork(C2PASchemaOrgCreativeWork(fields: fields))
+    }
+
+    static func parseTrainingMiningAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        // Two encodings seen in the wild:
+        //   1) `{ entries: { "<category>": { use, constraint_info } } }`
+        //   2) `{ "<category>": { use, ... }, ... }` (older drafts)
+        // Try (1) first, fall back to (2).
+        let entriesMap: CBORValue?
+        if let inner = cbor["entries"], inner.mapEntries != nil {
+            entriesMap = inner
+        } else if cbor.mapEntries != nil {
+            entriesMap = cbor
+        } else {
+            entriesMap = nil
+        }
+
+        guard let map = entriesMap?.mapEntries else { return .cbor(cbor) }
+        var entries: [C2PATrainingMiningEntry] = []
+        for entry in map {
+            guard let category = entry.key.textStringValue else { continue }
+            // The "entries" wrapper key itself shouldn't be treated as a category.
+            if category == "entries" { continue }
+            let use = entry.value["use"]?.textStringValue ?? "unknown"
+            let constraintInfo = entry.value["constraint_info"]?.textStringValue
+            entries.append(C2PATrainingMiningEntry(
+                category: category,
+                use: use,
+                constraintInfo: constraintInfo
+            ))
+        }
+        guard !entries.isEmpty else { return .cbor(cbor) }
+        return .trainingMining(C2PATrainingMining(entries: entries))
+    }
+
+    static func parseRedactionsAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        guard let arr = cbor["redactions"]?.arrayValue else { return .cbor(cbor) }
+        let urls = arr.compactMap { $0.textStringValue }
+        return .redactions(C2PARedactions(redactions: urls))
+    }
+
+    static func parseIdentityAssertion(_ cbor: CBORValue) -> C2PAAssertionContent {
+        guard let signerPayload = cbor["signer_payload"] else { return .cbor(cbor) }
+        let signature = cbor["signature"]?.byteStringValue ?? Data()
+        let pad1 = cbor["pad1"]?.byteStringValue
+        let pad2 = cbor["pad2"]?.byteStringValue
+        return .identityAssertion(C2PAIdentityAssertion(
+            signerPayload: signerPayload,
+            signature: signature,
+            pad1: pad1,
+            pad2: pad2
+        ))
     }
 
     // MARK: - Helpers

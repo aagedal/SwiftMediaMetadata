@@ -15,6 +15,19 @@ public struct C2PAData: Sendable {
     public init(manifests: [C2PAManifest]) {
         self.manifests = manifests
     }
+
+    /// Read a sidecar `.c2pa` file: a raw JUMBF byte stream paired with an
+    /// asset. Returns nil if the data does not begin with a `jumb` box.
+    public static func readSidecar(from data: Data) throws -> C2PAData? {
+        guard let jumbf = C2PAReader.extractJUMBFFromSidecar(data) else { return nil }
+        return try C2PAReader.parseManifestStore(from: jumbf)
+    }
+
+    /// Read a sidecar `.c2pa` file from a URL.
+    public static func readSidecar(from url: URL) throws -> C2PAData? {
+        let data = try Data(contentsOf: url)
+        return try readSidecar(from: data)
+    }
 }
 
 // MARK: - Manifest
@@ -58,6 +71,10 @@ public struct C2PAClaim: Sendable {
     public let assertionReferences: [C2PAHashedURI]
     /// The full decoded CBOR claim for custom field access.
     public let raw: CBORValue
+    /// Raw CBOR bytes of the claim's `cbor` content box. These are the
+    /// detached payload that the manifest's COSE_Sign1 was computed over —
+    /// `verifySignature()` needs them to reconstruct `Sig_structure`.
+    public let rawCBORBytes: Data
 
     public init(
         claimGenerator: String,
@@ -67,7 +84,8 @@ public struct C2PAClaim: Sendable {
         title: String? = nil,
         algorithm: String? = nil,
         assertionReferences: [C2PAHashedURI] = [],
-        raw: CBORValue = .null
+        raw: CBORValue = .null,
+        rawCBORBytes: Data = Data()
     ) {
         self.claimGenerator = claimGenerator
         self.claimGeneratorInfo = claimGeneratorInfo
@@ -77,6 +95,7 @@ public struct C2PAClaim: Sendable {
         self.algorithm = algorithm
         self.assertionReferences = assertionReferences
         self.raw = raw
+        self.rawCBORBytes = rawCBORBytes
     }
 }
 
@@ -201,6 +220,24 @@ public enum C2PAAssertionContent: Sendable {
     case ingredient(C2PAIngredient)
     /// Thumbnail binary data with format string (e.g. "jpeg", "png").
     case thumbnail(Data, format: String)
+    /// BMFF box-level hash assertion (c2pa.hash.boxes).
+    case hashBoxes(C2PAHashBoxes)
+    /// BMFF v2 hash assertion (c2pa.hash.bmff.v2).
+    case hashBMFFv2(C2PAHashBMFFv2)
+    /// Collection-of-URIs hash assertion (c2pa.hash.collection.data).
+    case hashCollection(C2PAHashCollection)
+    /// IPTC standard assertion (stds.iptc / stds.iptc.photo-metadata).
+    case iptc(C2PAIPTCAssertion)
+    /// Exif standard assertion (stds.exif).
+    case exif(C2PAExifAssertion)
+    /// schema.org CreativeWork standard assertion (stds.schema-org.CreativeWork).
+    case schemaOrgCreativeWork(C2PASchemaOrgCreativeWork)
+    /// Training-mining usage declaration (c2pa.training-mining, c2pa.training-mining.v2).
+    case trainingMining(C2PATrainingMining)
+    /// Assertion redactions (c2pa.redactions).
+    case redactions(C2PARedactions)
+    /// CAWG identity assertion envelope (c2pa.identity.assertion).
+    case identityAssertion(C2PAIdentityAssertion)
     /// Raw CBOR content for unrecognized or custom assertions.
     case cbor(CBORValue)
     /// Raw JSON content.
@@ -275,6 +312,138 @@ public struct C2PAExclusion: Sendable {
     }
 }
 
+/// Parsed `c2pa.hash.boxes` assertion. Each entry hashes one or more named
+/// ISOBMFF/JUMBF top-level boxes (`ftyp`, `moov`, `mdat`, …).
+public struct C2PAHashBoxes: Sendable {
+    /// Default hash algorithm for entries that don't override it.
+    public let algorithm: String?
+    /// Per-box hash entries, in the order specified by the assertion.
+    public let boxes: [C2PAHashBoxEntry]
+
+    public init(algorithm: String? = nil, boxes: [C2PAHashBoxEntry]) {
+        self.algorithm = algorithm
+        self.boxes = boxes
+    }
+}
+
+/// One entry in a `c2pa.hash.boxes` assertion: hash for a contiguous group of
+/// box types.
+public struct C2PAHashBoxEntry: Sendable {
+    /// Box type names ("ftyp", "moov", …) covered by this hash.
+    public let names: [String]
+    /// Hash algorithm (defaults to the parent assertion's `alg`).
+    public let algorithm: String?
+    /// Computed hash value.
+    public let hash: Data
+    /// Optional padding bytes preserved for round-tripping.
+    public let pad: Data?
+
+    public init(names: [String], algorithm: String? = nil, hash: Data, pad: Data? = nil) {
+        self.names = names
+        self.algorithm = algorithm
+        self.hash = hash
+        self.pad = pad
+    }
+}
+
+/// Parsed `c2pa.hash.bmff.v2` assertion. The Merkle-tree variant is surfaced
+/// verbatim — full V2 verification (Merkle reconstruction across MP4 fragments)
+/// is out of scope here.
+public struct C2PAHashBMFFv2: Sendable {
+    public let algorithm: String?
+    public let hash: Data?
+    public let exclusions: [C2PABMFFv2Exclusion]
+    /// Merkle-tree definitions when the assertion uses fragmented BMFF hashing.
+    public let merkle: [C2PABMFFv2Merkle]
+
+    public init(algorithm: String? = nil, hash: Data? = nil, exclusions: [C2PABMFFv2Exclusion], merkle: [C2PABMFFv2Merkle]) {
+        self.algorithm = algorithm
+        self.hash = hash
+        self.exclusions = exclusions
+        self.merkle = merkle
+    }
+}
+
+/// One exclusion entry inside a `c2pa.hash.bmff.v2` assertion. Excludes either
+/// a whole box (by `xpath` like `/uuid[c2pa]`), a contiguous byte range, or a
+/// per-byte data overlay.
+public struct C2PABMFFv2Exclusion: Sendable {
+    public let xpath: String?
+    public let length: UInt64?
+    public let version: UInt64?
+    public let flags: UInt64?
+    /// Subset ranges to exclude inside the matched box.
+    public let subset: [C2PAExclusion]
+    /// Embedded constant data overlays preserved for fragment hashing.
+    public let dataOverlays: [C2PABMFFv2DataOverlay]
+
+    public init(xpath: String? = nil, length: UInt64? = nil, version: UInt64? = nil, flags: UInt64? = nil, subset: [C2PAExclusion] = [], dataOverlays: [C2PABMFFv2DataOverlay] = []) {
+        self.xpath = xpath
+        self.length = length
+        self.version = version
+        self.flags = flags
+        self.subset = subset
+        self.dataOverlays = dataOverlays
+    }
+}
+
+/// A single byte overlay applied during BMFF v2 hashing.
+public struct C2PABMFFv2DataOverlay: Sendable {
+    public let offset: UInt64
+    public let value: Data
+
+    public init(offset: UInt64, value: Data) {
+        self.offset = offset
+        self.value = value
+    }
+}
+
+/// Merkle-tree descriptor inside a `c2pa.hash.bmff.v2` assertion.
+public struct C2PABMFFv2Merkle: Sendable {
+    public let uniqueId: UInt64
+    public let localId: UInt64
+    public let count: UInt64
+    public let algorithm: String?
+    public let initHash: Data?
+    public let hashes: [Data]
+
+    public init(uniqueId: UInt64, localId: UInt64, count: UInt64, algorithm: String? = nil, initHash: Data? = nil, hashes: [Data]) {
+        self.uniqueId = uniqueId
+        self.localId = localId
+        self.count = count
+        self.algorithm = algorithm
+        self.initHash = initHash
+        self.hashes = hashes
+    }
+}
+
+/// Parsed `c2pa.hash.collection.data` assertion. Used when a manifest binds
+/// to multiple asset files identified by relative URIs.
+public struct C2PAHashCollection: Sendable {
+    public let algorithm: String?
+    public let uris: [C2PACollectionEntry]
+
+    public init(algorithm: String? = nil, uris: [C2PACollectionEntry]) {
+        self.algorithm = algorithm
+        self.uris = uris
+    }
+}
+
+/// One URI/hash pair inside a `c2pa.hash.collection.data` assertion.
+public struct C2PACollectionEntry: Sendable {
+    public let uri: String
+    public let hash: Data
+    public let size: UInt64?
+    public let format: String?
+
+    public init(uri: String, hash: Data, size: UInt64? = nil, format: String? = nil) {
+        self.uri = uri
+        self.hash = hash
+        self.size = size
+        self.format = format
+    }
+}
+
 /// Parsed c2pa.ingredient assertion.
 public struct C2PAIngredient: Sendable {
     /// Asset title.
@@ -309,5 +478,163 @@ public struct C2PAThumbnail: Sendable {
         self.label = label
         self.data = data
         self.format = format
+    }
+}
+
+// MARK: - Standard Assertions (Phase B)
+
+/// Parsed `stds.iptc` / `stds.iptc.photo-metadata` assertion. The CBOR is a
+/// JSON-LD-shaped map keyed by namespaced strings (e.g. `dc:creator`,
+/// `Iptc4xmpExt:DigitalSourceType`). Raw fields are exposed via `fields` for
+/// callers that need keys this struct doesn't surface directly.
+public struct C2PAIPTCAssertion: Sendable {
+    /// All assertion fields, indexed by the namespaced CBOR key.
+    public let fields: [String: CBORValue]
+
+    public init(fields: [String: CBORValue]) {
+        self.fields = fields
+    }
+
+    /// `dc:creator` — usually a CBOR text string array. Returns the joined names.
+    public var creators: [String] {
+        if let arr = fields["dc:creator"]?.arrayValue {
+            return arr.compactMap { $0.textStringValue }
+        }
+        if let str = fields["dc:creator"]?.textStringValue { return [str] }
+        return []
+    }
+
+    public var rights: String? {
+        fields["dc:rights"]?.textStringValue
+            ?? fields["dc:rights"]?["x-default"]?.textStringValue
+    }
+
+    public var title: String? {
+        fields["dc:title"]?.textStringValue
+            ?? fields["dc:title"]?["x-default"]?.textStringValue
+    }
+
+    public var description: String? {
+        fields["dc:description"]?.textStringValue
+            ?? fields["dc:description"]?["x-default"]?.textStringValue
+    }
+
+    /// IPTC Digital Source Type URI (e.g. `trainedAlgorithmicMedia`).
+    public var digitalSourceType: String? {
+        fields["Iptc4xmpExt:DigitalSourceType"]?.textStringValue
+    }
+
+    public var dateCreated: String? {
+        fields["photoshop:DateCreated"]?.textStringValue
+    }
+}
+
+/// Parsed `stds.exif` assertion. Stores the namespaced map verbatim.
+public struct C2PAExifAssertion: Sendable {
+    public let fields: [String: CBORValue]
+
+    public init(fields: [String: CBORValue]) {
+        self.fields = fields
+    }
+
+    public var make: String? { fields["tiff:Make"]?.textStringValue }
+    public var model: String? { fields["tiff:Model"]?.textStringValue }
+    public var dateTimeOriginal: String? { fields["exif:DateTimeOriginal"]?.textStringValue }
+    public var gpsLatitude: String? { fields["exif:GPSLatitude"]?.textStringValue }
+    public var gpsLongitude: String? { fields["exif:GPSLongitude"]?.textStringValue }
+}
+
+/// Parsed `stds.schema-org.CreativeWork` assertion. Keeps the raw schema.org
+/// payload while exposing common provenance fields.
+public struct C2PASchemaOrgCreativeWork: Sendable {
+    public let fields: [String: CBORValue]
+
+    public init(fields: [String: CBORValue]) {
+        self.fields = fields
+    }
+
+    /// `author` is typically `[{"@type": "Person", "name": "..."}]`.
+    public var authors: [String] {
+        guard let value = fields["author"] else { return [] }
+        if let arr = value.arrayValue {
+            return arr.compactMap { $0["name"]?.textStringValue ?? $0.textStringValue }
+        }
+        if let name = value["name"]?.textStringValue { return [name] }
+        if let str = value.textStringValue { return [str] }
+        return []
+    }
+
+    public var copyrightHolder: String? {
+        fields["copyrightHolder"]?["name"]?.textStringValue
+            ?? fields["copyrightHolder"]?.textStringValue
+    }
+
+    public var copyrightNotice: String? {
+        fields["copyrightNotice"]?.textStringValue
+    }
+
+    public var creditText: String? {
+        fields["creditText"]?.textStringValue
+    }
+
+    public var license: String? { fields["license"]?.textStringValue }
+    public var url: String? { fields["url"]?.textStringValue }
+}
+
+/// Parsed `c2pa.training-mining` (or `.v2`) assertion. Each entry expresses
+/// whether a category of automated use is allowed/notAllowed/constrained.
+public struct C2PATrainingMining: Sendable {
+    public let entries: [C2PATrainingMiningEntry]
+
+    public init(entries: [C2PATrainingMiningEntry]) {
+        self.entries = entries
+    }
+}
+
+/// A single category entry inside a training-mining assertion.
+public struct C2PATrainingMiningEntry: Sendable {
+    /// Category identifier (e.g. `c2pa.ai_generative_training`,
+    /// `c2pa.ai_inference`, `c2pa.ai_training`, `c2pa.data_mining`).
+    public let category: String
+    /// Use declaration: `allowed`, `notAllowed`, or `constrained`.
+    public let use: String
+    /// Optional human-readable explanation when `use == "constrained"`.
+    public let constraintInfo: String?
+
+    public init(category: String, use: String, constraintInfo: String? = nil) {
+        self.category = category
+        self.use = use
+        self.constraintInfo = constraintInfo
+    }
+}
+
+/// Parsed `c2pa.redactions` assertion: the JUMBF URIs of redacted assertions.
+public struct C2PARedactions: Sendable {
+    public let redactions: [String]
+
+    public init(redactions: [String]) {
+        self.redactions = redactions
+    }
+}
+
+/// Envelope of a CAWG `c2pa.identity.assertion`. Cryptographic verification
+/// is intentionally out of scope here — Phase C will validate the embedded
+/// signature against the signer's certificate. We only surface the bytes.
+public struct C2PAIdentityAssertion: Sendable {
+    /// The `signer_payload` map (CBOR-encoded inside the assertion). Surfaced
+    /// raw so callers can pull `referenced_assertions`, `sig_type`, etc.
+    public let signerPayload: CBORValue
+    /// Signer signature bytes (COSE_Sign1 or other sig_type, depending on the
+    /// `signer_payload.sig_type` field).
+    public let signature: Data
+    /// Optional padding bytes preserved for round-tripping.
+    public let pad1: Data?
+    public let pad2: Data?
+
+    public init(signerPayload: CBORValue, signature: Data, pad1: Data? = nil, pad2: Data? = nil) {
+        self.signerPayload = signerPayload
+        self.signature = signature
+        self.pad1 = pad1
+        self.pad2 = pad2
     }
 }

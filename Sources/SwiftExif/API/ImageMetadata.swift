@@ -1303,7 +1303,18 @@ public struct ImageMetadata: Sendable {
         // DNG private tags (only populated for DNG-marked files)
         let dng = DNGMetadataReader.read(from: tiffFile)
 
-        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile, dng: dng)
+        // C2PA from IFD0 tag 0xCD41
+        var c2pa: C2PAData?
+        var warnings: [String] = []
+        do {
+            if let jumbfData = C2PAReader.extractJUMBFFromTIFF(tiffFile) {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            }
+        } catch {
+            warnings.append("C2PA parsing failed: \(error)")
+        }
+
+        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, dng: dng, warnings: warnings)
     }
 
     private static func readRAW(from data: Data, format: ImageFormat) throws -> ImageMetadata {
@@ -1322,7 +1333,17 @@ public struct ImageMetadata: Sendable {
         let iccProfile = TIFFFileParser.extractICCProfile(from: tiffFile)
         let dng = DNGMetadataReader.read(from: tiffFile)
 
-        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile, dng: dng)
+        var c2pa: C2PAData?
+        var warnings: [String] = []
+        do {
+            if let jumbfData = C2PAReader.extractJUMBFFromTIFF(tiffFile) {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            }
+        } catch {
+            warnings.append("C2PA parsing failed: \(error)")
+        }
+
+        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, dng: dng, warnings: warnings)
     }
 
     private static func readJPEGXL(from data: Data) throws -> ImageMetadata {
@@ -1455,7 +1476,17 @@ public struct ImageMetadata: Sendable {
         let xmp = try WebPParser.extractXMP(from: webpFile)
         let iccProfile = WebPParser.extractICCProfile(from: webpFile)
 
-        return ImageMetadata(container: .webp(webpFile), format: .webp, iptc: IPTCData(), exif: exif, xmp: xmp, iccProfile: iccProfile)
+        var c2pa: C2PAData?
+        var warnings: [String] = []
+        do {
+            if let jumbfData = C2PAReader.extractJUMBFFromWebP(webpFile) {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            }
+        } catch {
+            warnings.append("C2PA parsing failed: \(error)")
+        }
+
+        return ImageMetadata(container: .webp(webpFile), format: .webp, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
     }
 
     // MARK: - PDF
@@ -1469,7 +1500,17 @@ public struct ImageMetadata: Sendable {
             xmp = try? XMPReader.readFromXML(xmpStreamData)
         }
 
-        return ImageMetadata(container: .pdf(pdfFile), format: .pdf, iptc: IPTCData(), xmp: xmp)
+        var c2pa: C2PAData?
+        var warnings: [String] = []
+        do {
+            if let jumbfData = C2PAReader.extractJUMBFFromPDF(pdfFile) {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            }
+        } catch {
+            warnings.append("C2PA parsing failed: \(error)")
+        }
+
+        return ImageMetadata(container: .pdf(pdfFile), format: .pdf, iptc: IPTCData(), xmp: xmp, c2pa: c2pa, warnings: warnings)
     }
 
     // MARK: - PSD
@@ -1497,7 +1538,18 @@ public struct ImageMetadata: Sendable {
     private static func readGIF(from data: Data) throws -> ImageMetadata {
         let gifFile = try GIFParser.parse(data)
         let xmp = try? GIFParser.extractXMP(from: gifFile)
-        return ImageMetadata(container: .gif(gifFile), format: .gif, xmp: xmp)
+
+        var c2pa: C2PAData?
+        var warnings: [String] = []
+        do {
+            if let jumbfData = C2PAReader.extractJUMBFFromGIF(gifFile) {
+                c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+            }
+        } catch {
+            warnings.append("C2PA parsing failed: \(error)")
+        }
+
+        return ImageMetadata(container: .gif(gifFile), format: .gif, xmp: xmp, c2pa: c2pa, warnings: warnings)
     }
 
     private func writeGIF(_ file: GIFFile) -> Data {
