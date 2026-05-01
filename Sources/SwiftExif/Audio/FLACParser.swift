@@ -57,7 +57,102 @@ public struct FLACParser: Sendable {
             metadata.coverArt = extractPicture(pictureBlock.data)
         }
 
+        // SEEKTABLE (type 3)
+        if let seekBlock = blocks.first(where: { $0.type == 3 }) {
+            metadata.flacSeekTable = parseSeekTable(seekBlock.data)
+        }
+
+        // CUESHEET (type 5)
+        if let cueBlock = blocks.first(where: { $0.type == 5 }) {
+            metadata.flacCueSheet = parseCueSheet(cueBlock.data)
+        }
+
         return metadata
+    }
+
+    /// SEEKTABLE block — N × 18-byte seek points.
+    private static func parseSeekTable(_ data: Data) -> [FLACSeekPoint] {
+        let pointSize = 18
+        let count = data.count / pointSize
+        guard count > 0 else { return [] }
+        var result: [FLACSeekPoint] = []
+        result.reserveCapacity(count)
+        for i in 0..<count {
+            let off = i * pointSize
+            let sample = readUInt64BE(data, at: off)
+            let offset = readUInt64BE(data, at: off + 8)
+            let frameSamples = (UInt16(data[off + 16]) << 8) | UInt16(data[off + 17])
+            result.append(FLACSeekPoint(sampleNumber: sample, byteOffset: offset, frameSamples: frameSamples))
+        }
+        return result
+    }
+
+    /// CUESHEET block:
+    ///   bytes 0..127  : media catalog number (ASCII, NUL-padded)
+    ///   bytes 128..135: lead-in samples (uint64)
+    ///   byte 136 bit7 : isCD flag (1 = CD-DA)
+    ///   bytes 137..395: reserved
+    ///   byte 396      : number of tracks
+    ///   then tracks...
+    /// Track header (36 bytes):
+    ///   bytes 0..7    : track offset (uint64)
+    ///   byte 8        : track number
+    ///   bytes 9..20   : ISRC (12 bytes ASCII)
+    ///   byte 21 bit7  : track type (0=audio, 1=non-audio)
+    ///   byte 21 bit6  : pre-emphasis
+    ///   bytes 21..34  : reserved (top bits of byte 21 already used)
+    ///   byte 35       : number of index points
+    /// Each index point (12 bytes): offset(8) + number(1) + reserved(3).
+    private static func parseCueSheet(_ data: Data) -> FLACCueSheet? {
+        guard data.count >= 396 + 1 else { return nil }
+        let mcnBytes = data.prefix(128)
+        let mcn = String(data: mcnBytes, encoding: .ascii)?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        let leadIn = readUInt64BE(data, at: 128)
+        let isCD = (data[136] & 0x80) != 0
+        let trackCount = Int(data[396])
+
+        var tracks: [FLACCueTrack] = []
+        var off = 397
+        for _ in 0..<trackCount {
+            guard off + 36 <= data.count else { break }
+            let trackOffset = readUInt64BE(data, at: off)
+            let trackNumber = data[off + 8]
+            let isrcBytes = data[off + 9 ..< off + 21]
+            let isrc = String(data: Data(isrcBytes), encoding: .ascii)?
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            let flagsByte = data[off + 21]
+            let isAudio = (flagsByte & 0x80) == 0
+            let preEmphasis = (flagsByte & 0x40) != 0
+            let indexCount = Int(data[off + 35])
+            off += 36
+
+            var indices: [FLACCueIndex] = []
+            for _ in 0..<indexCount {
+                guard off + 12 <= data.count else { break }
+                let idxOff = readUInt64BE(data, at: off)
+                let idxNum = data[off + 8]
+                indices.append(FLACCueIndex(indexOffset: idxOff, indexNumber: idxNum))
+                off += 12
+            }
+
+            tracks.append(FLACCueTrack(
+                trackOffset: trackOffset, trackNumber: trackNumber, isrc: isrc,
+                isAudio: isAudio, preEmphasis: preEmphasis, indices: indices))
+        }
+
+        return FLACCueSheet(
+            mediaCatalogNumber: mcn, leadInSamples: leadIn, isCD: isCD, tracks: tracks)
+    }
+
+    private static func readUInt64BE(_ data: Data, at offset: Int) -> UInt64 {
+        var v: UInt64 = 0
+        for i in 0..<8 {
+            v = (v << 8) | UInt64(data[offset + i])
+        }
+        return v
     }
 
     /// Parse all metadata blocks from a FLAC file.

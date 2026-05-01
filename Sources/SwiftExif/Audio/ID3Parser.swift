@@ -241,10 +241,235 @@ public struct ID3Parser: Sendable {
                 if metadata.coverArt == nil {
                     metadata.coverArt = extractAPIC(frameData)
                 }
+            case "TXXX", "TXX":
+                if let pair = decodeUserTextFrame(frameData) {
+                    metadata.userTextFrames[pair.description] = pair.value
+                }
+            case "WXXX", "WXX":
+                if let pair = decodeUserURLFrame(frameData) {
+                    metadata.userURLFrames[pair.description] = pair.url
+                }
+            case "WCOM", "WCM",
+                 "WCOP", "WCP",
+                 "WOAF", "WAF",
+                 "WOAR", "WAR",
+                 "WOAS", "WAS",
+                 "WORS",
+                 "WPAY",
+                 "WPUB", "WPB":
+                // Standard URL frames have no encoding byte — body is ISO-Latin-1 ASCII.
+                if let url = String(data: frameData, encoding: .isoLatin1)?
+                    .trimmingCharacters(in: .controlCharacters)
+                    .trimmingCharacters(in: .whitespaces),
+                   !url.isEmpty {
+                    metadata.urlFrames[frameID] = url
+                }
+            case "PRIV":
+                if let priv = decodePRIVFrame(frameData) {
+                    metadata.privateFrames.append(priv)
+                }
+            case "GEOB", "GEO":
+                if let obj = decodeGEOBFrame(frameData) {
+                    metadata.attachedObjects.append(obj)
+                }
+            case "CHAP":
+                if let chap = decodeCHAPFrame(frameData) {
+                    metadata.chapters.append(chap)
+                }
+            case "CTOC":
+                if let toc = decodeCTOCFrame(frameData) {
+                    metadata.chapterTOCs.append(toc)
+                }
             default:
                 break
             }
         }
+    }
+
+    // MARK: - Extended Frame Decoders
+
+    /// TXXX: encoding (1) + description (null-terminated) + value (rest).
+    private static func decodeUserTextFrame(_ data: Data) -> (description: String, value: String)? {
+        guard !data.isEmpty else { return nil }
+        let encoding = data[data.startIndex]
+        let body = data.dropFirst()
+        guard let split = splitOnNullTerminator(body, encoding: encoding) else { return nil }
+        let description = decodeString(split.head, encoding: encoding) ?? ""
+        let value = decodeString(split.tail, encoding: encoding) ?? ""
+        if description.isEmpty && value.isEmpty { return nil }
+        return (description, value)
+    }
+
+    /// WXXX: encoding (1) + description (null-terminated, encoding-aware) + URL (ISO-Latin-1, null-terminated).
+    private static func decodeUserURLFrame(_ data: Data) -> (description: String, url: String)? {
+        guard !data.isEmpty else { return nil }
+        let encoding = data[data.startIndex]
+        let body = data.dropFirst()
+        guard let split = splitOnNullTerminator(body, encoding: encoding) else { return nil }
+        let description = decodeString(split.head, encoding: encoding) ?? ""
+        // URL portion is always ISO-Latin-1 per spec.
+        var urlBytes = Data(split.tail)
+        if let nul = urlBytes.firstIndex(of: 0) { urlBytes = urlBytes.prefix(upTo: nul) }
+        let url = String(data: urlBytes, encoding: .isoLatin1)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        if url.isEmpty { return nil }
+        return (description, url)
+    }
+
+    /// PRIV: owner identifier (Latin-1, null-terminated) + binary payload.
+    private static func decodePRIVFrame(_ data: Data) -> ID3PrivateFrame? {
+        guard let nul = data.firstIndex(of: 0) else { return nil }
+        let ownerBytes = data[data.startIndex ..< nul]
+        let owner = String(data: Data(ownerBytes), encoding: .isoLatin1) ?? ""
+        let payload = Data(data[(nul + 1)...])
+        return ID3PrivateFrame(owner: owner, data: payload)
+    }
+
+    /// GEOB: encoding (1) + MIME (Latin-1 null-term) + filename (encoding-aware null-term)
+    /// + description (encoding-aware null-term) + binary data.
+    private static func decodeGEOBFrame(_ data: Data) -> ID3AttachedObject? {
+        guard data.count >= 4 else { return nil }
+        let encoding = data[data.startIndex]
+        var idx = data.startIndex + 1
+
+        // MIME: Latin-1, null-terminated.
+        guard let mimeNull = data[idx...].firstIndex(of: 0) else { return nil }
+        let mime = String(data: Data(data[idx ..< mimeNull]), encoding: .isoLatin1) ?? ""
+        idx = mimeNull + 1
+
+        // Filename: encoding-aware null-terminated.
+        let after1 = data[idx...]
+        guard let split1 = splitOnNullTerminator(after1, encoding: encoding) else { return nil }
+        let filename = decodeString(split1.head, encoding: encoding) ?? ""
+
+        // Description: encoding-aware null-terminated.
+        guard let split2 = splitOnNullTerminator(split1.tail, encoding: encoding) else { return nil }
+        let description = decodeString(split2.head, encoding: encoding) ?? ""
+
+        return ID3AttachedObject(
+            mimeType: mime, filename: filename, description: description, data: Data(split2.tail))
+    }
+
+    /// CHAP: element ID (null-term Latin-1) + start_time (4) + end_time (4)
+    /// + start_offset (4) + end_offset (4) + sub-frames.
+    private static func decodeCHAPFrame(_ data: Data) -> ID3Chapter? {
+        guard let nul = data.firstIndex(of: 0) else { return nil }
+        let elementID = String(data: Data(data[data.startIndex ..< nul]), encoding: .isoLatin1) ?? ""
+        let after = nul + 1
+        guard data.endIndex - after >= 16 else { return nil }
+        let startTime = readBE32(data, at: after)
+        let endTime = readBE32(data, at: after + 4)
+        let startOffset = readBE32(data, at: after + 8)
+        let endOffset = readBE32(data, at: after + 12)
+
+        var chapter = ID3Chapter(
+            elementID: elementID,
+            startTimeMs: startTime, endTimeMs: endTime,
+            startOffset: startOffset, endOffset: endOffset
+        )
+
+        // Embedded sub-frames are full ID3 frames (10-byte header + body).
+        let subStart = after + 16
+        for sub in iterateSubFrames(data, from: subStart, end: data.endIndex) {
+            switch sub.id {
+            case "TIT2":
+                chapter.title = chapter.title ?? decodeTextFrame(sub.body)
+            case "WXXX":
+                if let pair = decodeUserURLFrame(sub.body) {
+                    chapter.url = chapter.url ?? pair.url
+                }
+            default: break
+            }
+        }
+        return chapter
+    }
+
+    /// CTOC: element ID (null-term) + flags (1) + entry_count (1) + child IDs (each null-term) + sub-frames.
+    private static func decodeCTOCFrame(_ data: Data) -> ID3ChapterTOC? {
+        guard let nul = data.firstIndex(of: 0) else { return nil }
+        let elementID = String(data: Data(data[data.startIndex ..< nul]), encoding: .isoLatin1) ?? ""
+        var idx = nul + 1
+        guard idx + 2 <= data.endIndex else { return nil }
+        let flags = data[idx]
+        let isTopLevel = (flags & 0x02) != 0
+        let isOrdered = (flags & 0x01) != 0
+        idx += 1
+        let entryCount = Int(data[idx])
+        idx += 1
+
+        var children: [String] = []
+        for _ in 0..<entryCount {
+            guard idx < data.endIndex,
+                  let n = data[idx...].firstIndex(of: 0) else { break }
+            let id = String(data: Data(data[idx ..< n]), encoding: .isoLatin1) ?? ""
+            children.append(id)
+            idx = n + 1
+        }
+
+        var title: String?
+        for sub in iterateSubFrames(data, from: idx, end: data.endIndex) where sub.id == "TIT2" {
+            title = decodeTextFrame(sub.body)
+            break
+        }
+
+        return ID3ChapterTOC(
+            elementID: elementID,
+            isTopLevel: isTopLevel, isOrdered: isOrdered,
+            childElementIDs: children, title: title
+        )
+    }
+
+    /// Walk embedded ID3v2.3/v2.4 frames inside a CHAP/CTOC body.
+    private static func iterateSubFrames(_ data: Data, from start: Int, end: Int) -> [(id: String, body: Data)] {
+        var out: [(String, Data)] = []
+        var off = start
+        while off + 10 <= end {
+            guard let id = String(data: Data(data[off ..< off + 4]), encoding: .ascii) else { break }
+            // Sub-frames inside CHAP/CTOC are commonly encoded with 32-bit big-endian
+            // size (not syncsafe) per the v2.3 spec where these were introduced;
+            // some v2.4 writers use syncsafe. Treat as syncsafe first, fall back to BE.
+            let syncsafe = decodeSyncsafe(data[off + 4], data[off + 5], data[off + 6], data[off + 7])
+            let beSize = (Int(data[off + 4]) << 24) | (Int(data[off + 5]) << 16) | (Int(data[off + 6]) << 8) | Int(data[off + 7])
+            let size: Int
+            if syncsafe > 0, off + 10 + syncsafe <= end {
+                size = syncsafe
+            } else if beSize > 0, off + 10 + beSize <= end {
+                size = beSize
+            } else {
+                break
+            }
+            let body = Data(data[off + 10 ..< off + 10 + size])
+            out.append((id, body))
+            off += 10 + size
+        }
+        return out
+    }
+
+    /// Split a buffer on the encoding-aware null terminator. UTF-16 uses two
+    /// zero bytes aligned on an even byte; Latin-1/UTF-8 use a single zero byte.
+    /// Returns (head: bytes before the null, tail: bytes after).
+    private static func splitOnNullTerminator(_ data: Data.SubSequence, encoding: UInt8) -> (head: Data.SubSequence, tail: Data.SubSequence)? {
+        let useUTF16 = encoding == 1 || encoding == 2
+        if useUTF16 {
+            var i = data.startIndex
+            while i + 1 < data.endIndex {
+                if data[i] == 0 && data[i + 1] == 0 {
+                    return (data[data.startIndex ..< i], data[(i + 2) ..< data.endIndex])
+                }
+                i += 2
+            }
+            return nil
+        } else {
+            guard let nul = data.firstIndex(of: 0) else { return nil }
+            return (data[data.startIndex ..< nul], data[(nul + 1) ..< data.endIndex])
+        }
+    }
+
+    private static func readBE32(_ data: Data, at offset: Int) -> UInt32 {
+        UInt32(data[offset]) << 24
+            | UInt32(data[offset + 1]) << 16
+            | UInt32(data[offset + 2]) << 8
+            | UInt32(data[offset + 3])
     }
 
     // MARK: - ID3v1
