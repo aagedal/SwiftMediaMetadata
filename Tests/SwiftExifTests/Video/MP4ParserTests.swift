@@ -154,7 +154,9 @@ final class MP4ParserTests: XCTestCase {
         let keyList = [
             "manufacturer", "camera_type", "viewing_gamma",
             "offspeed_frame_time", "offspeed", "viewing_bmdgen",
-            "braw_compression_ratio",
+            "braw_compression_ratio", "rotation", "lens_shading_enable",
+            "tone_curve_contrast", "post_3dlut_embedded_size",
+            "post_3dlut_embedded_data", "braw_codec_bitrate",
         ]
         var keysPayload = BinaryWriter(capacity: 256)
         keysPayload.writeBytes([0x00, 0x00, 0x00, 0x00]) // version+flags
@@ -201,6 +203,26 @@ final class MP4ParserTests: XCTestCase {
         ilstPayload.append(makeItem(index: 6, typeIndicator: 76, payload: Data([0x00, 0x05])))
         // UTF-8: "12:1"
         ilstPayload.append(makeItem(index: 7, typeIndicator: 1, payload: Data("12:1".utf8)))
+        // rotation: int16 BE = 90 (degrees, plain integer — not a boolean)
+        ilstPayload.append(makeItem(index: 8, typeIndicator: 76, payload: Data([0x00, 0x5A])))
+        // lens_shading_enable: int16 BE = 1 (true)
+        ilstPayload.append(makeItem(index: 9, typeIndicator: 76, payload: Data([0x00, 0x01])))
+        // tone_curve_contrast: float32 BE = 0.5
+        var contrastBE = Float(0.5).bitPattern.bigEndian
+        let contrastData = Data(bytes: &contrastBE, count: 4)
+        ilstPayload.append(makeItem(index: 10, typeIndicator: 23, payload: contrastData))
+        // post_3dlut_embedded_size: int16 BE = 33 (a 33×33×33 LUT cube)
+        ilstPayload.append(makeItem(index: 11, typeIndicator: 76, payload: Data([0x00, 0x21])))
+        // post_3dlut_embedded_data: type 22 blob — 16 dummy bytes; the
+        // parser must NOT serialise the bytes into a UTF-8 string, only
+        // emit a "<N> bytes" marker.
+        ilstPayload.append(makeItem(index: 12, typeIndicator: 22,
+                                    payload: Data(repeating: 0xAB, count: 16)))
+        // braw_codec_bitrate: type 77 / 4-byte unsigned. 0x90000000 has the
+        // high bit set — verifies type 77 is treated as UNSIGNED, not
+        // sign-extended into a negative Int64.
+        ilstPayload.append(makeItem(index: 13, typeIndicator: 77,
+                                    payload: Data([0x90, 0x00, 0x00, 0x00])))
         let ilstBox = buildBox("ilst", data: ilstPayload)
 
         // 3) hdlr advertising mdta-style metadata, then meta wrapping
@@ -253,9 +275,25 @@ final class MP4ParserTests: XCTestCase {
         // at the mvhd-derived 25 (520 / 25 = 20.8s; frame rate is unset
         // here because there's no real video trak with stts).
         XCTAssertEqual(cam.captureFps ?? 0, 112.0, accuracy: 0.05)
-        // Slate fields surface as parallel name/content arrays.
-        XCTAssertEqual(cam.userMetaNames, ["offspeed", "viewing_bmdgen", "braw_compression_ratio"])
-        XCTAssertEqual(cam.userMetaContents, ["true", "Generation 5", "12:1"])
+        // Slate fields surface as parallel name/content arrays. Order
+        // follows the ilst scan order (which is the index assignment order
+        // above). New keys land in the integer / float / bool / blob blocks
+        // depending on their declared semantics.
+        XCTAssertEqual(cam.userMetaNames, [
+            "offspeed", "viewing_bmdgen", "braw_compression_ratio",
+            "rotation", "lens_shading_enable", "tone_curve_contrast",
+            "post_3dlut_embedded_size", "post_3dlut_embedded_data",
+            "braw_codec_bitrate",
+        ])
+        XCTAssertEqual(cam.userMetaContents, [
+            "true", "Generation 5", "12:1",
+            "90", "true", "0.5",
+            "33", "16 bytes",
+            // 0x90000000 = 2,415,919,104 — must round-trip as a positive
+            // unsigned uint32, not the negative Int32 a sign-extending
+            // decoder would emit.
+            "2415919104",
+        ])
     }
 
     /// Legacy QuickTime / Blackmagic RAW files have no ftyp at the top —
@@ -285,6 +323,244 @@ final class MP4ParserTests: XCTestCase {
         XCTAssertEqual(metadata.duration, 5.0)
         // No ftyp → defaults to .mov so the rest of the parse can proceed.
         XCTAssertEqual(metadata.format, .mov)
+    }
+
+    /// BRAW emits three uint32 codec-config atoms inside the `brhq` sample
+    /// entry's child-box list: `bfdn` (BRAW format-definition id),
+    /// `ctrn` (color-transform version), `bver` (BRAW codec version).
+    /// They sit alongside the moov.meta clip slate in CameraMetadata.
+    func testParseBlackmagicRAWCodecAtoms() throws {
+        // 1) Build the three child atoms — each is a 12-byte box wrapping
+        //    one uint32 BE.
+        func uint32Box(_ type: String, _ value: UInt32) -> Data {
+            var w = BinaryWriter(capacity: 4)
+            w.writeUInt32BigEndian(value)
+            return buildBox(type, data: w.data)
+        }
+        let bfdnBox = uint32Box("bfdn", 1001)
+        let ctrnBox = uint32Box("ctrn", 1)
+        let bverBox = uint32Box("bver", 1)
+        let codecChildren = bfdnBox + ctrnBox + bverBox
+
+        // 2) Build a 78-byte VisualSampleEntry payload (zeroed — the parser
+        //    only cares about width/height and the children), then prepend
+        //    the brhq box header so child atoms start at +86 from box start.
+        let visualFields = Data(repeating: 0, count: 78)
+        let brhqEntry = buildBox("brhq", data: visualFields + codecChildren)
+
+        // 3) stsd: FullBox header + entry_count(1) + the brhq sample entry.
+        var stsdWriter = BinaryWriter(capacity: 32 + brhqEntry.count)
+        stsdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        stsdWriter.writeUInt32BigEndian(1)
+        stsdWriter.writeBytes(brhqEntry)
+        let stsdBox = buildBox("stsd", data: stsdWriter.data)
+
+        // 4) Wrap stsd → stbl → minf → mdia (with a vide hdlr) → trak.
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00]) // version + flags
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4)) // pre_defined
+        hdlrWriter.writeString("vide", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12)) // reserved
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        let stblBox = buildBox("stbl", data: stsdBox)
+        let minfBox = buildBox("minf", data: stblBox)
+        let mdiaBox = buildBox("mdia", data: hdlrBox + minfBox)
+        let trakBox = buildBox("trak", data: mdiaBox)
+
+        // 5) mvhd + trak → moov; wrap with a BRAW-style ftyp-less preamble.
+        var mvhd = BinaryWriter(capacity: 128)
+        mvhd.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(25)
+        mvhd.writeUInt32BigEndian(125)
+        mvhd.writeBytes(Data(repeating: 0, count: 80))
+        let mvhdBox = buildBox("mvhd", data: mvhd.data)
+
+        let moovBox = buildBox("moov", data: mvhdBox + trakBox)
+        var file = BinaryWriter(capacity: moovBox.count + 32)
+        file.writeUInt32BigEndian(8); file.writeString("wide", encoding: .ascii)
+        file.writeUInt32BigEndian(8); file.writeString("mdat", encoding: .ascii)
+        file.writeBytes(moovBox)
+
+        let metadata = try VideoMetadata.read(from: file.data)
+        let cam = try XCTUnwrap(metadata.camera)
+        XCTAssertEqual(cam.userMetaNames, [
+            "braw_codec_bfdn", "braw_codec_ctrn", "braw_codec_bver",
+        ])
+        XCTAssertEqual(cam.userMetaContents, ["1001", "1", "1"])
+    }
+
+    /// BRAW stores ISO / white-balance Kelvin / tint AND the lens-string
+    /// fields (shutter angle, aperture, focal length, focus distance)
+    /// inside each frame's `bmdf` header in mdat — not in moov.meta. The
+    /// parser reads frame 0's header via the trak's stco offset and pulls
+    /// the seven values; null-padded UTF-8 strings are trimmed and empty
+    /// strings (no electronic lens contact) are dropped.
+    func testParseBlackmagicRAWFirstFrameAttributes() throws {
+        // 1) Build a BRAW frame metadata block: one bmdf box wrapping a
+        //    sequence of typed sub-boxes covering all the atoms we decode.
+        func uint32Box(_ type: String, _ value: UInt32) -> Data {
+            var w = BinaryWriter(capacity: 4)
+            w.writeUInt32BigEndian(value)
+            return buildBox(type, data: w.data)
+        }
+        func int16Box(_ type: String, _ value: Int16) -> Data {
+            var w = BinaryWriter(capacity: 2)
+            w.writeUInt16BigEndian(UInt16(bitPattern: value))
+            return buildBox(type, data: w.data)
+        }
+        // BMD pads each string field to 24 bytes with NULs. "180°" is 5
+        // bytes UTF-8 (3 ASCII + 2-byte combining degree sign) → 19 NULs.
+        func paddedStringBox(_ type: String, _ value: String) -> Data {
+            var bytes = Data(value.utf8)
+            let target = 24
+            if bytes.count > target { bytes = bytes.prefix(target) }
+            else { bytes.append(Data(repeating: 0, count: target - bytes.count)) }
+            return buildBox(type, data: bytes)
+        }
+        // An empty string (e.g. focus_distance with no electronic lens):
+        // 24 NULs. The parser must NOT surface this as a slate entry.
+        let emptyDsnc = buildBox("dsnc", data: Data(repeating: 0, count: 24))
+        // Order matches real BRAW layout: shtv → aptr → fcln → dsnc →
+        // isoe → wkel → wtin.
+        let frameHeader = Data(repeating: 0, count: 8)
+            + paddedStringBox("shtv", "180°")
+            + paddedStringBox("aptr", "f2.7")
+            + paddedStringBox("fcln", "135mm")
+            + emptyDsnc
+            + uint32Box("isoe", 800)
+            + uint32Box("wkel", 5600)
+            + int16Box("wtin", 12)
+        let bmdfBox = buildBox("bmdf", data: frameHeader)
+
+        // 2) Wrap the frame block in mdat. The chunk offset stored in stco
+        //    must equal the absolute file offset of bmdfBox's first byte.
+        let mdatHeaderSize = 8
+        // ftyp (16) + mdat-header (8) → bmdf starts at 24.
+        let firstChunkOffset: UInt32 = 16 + 8
+        let mdatBox = buildBox("mdat", data: bmdfBox)
+        _ = mdatHeaderSize // suppress unused-warning if helpers shift
+
+        // 3) Build a brhq video sample entry — needs the 78-byte
+        //    VisualSampleEntry header; no codec children needed for this
+        //    test (codec FourCC alone gates the parser).
+        let visualFields = Data(repeating: 0, count: 78)
+        let brhqEntry = buildBox("brhq", data: visualFields)
+        var stsdWriter = BinaryWriter(capacity: 16 + brhqEntry.count)
+        stsdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        stsdWriter.writeUInt32BigEndian(1)
+        stsdWriter.writeBytes(brhqEntry)
+        let stsdBox = buildBox("stsd", data: stsdWriter.data)
+
+        // 4) stco: FullBox header(4) + entry_count(4) + offsets(N×4).
+        var stcoWriter = BinaryWriter(capacity: 16)
+        stcoWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        stcoWriter.writeUInt32BigEndian(1)
+        stcoWriter.writeUInt32BigEndian(firstChunkOffset)
+        let stcoBox = buildBox("stco", data: stcoWriter.data)
+
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4))
+        hdlrWriter.writeString("vide", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12))
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        let stblBox = buildBox("stbl", data: stsdBox + stcoBox)
+        let minfBox = buildBox("minf", data: stblBox)
+        let mdiaBox = buildBox("mdia", data: hdlrBox + minfBox)
+        let trakBox = buildBox("trak", data: mdiaBox)
+
+        var mvhd = BinaryWriter(capacity: 128)
+        mvhd.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhd.writeUInt32BigEndian(0); mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(25); mvhd.writeUInt32BigEndian(125)
+        mvhd.writeBytes(Data(repeating: 0, count: 80))
+        let mvhdBox = buildBox("mvhd", data: mvhd.data)
+        let moovBox = buildBox("moov", data: mvhdBox + trakBox)
+
+        // 5) Final layout: ftyp(16) + mdat(varies) + moov.
+        var file = BinaryWriter(capacity: 256 + moovBox.count + mdatBox.count)
+        let ftyp = Data("isom".utf8) + Data([0x00, 0x00, 0x00, 0x00])
+        file.writeUInt32BigEndian(UInt32(8 + ftyp.count))
+        file.writeString("ftyp", encoding: .ascii)
+        file.writeBytes(ftyp)
+        XCTAssertEqual(file.count, 16, "ftyp must be exactly 16 bytes for the stco offset to land inside mdat")
+        file.writeBytes(mdatBox)
+        file.writeBytes(moovBox)
+
+        let metadata = try VideoMetadata.read(from: file.data)
+        let cam = try XCTUnwrap(metadata.camera)
+        // dsnc is empty in this fixture and must not appear in the slate;
+        // the rest are surfaced in bmdf walk order.
+        XCTAssertEqual(cam.userMetaNames, [
+            "shutter_angle", "aperture", "focal_length",
+            "iso", "white_balance_kelvin", "white_balance_tint",
+        ])
+        XCTAssertEqual(cam.userMetaContents, [
+            "180°", "f2.7", "135mm",
+            "800", "5600", "12",
+        ])
+    }
+
+    /// BRAW carries per-frame gyroscope and accelerometer data as `mebx`
+    /// timed-metadata tracks, declared with the namespaces
+    /// `com.blackmagicdesign.motiondata.gyroscope` and `…accelerometer`.
+    /// We don't decode the per-frame samples (out of scope), but we do
+    /// flag presence so consumers can ask for the streams later.
+    func testParseBlackmagicMotionDataTracksDetected() throws {
+        // mebx sample-entry payload: 8-byte SampleEntry header (6 reserved
+        // + 2 data_reference_index) followed by a `keys` child box that
+        // embeds a `keyd` declaration. The parser only does a substring
+        // scan for the BMD namespace, so the keyd payload can be a flat
+        // bytestring — we don't need full mebx-keys structure.
+        let gyroNamespace = Data("com.blackmagicdesign.motiondata.gyroscope".utf8)
+        let keydBox = buildBox("keyd", data: gyroNamespace)
+        let keysBox = buildBox("keys", data: keydBox)
+        var mebxPayload = BinaryWriter(capacity: 8 + keysBox.count)
+        mebxPayload.writeBytes(Data(repeating: 0, count: 8)) // SampleEntry reserved+data_ref_idx
+        mebxPayload.writeBytes(keysBox)
+        let mebxEntry = buildBox("mebx", data: mebxPayload.data)
+
+        var stsdWriter = BinaryWriter(capacity: 16 + mebxEntry.count)
+        stsdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        stsdWriter.writeUInt32BigEndian(1)
+        stsdWriter.writeBytes(mebxEntry)
+        let stsdBox = buildBox("stsd", data: stsdWriter.data)
+
+        // A `meta` handler track lands in the data-handler dispatch where
+        // detectBRAWMotionTracks runs.
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4))
+        hdlrWriter.writeString("meta", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12))
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        let stblBox = buildBox("stbl", data: stsdBox)
+        let minfBox = buildBox("minf", data: stblBox)
+        let mdiaBox = buildBox("mdia", data: hdlrBox + minfBox)
+        let trakBox = buildBox("trak", data: mdiaBox)
+
+        var mvhd = BinaryWriter(capacity: 128)
+        mvhd.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhd.writeUInt32BigEndian(0); mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(25); mvhd.writeUInt32BigEndian(125)
+        mvhd.writeBytes(Data(repeating: 0, count: 80))
+        let mvhdBox = buildBox("mvhd", data: mvhd.data)
+        let moovBox = buildBox("moov", data: mvhdBox + trakBox)
+
+        var file = BinaryWriter(capacity: moovBox.count + 32)
+        file.writeUInt32BigEndian(8); file.writeString("wide", encoding: .ascii)
+        file.writeUInt32BigEndian(8); file.writeString("mdat", encoding: .ascii)
+        file.writeBytes(moovBox)
+
+        let metadata = try VideoMetadata.read(from: file.data)
+        let cam = try XCTUnwrap(metadata.camera)
+        XCTAssertEqual(cam.userMetaNames, ["has_gyroscope_motion_data"])
+        XCTAssertEqual(cam.userMetaContents, ["true"])
     }
 
     // MARK: - Exporter

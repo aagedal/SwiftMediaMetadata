@@ -124,6 +124,19 @@ public struct MP4Parser: Sendable {
             }
         }
 
+        // Blackmagic RAW: the per-frame interpretation header at the start
+        // of every video chunk in mdat carries clip-level defaults that
+        // aren't in moov.meta — ISO equivalent (`isoe`), white-balance
+        // Kelvin (`wkel`), and white-balance tint (`wtin`). The values are
+        // identical for every frame in the clips we've inspected (camera
+        // bakes them once at record-start), so reading frame 0 is enough.
+        for trak in moovChildren.filter({ $0.type == "trak" }) {
+            guard trakHandlerType(trak.data) == "vide" else { continue }
+            parseBRAWFirstFrameAttributes(
+                trak.data, fullData: data, into: &metadata
+            )
+        }
+
         // Chapter markers. Two paths, both standard:
         //   1. QuickTime text-track chapters — the video track carries
         //      `tref > chap` pointing at one or more text/subt tracks whose
@@ -612,6 +625,16 @@ public struct MP4Parser: Sendable {
             stream.isDefault = tkhdIsDefault
             stream.rotation = tkhdRotation
             parseVisualSampleEntry(stsdBox.data, into: &stream)
+            // Blackmagic RAW: pull the three uint32 codec-config atoms
+            // (bfdn / ctrn / bver) out of the BRAW sample entry's child
+            // boxes and surface them next to the moov.meta clip slate.
+            // BRAW uses one FourCC per quality preset — `brhq` (High
+            // Quality), `brst` (Standard), `brlt` (Light), plus likely
+            // others for Q0/Q1/Q3/Q5 and constant-bitrate ratios — all
+            // sharing the "br" prefix.
+            if stream.codec?.hasPrefix("br") == true {
+                parseBRAWCodecExtensions(stsdBox.data, into: &metadata)
+            }
             // ffprobe always computes per-stream bit_rate from actual packet
             // sizes in the edit-list window (not from the encoder-declared
             // `btrt` value, which goes stale after lossless trim). Mirror that
@@ -719,6 +742,11 @@ public struct MP4Parser: Sendable {
             stream.isDefault = tkhdIsDefault
             if let stsdBox {
                 parseDataSampleEntry(stsdBox.data, into: &stream)
+                // Blackmagic RAW emits per-frame gyroscope and accelerometer
+                // streams as `mebx` timed-metadata tracks. We don't decode
+                // the per-frame samples (out of scope for the slate pass);
+                // just flag presence so consumers know the streams exist.
+                detectBRAWMotionTracks(in: stsdBox.data, into: &metadata)
             }
             stream.codecName = stream.codecName ?? dataHandlerLongName(handlerType, isChapter: isChapterTextTrack)
             metadata.dataStreams.append(stream)
@@ -2330,7 +2358,9 @@ public struct MP4Parser: Sendable {
                  "camera_number", "camera_operator", "date_recorded",
                  "environment", "day_night", "location", "filters",
                  "post_3dlut_mode", "post_3dlut_embedded_name",
-                 "post_3dlut_embedded_title", "frameguide_aspect_ratio":
+                 "post_3dlut_embedded_title", "post_3dlut_embedded_bmd_gamma",
+                 "frameguide_aspect_ratio", "encoder_device_manufacturer",
+                 "time_lapse_interval", "anamorphic":
                 if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload),
                    !s.isEmpty {
                     bmdSlateNames.append(key)
@@ -2342,15 +2372,41 @@ public struct MP4Parser: Sendable {
                     bmdSlateContents.append("Generation \(n)")
                 }
             case "offspeed", "offspeed_is_constant", "anamorphic_enable",
-                 "good_take", "gamut_compression_enable":
+                 "good_take", "gamut_compression_enable",
+                 "analog_gain_is_constant", "ois_enable", "highlight_recovery",
+                 "lens_shading_enable", "lens_distortion_correction_enable",
+                 "lens_chromatic_aberration_correction_enable":
                 if let n = decodeMDTAInt(typeIndicator: typeIndicator, payload: payload) {
                     bmdSlateNames.append(key)
                     bmdSlateContents.append(n == 0 ? "false" : "true")
                 }
-            case "analog_gain":
+            case "post_3dlut_embedded_size", "rotation",
+                 "tone_curve_video_black_level", "braw_codec_bitrate":
+                // Plain integers (not booleans). `post_3dlut_embedded_size`
+                // is the LUT cube edge (e.g. 33 → a 33×33×33 cube),
+                // `rotation` is in degrees, `braw_codec_bitrate` is a
+                // 32-bit unsigned byterate (see decodeMDTAInt).
+                if let n = decodeMDTAInt(typeIndicator: typeIndicator, payload: payload) {
+                    bmdSlateNames.append(key)
+                    bmdSlateContents.append("\(n)")
+                }
+            case "analog_gain", "sensor_line_time",
+                 "sensor_photosite_pitch_in_micrometres",
+                 "tone_curve_contrast", "tone_curve_saturation",
+                 "tone_curve_midpoint", "tone_curve_highlights",
+                 "tone_curve_shadows", "tone_curve_black_level",
+                 "tone_curve_white_level":
                 if let v = decodeMDTAFloat(typeIndicator: typeIndicator, payload: payload) {
                     bmdSlateNames.append(key)
                     bmdSlateContents.append(String(format: "%g", v))
+                }
+            case "post_3dlut_embedded_data":
+                // ~432 KB of LUT binary. Don't dump the bytes into a string
+                // field; surface the size so consumers know the LUT is
+                // present and how big it is.
+                if typeIndicator == 22 {
+                    bmdSlateNames.append(key)
+                    bmdSlateContents.append("\(payload.count) bytes")
                 }
             case "sensor_area_captured", "crop_origin", "crop_size", "safe_area":
                 // BMD-specific type 71 = pair of float32 BE values, used here
@@ -2454,20 +2510,259 @@ public struct MP4Parser: Sendable {
         return String(format: "%g", v)
     }
 
-    /// Decode `data` payload as a signed integer (types 21, 67, 75, 76, 77).
-    /// Width follows the payload length; the high bit drives sign extension.
+    /// Decode `data` payload as an integer (types 21, 67, 75, 76, 77, plus
+    /// the unsigned 22). Width follows the payload length; the high bit drives
+    /// sign extension for signed types. Apple type 22 and BMD type 77 (used
+    /// for `braw_codec_bitrate`, a 32-bit byterate) are unsigned.
     private static func decodeMDTAInt(typeIndicator: UInt32, payload: Data) -> Int64? {
         guard [21, 22, 67, 75, 76, 77].contains(Int(typeIndicator)),
               !payload.isEmpty, payload.count <= 8 else { return nil }
         var n: UInt64 = 0
         for b in payload { n = (n << 8) | UInt64(b) }
-        let isSigned = typeIndicator != 22
+        let isSigned = typeIndicator != 22 && typeIndicator != 77
         if isSigned, let first = payload.first, first & 0x80 != 0 {
             // Sign-extend using the actual payload width.
             let mask = (UInt64(1) << (payload.count * 8)) &- 1
             n |= ~mask
         }
         return Int64(bitPattern: n)
+    }
+
+    /// Walk the `brhq` sample entry inside `stsd` and harvest the three
+    /// BRAW-specific codec-config atoms — `bfdn` (BRAW format definition
+    /// id, e.g. 1001), `ctrn` (color-transform version), and `bver` (BRAW
+    /// codec version). Each is a 12-byte box wrapping a single uint32 BE.
+    /// The values land in `camera.userMetaNames`/`userMetaContents` so they
+    /// surface next to the moov.meta slate.
+    private static func parseBRAWCodecExtensions(_ stsdData: Data, into metadata: inout VideoMetadata) {
+        // Mirror parseVisualSampleEntry's walk: stsd FullBox header (4) +
+        // entry_count (4), then the first sample entry. The 4-byte type at
+        // entryStart+4 is the codec FourCC; child boxes start 78 bytes
+        // past the 8-byte SampleEntry box header (per ISO/IEC 14496-12).
+        var reader = BinaryReader(data: stsdData)
+        _ = try? reader.readBytes(4) // FullBox header
+        _ = try? reader.readUInt32BigEndian() // entry_count
+        guard reader.remainingCount >= 8 else { return }
+        let entryStart = reader.offset
+        guard let entrySize32 = try? reader.readUInt32BigEndian(),
+              let codecBytes = try? reader.readBytes(4),
+              codecBytes.starts(with: Data("br".utf8)) else { return }
+        let entryEnd = entryStart + Int(entrySize32)
+        let childrenStart = entryStart + 8 + 78
+        guard childrenStart < entryEnd, entryEnd <= stsdData.count else { return }
+        let childrenData = Data(
+            stsdData[(stsdData.startIndex + childrenStart) ..< (stsdData.startIndex + entryEnd)]
+        )
+        guard let kids = try? ISOBMFFBoxReader.parseBoxes(from: childrenData) else { return }
+
+        var slateNames: [String] = []
+        var slateContents: [String] = []
+        for kid in kids {
+            guard kid.data.count >= 4 else { continue }
+            let n: UInt32 = kid.data.prefix(4)
+                .reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            switch kid.type {
+            case "bfdn":
+                slateNames.append("braw_codec_bfdn")
+                slateContents.append("\(n)")
+            case "ctrn":
+                slateNames.append("braw_codec_ctrn")
+                slateContents.append("\(n)")
+            case "bver":
+                slateNames.append("braw_codec_bver")
+                slateContents.append("\(n)")
+            default:
+                break
+            }
+        }
+        guard !slateNames.isEmpty else { return }
+        updateCamera(&metadata) {
+            $0.userMetaNames.append(contentsOf: slateNames)
+            $0.userMetaContents.append(contentsOf: slateContents)
+        }
+    }
+
+    /// Read Blackmagic RAW's per-frame interpretation header at the start
+    /// of frame 0 in mdat to recover ISO, white-balance Kelvin/tint, and
+    /// the lens-string fields the camera bakes alongside them. The header
+    /// is a `bmdf` (Blackmagic Design Frame) box wrapping a sequence of
+    /// small typed atoms; the ones we decode are:
+    ///
+    ///   `shtv`  size=32  utf-8 padded — shutter angle (e.g. "180°")
+    ///   `aptr`  size=32  utf-8 padded — aperture (e.g. "f2.7")
+    ///   `fcln`  size=32  utf-8 padded — focal length (e.g. "135mm")
+    ///   `dsnc`  size=32  utf-8 padded — focus distance (e.g. "2430mm")
+    ///   `isoe`  size=12   uint32 BE  — ISO equivalent (e.g. 400, 800)
+    ///   `wkel`  size=12   uint32 BE  — white balance in Kelvin
+    ///   `wtin`  size=10    int16 BE  — white balance tint (typically ±50)
+    ///
+    /// These aren't in `moov.meta` and aren't documented by the public BRAW
+    /// SDK; we discovered them by reverse-engineering Cinema Camera 6K /
+    /// PYXIS 6K / PYXIS 12K samples. Other atoms in the same header
+    /// (`srte`, `innd`, `agpf`, `asct`, `asti`, `expo`, `shdp`, `dcp[ugrb]`,
+    /// `skip`) carry per-frame state we haven't yet mapped.
+    ///
+    /// Surface as slate user-meta entries — we don't promote any of them
+    /// to dedicated fields on `CameraMetadata` because that struct is
+    /// shared with other formats (Sony NRT, MXF) and these aren't part
+    /// of its public surface today. We deliberately ignore subsequent
+    /// frames: across all three test clips the values are identical for
+    /// every frame, so reading frame 0 yields the clip-level default.
+    private static func parseBRAWFirstFrameAttributes(
+        _ trakData: Data, fullData: Data, into metadata: inout VideoMetadata
+    ) {
+        guard let trakChildren = try? ISOBMFFBoxReader.parseBoxes(from: trakData),
+              let mdia = trakChildren.first(where: { $0.type == "mdia" }),
+              let mdiaChildren = try? ISOBMFFBoxReader.parseBoxes(from: mdia.data),
+              let minf = mdiaChildren.first(where: { $0.type == "minf" }),
+              let minfChildren = try? ISOBMFFBoxReader.parseBoxes(from: minf.data),
+              let stbl = minfChildren.first(where: { $0.type == "stbl" }),
+              let stblChildren = try? ISOBMFFBoxReader.parseBoxes(from: stbl.data),
+              let stsd = stblChildren.first(where: { $0.type == "stsd" }) else { return }
+
+        // Gate on a BRAW codec FourCC ("br" prefix — brhq / brst / brlt /…).
+        guard let codec = parseFirstStsdCodec(stsd.data),
+              codec.hasPrefix("br") else { return }
+
+        // First chunk offset (== first sample, since BRAW writes one sample
+        // per chunk). Prefer co64 for files >4 GiB.
+        let chunkOffset: UInt64? = {
+            if let co64 = stblChildren.first(where: { $0.type == "co64" }),
+               let off = parseCO64First(co64.data) {
+                return off
+            }
+            if let stco = stblChildren.first(where: { $0.type == "stco" }),
+               let off = parseSTCOFirst(stco.data) {
+                return UInt64(off)
+            }
+            return nil
+        }()
+        guard let offset = chunkOffset else { return }
+        // Each BRAW frame opens with a `bmdf` (Blackmagic Design Frame)
+        // metadata header whose declared size is the first 4 bytes —
+        // typically 256 bytes on smaller-resolution clips and 1024 bytes
+        // on PYXIS 12K. Cap at 4 KiB so we never walk into image data.
+        let s = Int(offset)
+        guard s >= 0, s + 8 <= fullData.count else { return }
+        let bmdfSize = readUInt32BE(fullData, at: fullData.startIndex + s)
+        let windowSize = min(max(Int(bmdfSize), 256), 4096)
+        guard s + windowSize <= fullData.count else { return }
+        let window = fullData.subdata(in: (fullData.startIndex + s)..<(fullData.startIndex + s + windowSize))
+
+        // Locate an atom by its 4-char type. Returns the box-size header,
+        // and the payload range within `window`. The 4 bytes preceding the
+        // type field are the box size; payload size = size - 8.
+        func locate(_ atom: String) -> (size: Int, payload: Range<Data.Index>)? {
+            guard let r = window.range(of: Data(atom.utf8)),
+                  r.lowerBound >= window.startIndex + 4 else { return nil }
+            let sizeStart = r.lowerBound - 4
+            let size = Int(readUInt32BE(window, at: sizeStart))
+            guard size >= 8 else { return nil }
+            let payloadStart = r.upperBound
+            let payloadEnd = payloadStart + (size - 8)
+            guard payloadEnd <= window.endIndex else { return nil }
+            return (size, payloadStart..<payloadEnd)
+        }
+
+        // BMD pads a fixed-size buffer with NULs after the UTF-8 string;
+        // trim at the first NUL and reject empty strings (which appear on
+        // bodies without electronic lens contacts).
+        func decodePaddedString(_ payload: Range<Data.Index>) -> String? {
+            let bytes = window[payload]
+            let endIdx = bytes.firstIndex(of: 0) ?? bytes.endIndex
+            let trimmed = bytes[bytes.startIndex..<endIdx]
+            guard let s = String(data: Data(trimmed), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !s.isEmpty else { return nil }
+            return s
+        }
+
+        // Order of slate appends matches the bmdf walk order (shtv → aptr
+        // → fcln → dsnc → isoe → wkel → wtin) so consumers reading the
+        // arrays sequentially see the values in their natural layout.
+        var slateNames: [String] = []
+        var slateContents: [String] = []
+        let stringFields: [(atom: String, slate: String)] = [
+            ("shtv", "shutter_angle"),
+            ("aptr", "aperture"),
+            ("fcln", "focal_length"),
+            ("dsnc", "focus_distance"),
+        ]
+        for (atom, slate) in stringFields {
+            if let loc = locate(atom), let s = decodePaddedString(loc.payload) {
+                slateNames.append(slate)
+                slateContents.append(s)
+            }
+        }
+        if let loc = locate("isoe"), loc.payload.count == 4 {
+            let v = readUInt32BE(window, at: loc.payload.lowerBound)
+            slateNames.append("iso")
+            slateContents.append("\(v)")
+        }
+        if let loc = locate("wkel"), loc.payload.count == 4 {
+            let v = readUInt32BE(window, at: loc.payload.lowerBound)
+            slateNames.append("white_balance_kelvin")
+            slateContents.append("\(v)")
+        }
+        if let loc = locate("wtin"), loc.payload.count == 2 {
+            let bits = (UInt16(window[loc.payload.lowerBound]) << 8)
+                     |  UInt16(window[loc.payload.lowerBound + 1])
+            slateNames.append("white_balance_tint")
+            slateContents.append("\(Int16(bitPattern: bits))")
+        }
+
+        guard !slateNames.isEmpty else { return }
+        updateCamera(&metadata) {
+            $0.userMetaNames.append(contentsOf: slateNames)
+            $0.userMetaContents.append(contentsOf: slateContents)
+        }
+    }
+
+    /// Read the FourCC of the first sample entry from an stsd box payload,
+    /// skipping the FullBox version+flags and entry_count. Used to gate
+    /// BRAW-specific extraction off the codec ID without re-walking stsd.
+    private static func parseFirstStsdCodec(_ stsdData: Data) -> String? {
+        var reader = BinaryReader(data: stsdData)
+        _ = try? reader.readBytes(4) // version+flags
+        _ = try? reader.readUInt32BigEndian() // entry_count
+        guard reader.remainingCount >= 8,
+              (try? reader.readUInt32BigEndian()) != nil,
+              let typeBytes = try? reader.readBytes(4) else { return nil }
+        return String(data: typeBytes, encoding: .ascii)
+    }
+
+    /// Big-endian uint32 read from a Data slice at an absolute index.
+    /// Caller guarantees `index + 4 <= data.endIndex`.
+    private static func readUInt32BE(_ data: Data, at index: Data.Index) -> UInt32 {
+        return (UInt32(data[index]) << 24)
+            | (UInt32(data[index + 1]) << 16)
+            | (UInt32(data[index + 2]) << 8)
+            |  UInt32(data[index + 3])
+    }
+
+    /// Detect Blackmagic RAW per-frame motion-data tracks (gyroscope,
+    /// accelerometer) by their key-namespace strings inside an `mebx`
+    /// sample entry. Presence-only — we don't decode the per-frame vec3
+    /// samples. Substring scan is cheaper than walking
+    /// mebx → keys → keyd and equally reliable: the namespace strings
+    /// `com.blackmagicdesign.motiondata.gyroscope` /
+    /// `com.blackmagicdesign.motiondata.accelerometer` are unique to BMD.
+    private static func detectBRAWMotionTracks(in stsdData: Data, into metadata: inout VideoMetadata) {
+        guard stsdData.range(of: Data("mebx".utf8)) != nil else { return }
+        var names: [String] = []
+        if stsdData.range(of: Data("com.blackmagicdesign.motiondata.gyroscope".utf8)) != nil {
+            names.append("has_gyroscope_motion_data")
+        }
+        if stsdData.range(of: Data("com.blackmagicdesign.motiondata.accelerometer".utf8)) != nil {
+            names.append("has_accelerometer_motion_data")
+        }
+        guard !names.isEmpty else { return }
+        updateCamera(&metadata) { cam in
+            for n in names {
+                cam.userMetaNames.append(n)
+                cam.userMetaContents.append("true")
+            }
+        }
     }
 
     private static func parseILST(_ data: Data, into metadata: inout VideoMetadata) {

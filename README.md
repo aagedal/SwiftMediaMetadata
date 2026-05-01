@@ -337,16 +337,51 @@ Source coverage:
   ISOBMFF/iTunes FullBox shape from the QuickTime shape so existing MP4 /
   iTunes parsing stays untouched. The `mdta` decoder handles BRAW's typed
   payloads, including the BMD-specific type 71 (float32 BE pair) used for
-  rectangle fields like `sensor_area_captured`. Surfaces to
-  `CameraMetadata`: camera make / model, firmware, viewing gamma / gamut,
-  color science generation, compression ratio, shutter type, off-speed
-  flag, and the production slate (clip number, scene, take, reel, camera
-  number, environment, day/night). Off-speed shoots populate
-  `captureFps` distinct from the `frameRate` — a 24p clip captured at
-  112 fps reports `frameRate=24` and `captureFps≈112`. Per-frame BRAW
-  interpretation (white point, tint, absolute ISO, shutter angle) lives
-  in proprietary `bfdn` / `ctrn` boxes inside the codec sample entry and
-  remains unparsed.
+  rectangle fields like `sensor_area_captured` and the BMD type 77
+  (uint32) used for `braw_codec_bitrate`. Surfaces to `CameraMetadata`:
+  - **Camera + lens** — make / model, firmware, lens model, color science
+    generation, viewing gamma / gamut, shutter type, compression ratio,
+    `analog_gain` and `_is_constant`, off-speed flag.
+  - **Production slate** — clip number, scene, take, reel, camera number,
+    operator, director, production name, environment, day/night, location,
+    filters, frameguide aspect, anamorphic flag.
+  - **Sensor / framing** — `sensor_area_captured`, `crop_origin` /
+    `crop_size` / `safe_area`, `sensor_line_time` (rolling-shutter μs),
+    `sensor_photosite_pitch_in_micrometres`, `rotation`, `time_lapse_interval`.
+  - **Lens corrections + OIS** — `lens_shading_enable`,
+    `lens_distortion_correction_enable`,
+    `lens_chromatic_aberration_correction_enable`, `ois_enable`.
+  - **Tone curve** — contrast, saturation, midpoint, highlights, shadows,
+    black/white level, `video_black_level`, `highlight_recovery`,
+    `gamut_compression_enable`.
+  - **Embedded 3D LUT** — `post_3dlut_mode`, `_embedded_name`, `_embedded_title`,
+    `_embedded_bmd_gamma`, `_embedded_size` (cube edge), and a
+    `_embedded_data` size marker (the ~432 KB blob is not inlined).
+  - **BRAW codec config** — `braw_codec_bfdn`, `braw_codec_ctrn`,
+    `braw_codec_bver`, and `braw_codec_bitrate` are pulled from the BRAW
+    sample entry's child boxes; works across the BRAW quality presets
+    (`brhq` High Quality, `brst` Standard, `brlt` Light, …).
+  - **Per-frame motion tracks** — `mebx` tracks declaring the
+    `com.blackmagicdesign.motiondata.gyroscope` /
+    `…accelerometer` namespaces are flagged with
+    `has_gyroscope_motion_data` / `has_accelerometer_motion_data`. The
+    per-frame vec3 samples themselves are not decoded.
+  - **First-frame interpretation** — frame 0's `bmdf` header in mdat
+    yields `shutter_angle` (`shtv` atom, UTF-8 padded — e.g. "180°"),
+    `aperture` (`aptr` — e.g. "f2.7"), `focal_length` (`fcln` —
+    e.g. "135mm"), `focus_distance` (`dsnc` — e.g. "2430mm"),
+    `iso` (`isoe`), `white_balance_kelvin` (`wkel`), and
+    `white_balance_tint` (`wtin`, signed int16). The per-frame header
+    carries identical values across every frame in the clips we've
+    tested, so frame 0 is sufficient for the clip-level default; we
+    don't iterate over the rest. The four lens strings are skipped
+    when empty (which the camera emits on bodies without electronic
+    lens contacts). Other atoms in the same header (`srte`, `agpf`,
+    `expo`, `shdp`, `dcp[ugrb]`, …) carry per-frame state we haven't
+    yet mapped.
+
+  Off-speed shoots populate `captureFps` distinct from `frameRate` — a 24p
+  clip captured at 112 fps reports `frameRate=24` and `captureFps≈112`.
 - **MXF (SMPTE 377-1)**: picture and sound essence descriptors parsed from
   header metadata — `StoredWidth`/`StoredHeight`, `DisplayWidth`/`DisplayHeight`,
   `FrameLayout` (scan type), `ComponentDepth`,

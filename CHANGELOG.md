@@ -6,6 +6,73 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.5.1] — 2026-05-01
+
+### Added
+
+- **Blackmagic RAW: extended metadata harvest** — `MP4Parser` now decodes
+  the rest of the `moov.meta` slate, the BRAW-specific codec-config
+  atoms inside the sample entry, and the per-frame `bmdf` interpretation
+  header at the start of frame 0 in mdat. Verified against `brhq` (High
+  Quality), `brst` (Standard), and `brlt` (Light) clips from Cinema
+  Camera 6K, PYXIS 6K, and PYXIS 12K. New surfaces in
+  `CameraMetadata.userMetaNames` / `userMetaContents`:
+  - **First-frame interpretation** — read out of the `bmdf` header at
+    the start of the first video chunk pointed to by stco / co64. Window
+    is sized by the declared `bmdf` size (≤ 4 KiB) so we never spill
+    into image data. Across the three test clips every frame's header
+    carries the same values, so frame-0 yields the clip-level default —
+    keeping us out of any per-frame iteration. Decoded atoms:
+    - `shtv` → `shutter_angle` (UTF-8 padded, e.g. "180°")
+    - `aptr` → `aperture` (e.g. "f2.7")
+    - `fcln` → `focal_length` (e.g. "135mm")
+    - `dsnc` → `focus_distance` (e.g. "2430mm")
+    - `isoe` → `iso` (uint32)
+    - `wkel` → `white_balance_kelvin` (uint32)
+    - `wtin` → `white_balance_tint` (signed int16)
+
+    The four lens strings are NUL-padded to 24 bytes; we trim at the
+    first NUL and skip empty values (cameras emit empty strings on
+    bodies without electronic lens contacts — sample 1's Sigma 135mm
+    populates all four, samples 2/3 only have shutter angle).
+  - **Codec config** — `braw_codec_bfdn`, `braw_codec_ctrn`,
+    `braw_codec_bver` (uint32 from `bfdn` / `ctrn` / `bver` child boxes
+    inside the BRAW visual sample entry — the parser walks any FourCC
+    starting with `br`, not just `brhq`).
+  - **Codec bitrate** — `braw_codec_bitrate` as an unsigned uint32; the
+    `decodeMDTAInt` table now treats BMD type 77 as unsigned so high-bit-set
+    byterates (e.g. 3.2 GB/s on PYXIS 12K 112 fps clips) round-trip
+    positive instead of sign-extending into negatives.
+  - **Lens corrections + sensor timing** — `lens_shading_enable`,
+    `lens_distortion_correction_enable`,
+    `lens_chromatic_aberration_correction_enable`, `ois_enable`,
+    `sensor_line_time` (μs/scanline), `sensor_photosite_pitch_in_micrometres`,
+    `analog_gain_is_constant`.
+  - **Tone curve / image processing** — `tone_curve_contrast`,
+    `tone_curve_saturation`, `tone_curve_midpoint`, `tone_curve_highlights`,
+    `tone_curve_shadows`, `tone_curve_black_level`, `tone_curve_white_level`,
+    `tone_curve_video_black_level`, `highlight_recovery`.
+  - **Embedded LUT** — `post_3dlut_embedded_size` (cube edge, e.g. 33 →
+    33×33×33), `post_3dlut_embedded_bmd_gamma`, plus a presence marker
+    `post_3dlut_embedded_data` → `"<N> bytes"` for the ~432 KB binary
+    blob (the bytes themselves stay out of the metadata dictionary; only
+    the size is reported).
+  - **Misc slate** — `encoder_device_manufacturer`, `time_lapse_interval`,
+    `anamorphic`, `rotation`.
+  - **Per-frame motion-data tracks** — when an `mebx` timed-metadata
+    track declares the `com.blackmagicdesign.motiondata.gyroscope` /
+    `…accelerometer` namespace, the parser appends
+    `has_gyroscope_motion_data` / `has_accelerometer_motion_data` markers.
+    Per-frame samples themselves are not decoded.
+
+  Coverage in
+  [Tests/SwiftExifTests/Video/MP4ParserTests.swift](Tests/SwiftExifTests/Video/MP4ParserTests.swift):
+  the existing `testParseBlackmagicRAWClipMetadata` was extended with
+  representative tone-curve / lens / rotation / bitrate / 3D-LUT entries
+  (including a high-bit-set type-77 fixture to lock in the unsigned
+  decode), plus new `testParseBlackmagicRAWCodecAtoms` and
+  `testParseBlackmagicMotionDataTracksDetected`.
+
 ## [1.5.0] — 2026-05-01
 
 ### Added
