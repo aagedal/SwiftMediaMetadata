@@ -405,9 +405,9 @@ final class PrintConverterTests: XCTestCase {
     func testExposureProgram() {
         XCTAssertEqual(PrintConverter.exposureProgram(0), "Not Defined")
         XCTAssertEqual(PrintConverter.exposureProgram(1), "Manual")
-        XCTAssertEqual(PrintConverter.exposureProgram(2), "Normal Program")
-        XCTAssertEqual(PrintConverter.exposureProgram(3), "Aperture Priority")
-        XCTAssertEqual(PrintConverter.exposureProgram(4), "Shutter Priority")
+        XCTAssertEqual(PrintConverter.exposureProgram(2), "Program AE")
+        XCTAssertEqual(PrintConverter.exposureProgram(3), "Aperture-priority AE")
+        XCTAssertEqual(PrintConverter.exposureProgram(4), "Shutter speed priority AE")
     }
 
     // MARK: - Metering Mode

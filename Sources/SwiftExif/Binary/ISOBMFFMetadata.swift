@@ -49,14 +49,36 @@ public struct ISOBMFFMetadata: Sendable {
         return nil
     }
 
-    /// Extract ICC profile from a `colr` box with type `"prof"` in the ipco hierarchy.
+    /// Extract ICC profile from a `colr` box (type `"prof"` or `"rICC"`) in
+    /// the ipco hierarchy of an ISOBMFF file. Navigates `meta → iprp → ipco`
+    /// explicitly because the meta box has a 4-byte FullBox header that the
+    /// generic recursive search would mis-parse.
     public static func extractICCProfile(from boxes: [ISOBMFFBox]) -> ICCProfile? {
-        guard let colrBox = findBox(type: "colr", in: boxes) else { return nil }
-        // colr box payload: 4-byte color type + profile data
-        guard colrBox.data.count > 4 else { return nil }
-        let colorType = String(data: colrBox.data.prefix(4), encoding: .ascii) ?? ""
-        guard colorType == "prof" else { return nil }
-        let profileData = Data(colrBox.data.suffix(from: colrBox.data.startIndex + 4))
+        // Navigate meta → iprp → ipco for image-property colr boxes.
+        if let metaBox = boxes.first(where: { $0.type == "meta" }),
+           let metaChildren = try? parseMetaChildren(metaBox.data),
+           let iprpBox = metaChildren.first(where: { $0.type == "iprp" }),
+           let iprpChildren = try? ISOBMFFBoxReader.parseBoxes(from: iprpBox.data),
+           let ipcoBox = iprpChildren.first(where: { $0.type == "ipco" }),
+           let properties = try? ISOBMFFBoxReader.parseBoxes(from: ipcoBox.data) {
+            for prop in properties where prop.type == "colr" {
+                if let icc = parseColrBox(prop) { return icc }
+            }
+        }
+        // Fallback for formats that put colr at the top level.
+        if let colrBox = boxes.first(where: { $0.type == "colr" }),
+           let icc = parseColrBox(colrBox) {
+            return icc
+        }
+        return nil
+    }
+
+    private static func parseColrBox(_ box: ISOBMFFBox) -> ICCProfile? {
+        guard box.data.count > 4 else { return nil }
+        let colorType = String(data: box.data.prefix(4), encoding: .ascii) ?? ""
+        // `prof` = unrestricted ICC profile, `rICC` = restricted ICC profile.
+        guard colorType == "prof" || colorType == "rICC" else { return nil }
+        let profileData = Data(box.data.suffix(from: box.data.startIndex + 4))
         return ICCProfile(data: profileData)
     }
 
@@ -174,6 +196,9 @@ public struct ISOBMFFMetadata: Sendable {
     private struct ItemInfo {
         let itemID: UInt32
         let itemType: String // 4-char type code
+        /// For `mime` items, the MIME type from the infe entry
+        /// (e.g. `application/rdf+xml` for XMP). nil for other item types.
+        let contentType: String?
     }
 
     /// Represents an item's location from the iloc box.
@@ -209,14 +234,17 @@ public struct ISOBMFFMetadata: Sendable {
         return try ExifReader.readFromExifBox(data: itemData)
     }
 
-    /// Extract XMP by finding a "mime" item with XMP content type via iloc.
+    /// Extract XMP by finding a "mime" item whose iinf content_type is
+    /// `application/rdf+xml` and reading its iloc-pointed payload.
+    /// The content_type lives on the infe entry, NOT prepended to the
+    /// payload — for iloc-located items the payload is just the raw XMP.
     private static func extractXMPViaItem(metaBox: ISOBMFFBox, fileData: Data) throws -> XMPData? {
         let metaChildren = try parseMetaChildren(metaBox.data)
         let items = parseItemInfo(from: metaChildren)
         let locations = parseItemLocations(from: metaChildren)
 
-        // Look for items with type "mime" — these may contain XMP
-        for item in items where item.itemType == "mime" {
+        for item in items where item.itemType == "mime"
+            && item.contentType == "application/rdf+xml" {
             guard let loc = locations.first(where: { $0.itemID == item.itemID }) else { continue }
 
             let itemData: Data
@@ -227,17 +255,25 @@ public struct ISOBMFFMetadata: Sendable {
                 itemData = readExtents(from: fileData, location: loc)
             }
 
-            // Check if this mime item contains XMP (starts with content type)
-            let bytes = [UInt8](itemData)
-            guard let nullIndex = bytes.firstIndex(of: 0) else { continue }
-            let contentType = String(bytes: bytes[0..<nullIndex], encoding: .utf8)
-            guard contentType == "application/rdf+xml" else { continue }
-
-            let xmpData = Data(bytes[(nullIndex + 1)...])
-            guard !xmpData.isEmpty else { continue }
-            return try XMPReader.readFromXML(xmpData)
+            guard !itemData.isEmpty else { continue }
+            return try XMPReader.readFromXML(itemData)
         }
 
+        return nil
+    }
+
+    /// Read a null-terminated UTF-8 string from a BinaryReader, advancing
+    /// past the terminator. Returns nil if no terminator is found before
+    /// the buffer ends.
+    private static func readCString(_ reader: inout BinaryReader) -> String? {
+        var bytes: [UInt8] = []
+        while reader.remainingCount > 0 {
+            guard let b = try? reader.readUInt8() else { return nil }
+            if b == 0 {
+                return String(bytes: bytes, encoding: .utf8)
+            }
+            bytes.append(b)
+        }
         return nil
     }
 
@@ -307,7 +343,17 @@ public struct ISOBMFFMetadata: Sendable {
                 guard payloadReader.remainingCount >= 4 else { continue }
                 let typeData = try payloadReader.readBytes(4)
                 let itemType = String(data: typeData, encoding: .ascii) ?? "????"
-                items.append(ItemInfo(itemID: itemID, itemType: itemType))
+
+                // After item_type comes a null-terminated item_name. If the
+                // item_type is "mime" there's a second null-terminated string
+                // holding the content_type (the spec calls this the
+                // ItemInfoExtension for FDIs / mime types).
+                _ = readCString(&payloadReader) // item_name (often empty)
+                let contentType: String? = (itemType == "mime")
+                    ? readCString(&payloadReader)
+                    : nil
+                items.append(ItemInfo(itemID: itemID, itemType: itemType,
+                                      contentType: contentType))
             }
         } catch {
             // Best-effort parsing

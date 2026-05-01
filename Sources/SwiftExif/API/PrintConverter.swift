@@ -61,6 +61,10 @@ public struct PrintConverter: Sendable {
             if let v = value as? Double {
                 return formatGPSCoordinate(v, isLongitude: true)
             }
+        case "GPSAltitude":
+            if let v = value as? Double {
+                return String(format: "%.1f m", abs(v))
+            }
         case "ISO":
             if let v = value as? Int { return String(v) }
         case "Composite:Aperture":
@@ -158,13 +162,14 @@ public struct PrintConverter: Sendable {
         switch value {
         case 0: return "Not Defined"
         case 1: return "Manual"
-        case 2: return "Normal Program"
-        case 3: return "Aperture Priority"
-        case 4: return "Shutter Priority"
-        case 5: return "Creative Program"
-        case 6: return "Action Program"
-        case 7: return "Portrait Mode"
-        case 8: return "Landscape Mode"
+        case 2: return "Program AE"
+        case 3: return "Aperture-priority AE"
+        case 4: return "Shutter speed priority AE"
+        case 5: return "Creative (Slow speed)"
+        case 6: return "Action (High speed)"
+        case 7: return "Portrait"
+        case 8: return "Landscape"
+        case 9: return "Bulb"
         default: return "Unknown (\(value))"
         }
     }

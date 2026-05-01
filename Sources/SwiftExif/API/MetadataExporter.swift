@@ -369,6 +369,7 @@ public struct MetadataExporter: Sendable {
 
         if let lat = exif.gpsLatitude { dict["GPSLatitude"] = lat }
         if let lon = exif.gpsLongitude { dict["GPSLongitude"] = lon }
+        if let alt = exif.gpsAltitude { dict["GPSAltitude"] = alt }
 
         // Additional Exif fields
         if let w = exif.pixelXDimension { dict["PixelXDimension"] = Int(w) }
