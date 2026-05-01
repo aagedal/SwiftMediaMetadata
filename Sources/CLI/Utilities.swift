@@ -71,6 +71,7 @@ let supportedVideoExtensions: Set<String> = [
     "mkv", "webm", "avi",
     "mpg", "mpeg", "vob",
     "ts", "m2ts", "mts",
+    "braw",
 ]
 
 let supportedAudioExtensions: Set<String> = [

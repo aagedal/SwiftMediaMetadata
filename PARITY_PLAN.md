@@ -181,14 +181,29 @@ All four HEIC stills issues land together. Test file:
 
 ---
 
-## Phase 5 — Green-field (deferred)
+## Phase 5 — Green-field
 
-### 5.1 — BlackMagic RAW (`.braw`)
-- **Status**: zero handling. Currently fails with "Unsupported image
-  format" — a clean, honest failure.
-- **Effort if pursued**: ~200–400 LOC for minimum-viable detect-and-
-  report; full parity with BMD's tooling is much larger.
-- **Recommendation**: defer unless a concrete user need lands.
+### 5.1 — Blackmagic RAW (`.braw`)
+- **Status (2026-05-01)**: container metadata working. BRAW is an
+  ISOBMFF derivative with the legacy QuickTime layout (`wide` + `mdat`
+  + tail-placed `moov`, no `ftyp`). Wiring it up needed only:
+  - Add `.braw` to `VideoFormat` and `supportedVideoExtensions`
+  - Tolerate a missing `ftyp` in `MP4Parser.parse` (default to `.mov`)
+  - Promote `metadata.format` to `.braw` in `VideoMetadata.read(from:url:)`
+    based on the path extension
+- **What we extract today**: duration, project frame rate (from stts),
+  width/height (8K verified on Pyxis 12K samples), audio stream
+  details, codec FourCC (`brlt`/`brhq`/`brst` for the BRAW quality
+  presets), creation date, timecode.
+- **What we don't extract**: BMD's proprietary clip metadata —
+  off-speed sensor FPS (e.g. 112 fps when project rate is 24), ISO,
+  white point, tint, lens info, color science generation, gamma /
+  LUT. These live in custom boxes inside `moov`/`udta`. Adding them
+  would need a small BRAW-specific parser; defer unless a concrete
+  user need lands.
+- **Codec long-name table**: not added. The FourCCs surface as-is
+  (`brlt`, `brhq`, `brst`); BMD's official mapping isn't documented
+  publicly enough to commit to friendly names without verification.
 
 ---
 

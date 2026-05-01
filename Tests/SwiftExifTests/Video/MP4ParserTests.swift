@@ -129,7 +129,9 @@ final class MP4ParserTests: XCTestCase {
 
     // MARK: - Error Handling
 
-    func testMissingFtypThrows() {
+    func testGarbageDataThrows() {
+        // Zero bytes parse into a single bogus zero-typed top-level box, then
+        // the moov-required guard trips.
         let data = Data(repeating: 0x00, count: 50)
         XCTAssertThrowsError(try VideoMetadata.read(from: data))
     }
@@ -137,6 +139,35 @@ final class MP4ParserTests: XCTestCase {
     func testMissingMoovThrows() {
         let data = buildMinimalMP4(brand: "isom") // ftyp only, no moov
         XCTAssertThrowsError(try VideoMetadata.read(from: data))
+    }
+
+    /// Legacy QuickTime / Blackmagic RAW files have no ftyp at the top —
+    /// they start with `wide` + `mdat` and place moov at the file tail.
+    /// MP4Parser must tolerate that and still pull duration from mvhd.
+    func testParseLegacyQuickTimeWithoutFtyp() throws {
+        var writer = BinaryWriter(capacity: 256)
+        // 8-byte `wide` placeholder.
+        writer.writeUInt32BigEndian(8)
+        writer.writeString("wide", encoding: .ascii)
+        // Empty `mdat` (just a header).
+        writer.writeUInt32BigEndian(8)
+        writer.writeString("mdat", encoding: .ascii)
+        // moov with mvhd (timescale 1000, duration 5000 → 5.0 s).
+        var mvhd = BinaryWriter(capacity: 128)
+        mvhd.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(1000)
+        mvhd.writeUInt32BigEndian(5000)
+        mvhd.writeBytes(Data(repeating: 0, count: 80))
+        let mvhdBox = buildBox("mvhd", data: mvhd.data)
+        let moovBox = buildBox("moov", data: mvhdBox)
+        writer.writeBytes(moovBox)
+
+        let metadata = try VideoMetadata.read(from: writer.data)
+        XCTAssertEqual(metadata.duration, 5.0)
+        // No ftyp → defaults to .mov so the rest of the parse can proceed.
+        XCTAssertEqual(metadata.format, .mov)
     }
 
     // MARK: - Exporter

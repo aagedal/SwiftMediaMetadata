@@ -10,4 +10,5 @@ public enum VideoFormat: String, Sendable, Equatable {
     case webm
     case avi
     case mpg
+    case braw
 }

@@ -352,6 +352,7 @@ public struct FormatDetector: Sendable {
         case "webm": return .webm
         case "avi":  return .avi
         case "mpg", "mpeg", "vob", "ts", "m2ts", "mts": return .mpg
+        case "braw": return .braw
         default:     return nil
         }
     }

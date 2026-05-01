@@ -133,6 +133,14 @@ public struct VideoMetadata: Sendable {
     public static func read(from url: URL) throws -> VideoMetadata {
         let data = try loadContainerData(from: url)
         var metadata = try parseContainer(data)
+        // Blackmagic RAW shares the QuickTime container layout but has no
+        // ftyp brand the parser can latch onto — it'd come back tagged as
+        // .mov. Promote it to .braw based on the path so the long-name and
+        // any downstream consumers see the correct format.
+        if url.pathExtension.lowercased() == "braw" {
+            metadata.format = .braw
+            metadata.formatLongName = defaultFormatLongName(.braw)
+        }
         // Retain the source data only for formats we can write back. For
         // read-only formats (MKV, WebM, MXF, AVI, MPEG) holding a reference
         // to a multi-GB Data serves no purpose and prevents the OS from
@@ -140,7 +148,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil {
@@ -177,7 +185,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
@@ -255,6 +263,7 @@ public struct VideoMetadata: Sendable {
         case .mkv, .webm: return "Matroska / WebM"
         case .avi: return "AVI (Audio Video Interleave)"
         case .mpg: return "MPEG-PS / MPEG-TS"
+        case .braw: return "Blackmagic RAW"
         }
     }
 
@@ -287,7 +296,7 @@ public struct VideoMetadata: Sendable {
         switch format {
         case .mp4, .mov, .m4v:
             return try MP4Writer.write(self, to: original)
-        case .mxf, .mkv, .webm, .avi, .mpg:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw:
             throw MetadataError.writeNotSupported("Writing is not supported for \(format.rawValue.uppercased()) containers")
         }
     }

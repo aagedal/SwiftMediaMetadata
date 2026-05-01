@@ -18,11 +18,17 @@ public struct MP4Parser: Sendable {
         // Parse top-level boxes, but skip mdat payload to save memory
         let boxes = try parseTopLevelBoxes(data)
 
-        // Determine format from ftyp
-        guard let ftyp = boxes.first(where: { $0.type == "ftyp" }) else {
-            throw MetadataError.invalidVideo("Missing ftyp box")
+        // Determine format from ftyp. Legacy QuickTime / Blackmagic RAW files
+        // omit ftyp entirely (the file starts with `wide` + `mdat`, with the
+        // moov tail-placed); fall back to .mov so the rest of the parse can
+        // proceed. Callers that know the extension override metadata.format
+        // to a more specific value (e.g. .braw) afterwards.
+        let format: VideoFormat
+        if let ftyp = boxes.first(where: { $0.type == "ftyp" }) {
+            format = detectFormat(from: ftyp)
+        } else {
+            format = .mov
         }
-        let format = detectFormat(from: ftyp)
 
         var metadata = VideoMetadata(format: format)
 
