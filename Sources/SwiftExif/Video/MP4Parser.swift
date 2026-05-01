@@ -2328,7 +2328,9 @@ public struct MP4Parser: Sendable {
                  "shutter_type", "clip_number", "reel_name", "scene", "shot_type",
                  "take", "take_type", "production_name", "director",
                  "camera_number", "camera_operator", "date_recorded",
-                 "environment", "day_night", "location", "filters":
+                 "environment", "day_night", "location", "filters",
+                 "post_3dlut_mode", "post_3dlut_embedded_name",
+                 "post_3dlut_embedded_title", "frameguide_aspect_ratio":
                 if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload),
                    !s.isEmpty {
                     bmdSlateNames.append(key)
@@ -2339,7 +2341,8 @@ public struct MP4Parser: Sendable {
                     bmdSlateNames.append(key)
                     bmdSlateContents.append("Generation \(n)")
                 }
-            case "offspeed", "offspeed_is_constant", "anamorphic_enable", "good_take":
+            case "offspeed", "offspeed_is_constant", "anamorphic_enable",
+                 "good_take", "gamut_compression_enable":
                 if let n = decodeMDTAInt(typeIndicator: typeIndicator, payload: payload) {
                     bmdSlateNames.append(key)
                     bmdSlateContents.append(n == 0 ? "false" : "true")
@@ -2348,6 +2351,19 @@ public struct MP4Parser: Sendable {
                 if let v = decodeMDTAFloat(typeIndicator: typeIndicator, payload: payload) {
                     bmdSlateNames.append(key)
                     bmdSlateContents.append(String(format: "%g", v))
+                }
+            case "sensor_area_captured", "crop_origin", "crop_size", "safe_area":
+                // BMD-specific type 71 = pair of float32 BE values, used here
+                // for pixel rectangles. sensor_area_captured reads as
+                // "12288x5112" on the Pyxis 12K (matches Resolve's "Sensor
+                // Area Captured" field). crop_origin is x/y, crop_size is
+                // w/h, safe_area is w/h.
+                if let pair = decodeMDTAFloatPair(typeIndicator: typeIndicator, payload: payload) {
+                    bmdSlateNames.append(key)
+                    let (a, b) = pair
+                    let isOrigin = key == "crop_origin"
+                    let separator = isOrigin ? "," : "x"
+                    bmdSlateContents.append("\(formatBMDDimension(a))\(separator)\(formatBMDDimension(b))")
                 }
 
             default:
@@ -2415,6 +2431,27 @@ public struct MP4Parser: Sendable {
         default:
             return nil
         }
+    }
+
+    /// Decode a Blackmagic-RAW type-71 payload (two float32 BE values) as
+    /// (x, y) or (width, height). BMD uses this for sensor_area_captured,
+    /// crop_origin/size, and safe_area. Apple's standard `data` type table
+    /// doesn't define 71 — it's a BMD extension specific to BRAW.
+    private static func decodeMDTAFloatPair(typeIndicator: UInt32, payload: Data) -> (Double, Double)? {
+        guard typeIndicator == 71, payload.count == 8 else { return nil }
+        let a = payload.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        let b = payload.suffix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        return (Double(Float(bitPattern: a)), Double(Float(bitPattern: b)))
+    }
+
+    /// Sensor / crop dimensions are stored as floats (e.g. 12288.0) but read
+    /// most naturally as integers. Drop a trailing `.0`; keep fractional
+    /// digits when the value isn't whole.
+    private static func formatBMDDimension(_ v: Double) -> String {
+        if v == v.rounded() {
+            return String(Int(v))
+        }
+        return String(format: "%g", v)
     }
 
     /// Decode `data` payload as a signed integer (types 21, 67, 75, 76, 77).
