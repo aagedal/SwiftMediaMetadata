@@ -193,12 +193,11 @@ public struct GPMFReader: Sendable {
                     telemetry.mediaUniqueID = entry.payload.map { String(format: "%02x", $0) }.joined()
                 }
             case "SCAL":
-                localScale = decodeIntegers(entry).map { Double($0) }
-                if localScale!.isEmpty {
-                    localScale = decodeFloats(entry)
-                }
-                if !(localScale ?? []).isEmpty {
-                    scaleStack.append(localScale!)
+                var values = decodeIntegers(entry).map { Double($0) }
+                if values.isEmpty { values = decodeFloats(entry) }
+                if !values.isEmpty {
+                    localScale = values
+                    scaleStack.append(values)
                 }
             case "GPS5", "GPS9":
                 applyGPS5(entry, scale: scaleStack.last, into: &telemetry)
@@ -239,15 +238,17 @@ public struct GPMFReader: Sendable {
         guard perSampleInts >= 3 else { return }
         let bytesNeeded = entry.sampleSize * entry.sampleCount
         guard entry.payload.count >= bytesNeeded else { return }
+        let s = scale ?? []
+        let scLat = s.count > 0 ? s[0] : 10_000_000
+        let scLon = s.count > 1 ? s[1] : 10_000_000
+        let scAlt = s.count > 2 ? s[2] : 1_000
         var samples: [(lat: Double, lon: Double, alt: Double)] = []
+        samples.reserveCapacity(entry.sampleCount)
         for i in 0..<entry.sampleCount {
             let base = i * entry.sampleSize
             let lat = readInt32BE(entry.payload, at: base)
             let lon = readInt32BE(entry.payload, at: base + 4)
             let alt = readInt32BE(entry.payload, at: base + 8)
-            let scLat = scale?.indices.contains(0) == true ? scale![0] : 10_000_000
-            let scLon = scale?.indices.contains(1) == true ? scale![1] : 10_000_000
-            let scAlt = scale?.indices.contains(2) == true ? scale![2] : 1000
             samples.append((
                 lat: Double(lat) / scLat,
                 lon: Double(lon) / scLon,

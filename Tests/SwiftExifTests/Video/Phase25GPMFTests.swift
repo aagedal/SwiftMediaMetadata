@@ -81,6 +81,50 @@ final class GPMFReaderTests: XCTestCase {
         XCTAssertEqual(t.firstGPS?.alt ?? 0, 150.0, accuracy: 0.001)
     }
 
+    func testTelemetryExtractsGPS5MultipleSamplesWithSCAL() {
+        // Three GPS5 samples spaced 0.0001° apart so firstGPS != lastGPS.
+        // Locks in that the loop body still applies the SCAL divisors to
+        // every sample after the per-iteration lookup was hoisted out.
+        var blob = Data()
+        var scalPayload = Data()
+        for v in [Int32(10_000_000), 10_000_000, 1000, 1000, 100] {
+            appendInt32BE(&scalPayload, v)
+        }
+        appendKLV(&blob, fourCC: "SCAL", typeChar: 0x4C, sampleSize: 4, sampleCount: 5,
+                  payload: scalPayload)
+
+        var gps5Payload = Data()
+        // Sample 0: 60.0000, 11.0000, 150.0
+        appendInt32BE(&gps5Payload, Int32(600_000_000))
+        appendInt32BE(&gps5Payload, Int32(110_000_000))
+        appendInt32BE(&gps5Payload, Int32(150_000))
+        appendInt32BE(&gps5Payload, 0)
+        appendInt32BE(&gps5Payload, 0)
+        // Sample 1: 60.0001, 11.0001, 151.0
+        appendInt32BE(&gps5Payload, Int32(600_001_000))
+        appendInt32BE(&gps5Payload, Int32(110_001_000))
+        appendInt32BE(&gps5Payload, Int32(151_000))
+        appendInt32BE(&gps5Payload, 0)
+        appendInt32BE(&gps5Payload, 0)
+        // Sample 2: 60.0002, 11.0002, 152.5
+        appendInt32BE(&gps5Payload, Int32(600_002_000))
+        appendInt32BE(&gps5Payload, Int32(110_002_000))
+        appendInt32BE(&gps5Payload, Int32(152_500))
+        appendInt32BE(&gps5Payload, 0)
+        appendInt32BE(&gps5Payload, 0)
+        appendKLV(&blob, fourCC: "GPS5", typeChar: 0x6C, sampleSize: 20, sampleCount: 3,
+                  payload: gps5Payload)
+
+        let t = GPMFReader.telemetry(from: blob)
+        XCTAssertEqual(t.gpsSampleCount, 3)
+        XCTAssertEqual(t.firstGPS?.lat ?? 0, 60.0000, accuracy: 0.00001)
+        XCTAssertEqual(t.firstGPS?.lon ?? 0, 11.0000, accuracy: 0.00001)
+        XCTAssertEqual(t.firstGPS?.alt ?? 0, 150.0, accuracy: 0.001)
+        XCTAssertEqual(t.lastGPS?.lat ?? 0, 60.0002, accuracy: 0.00001)
+        XCTAssertEqual(t.lastGPS?.lon ?? 0, 11.0002, accuracy: 0.00001)
+        XCTAssertEqual(t.lastGPS?.alt ?? 0, 152.5, accuracy: 0.001)
+    }
+
     func testTelemetryFlagsSensorPresence() {
         var blob = Data()
         appendKLV(&blob, fourCC: "ACCL", typeChar: 0x73, sampleSize: 6, sampleCount: 1,
