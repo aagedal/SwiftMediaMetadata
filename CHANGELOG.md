@@ -6,7 +6,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
-## [1.5.0] — 2026-04-30
+## [1.5.0] — 2026-05-01
 
 ### Added
 
@@ -43,9 +43,64 @@ the CLI; the library target follows the same numbering.
   matching writer support in `MakerNoteWriter.swift` and round-trip
   coverage in `MakerNoteReaderTests` / `MakerNoteWriterTests`.
 
+- **Blackmagic RAW (`.braw`) container metadata** — new format support that
+  reads the moov.meta slate produced by Blackmagic cameras and DaVinci
+  Resolve. Tolerates a missing `ftyp` (BRAW files often omit it) and falls
+  back to a `.mov` container shape, then parses `mdta` slate keys for
+  sensor frame rate, sensor area, LUT name, clip metadata, and the
+  remaining BMD slate fields. Routed through `MP4Parser.swift`. New format
+  enum entries in `RawFormat` / `FormatDetector`.
+
+- **ExifTool / ffprobe parity initiative** — `PARITY_PLAN.md` lays out the
+  delta between swift-exif's output and ExifTool / ffprobe, and several
+  phases of that plan have already landed under this release:
+  - **HEIC parity (Phase 1)** — `infe`-driven `content_type` resolution,
+    explicit `meta → iprp → ipco` walk to dodge the FullBox header
+    stumble, and a top-level `colr` fallback for files where the property
+    box is absent.
+  - **JPEG XL parity (Phase 2)** — decode `SizeHeader` from the JXL
+    codestream so `File:ImageWidth` / `ImageHeight` are populated.
+  - **MP4 stream parity (Phase 3.1 / 3.2 / 3.5)** — preserve track
+    declaration order in the `streams` array, surface data tracks
+    explicitly, and hoist chapter tracks out of `streams` into a sibling
+    `chapters` array (no longer inflating the stream count).
+  - **MP3 / M4A streams (Phase 3.3)** — emit a single synthetic audio
+    stream from `--streams` to match ffprobe's shape for audio files.
+  - **MKV track order (Phase 3.4)** — preserve Matroska track-declaration
+    order rather than relying on dictionary iteration.
+  - **GPS / subtitle codec cosmetics (Phase 4)** — render GPS coordinates
+    with degree signs, alias the `tx3g` FourCC to `mov_text` so
+    consumers see the same `codec_id` ffmpeg uses.
+  - **Convention alignment** — metadata export now matches ExifTool
+    naming conventions in a number of small spots that were diverging.
+
 ### Changed
 
-- *(none yet)*
+- **Format-level `duration` now matches ffprobe.** Previously
+  `format.duration` was reported as `mvhd` verbatim; mvhd is spec-defined
+  as the longest mdhd of *any* track, so files like
+  ChapterMarkerDualSubtitle.mp4 wound up reporting 98.691 s while
+  audio/video both ended at ~71.16 s. The MP4 reader now caps mvhd at
+  `max(audio, video)` when subtitle/data tracks inflate it (matching
+  ffmpeg/ffprobe), and keeps the smaller mvhd value untouched when
+  edit-list trimming legitimately makes mvhd shorter than the longest
+  essence stream.
+
+- **Audio file `format.bit_rate` now matches ffprobe.** For MP3 / M4A /
+  FLAC, the container `bit_rate` is now derived as
+  `file_size × 8 / duration` (the whole-file rate including container
+  overhead and AAC priming/postroll padding) instead of the audio
+  stream's declared rate.
+
+- **MXF and MPEG-TS per-stream `Duration`.** MXF essence descriptors and
+  MPEG-TS streams don't carry per-track durations the way MP4 does. The
+  format-level duration is now propagated to each video / audio /
+  subtitle stream that doesn't already have one, matching ffprobe's
+  behavior and surfacing a sensible value to JSON consumers.
+
+- **GPMF SCAL divisor lookup** is now hoisted out of the per-sample GPS5
+  loop in `GPMFReader` — pure refactor, behavior preserved, covered by
+  the existing telemetry tests.
 
 ### Fixed
 
