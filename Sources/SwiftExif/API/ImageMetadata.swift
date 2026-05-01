@@ -69,7 +69,7 @@ public struct ImageMetadata: Sendable {
             return try readJPEG(from: data)
         case .raw(.cr3):
             return try readCR3(from: data)
-        case .raw(.raf), .raw(.rw2):
+        case .raw(.raf), .raw(.rw2), .raw(.iiq), .raw(.x3f), .raw(.mrw):
             return try readRAW(from: data, format: format)
         case .tiff, .raw:
             return try readTIFF(from: data, format: format)

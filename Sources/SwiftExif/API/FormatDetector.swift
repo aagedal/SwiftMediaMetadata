@@ -57,6 +57,25 @@ public struct FormatDetector: Sendable {
             }
         }
 
+        // Sigma X3F: "FOVb" magic at offset 0.
+        if bytes[0] == 0x46 && bytes[1] == 0x4F && bytes[2] == 0x56 && bytes[3] == 0x62 {
+            return .raw(.x3f)
+        }
+
+        // Minolta MRW: starts with `\0MRM` (Maxxum) or `\0MRI` (DiMAGE).
+        if bytes[0] == 0x00 && bytes[1] == 0x4D && bytes[2] == 0x52
+            && (bytes[3] == 0x4D || bytes[3] == 0x49) {
+            return .raw(.mrw)
+        }
+
+        // Phase One IIQ: starts with "IIIIIIII" — Phase One's custom 8-byte
+        // file magic (II little-endian 4× repeated). Older IIQ files instead
+        // carry a TIFF magic with marker tag 0x0117 inside IFD0; that path
+        // is handled by detectRAWFromIFD via the .iiq branch in IFD detection.
+        if bytes.prefix(8).allSatisfy({ $0 == 0x49 }) {
+            return .raw(.iiq)
+        }
+
         // AVIF/HEIF: check for ftyp box at offset 4
         if bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70 {
             // Read brand (4 bytes at offset 8)
@@ -131,6 +150,16 @@ public struct FormatDetector: Sendable {
             return .raw(.srw)
         case "raw":
             return .raw(.raw)
+        case "iiq":
+            return .raw(.iiq)
+        case "3fr":
+            return .raw(.threefr)
+        case "fff":
+            return .raw(.fff)
+        case "x3f":
+            return .raw(.x3f)
+        case "mrw":
+            return .raw(.mrw)
         case "jxl":
             return .jpegXL
         case "png":

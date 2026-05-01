@@ -66,12 +66,144 @@ public struct RAWFileParser: Sendable {
                 }
             }
             return tiff
+        case .iiq:
+            return try parseIIQ(data)
+        case .threefr, .fff:
+            // Hasselblad 3FR / FFF — TIFF-based, custom MakerNote tags. Parse
+            // as plain TIFF; vendor-specific MakerNote IFD is parsed lazily.
+            return try TIFFFileParser.parse(data)
+        case .x3f:
+            return try parseX3F(data)
+        case .mrw:
+            return try parseMRW(data)
         case .dng, .nef, .nrw, .arw, .orf, .pef, .srw, .raw:
             // These all parse identically to TIFF.
             // NRW (Nikon Coolpix) and SRW (Samsung) are TIFF/IFD-based variants.
             // The generic `.raw` case is a best-effort TIFF parse for vendor-neutral extensions.
             return try TIFFFileParser.parse(data)
         }
+    }
+
+    // MARK: - IIQ (Phase One)
+
+    /// Parse Phase One IIQ. Two on-disk variants exist:
+    ///   1. Older IIQ files carry a TIFF magic header — they parse fine via TIFFFileParser.
+    ///   2. Newer (≥ 2014) IIQ files prefix the data with a custom 8-byte
+    ///      "IIIIIIII" magic + 8-byte structure pointer. The TIFF data starts
+    ///      at the offset pointed to by bytes 8..11 (little-endian uint32).
+    /// We auto-detect the variant and slice into the embedded TIFF block.
+    private static func parseIIQ(_ data: Data) throws -> TIFFFile {
+        guard data.count >= 16 else {
+            throw MetadataError.invalidRAW("IIQ file too small")
+        }
+        // Variant 1 — already-TIFF? Walk straight in.
+        let bytes = [UInt8](data.prefix(4))
+        let isLE = bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00
+        let isBE = bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A
+        if isLE || isBE {
+            return try TIFFFileParser.parse(data)
+        }
+        // Variant 2 — IIIIIIII magic. The IFD pointer at bytes 8..11 is little-endian.
+        let allI = data.prefix(8).allSatisfy { $0 == 0x49 }
+        guard allI else {
+            throw MetadataError.invalidRAW("Missing IIQ magic")
+        }
+        let s = data.startIndex
+        let tiffOffset = Int(data[s + 8])
+            | (Int(data[s + 9]) << 8)
+            | (Int(data[s + 10]) << 16)
+            | (Int(data[s + 11]) << 24)
+        guard tiffOffset > 0, tiffOffset + 8 <= data.count else {
+            throw MetadataError.invalidRAW("IIQ TIFF offset out of bounds (\(tiffOffset))")
+        }
+        let tiffData = Data(data[s + tiffOffset ..< data.endIndex])
+        return try TIFFFileParser.parse(tiffData)
+    }
+
+    // MARK: - X3F (Sigma)
+
+    /// Parse Sigma X3F. The format is fully proprietary — no TIFF anywhere.
+    /// We synthesize a minimal TIFFFile shell so the rest of the pipeline
+    /// (which expects `TIFFFile`) doesn't need an X3F-specific branch. Rich
+    /// X3F metadata extraction is deferred; downstream consumers can read the
+    /// raw data via `tiffFile.rawData` and decode the embedded property list
+    /// ('PROP' section) themselves if needed.
+    /// X3F header (40 bytes):
+    ///   0..3   "FOVb" magic
+    ///   4..7   format version (uint32 LE)
+    ///   8..23  unique ID (16 bytes)
+    ///   24..27 mark/flag bits
+    ///   28..31 image rotation (uint32 LE)
+    ///   32..63 white balance label (ASCII)
+    private static func parseX3F(_ data: Data) throws -> TIFFFile {
+        guard data.count >= 64 else {
+            throw MetadataError.invalidRAW("X3F file too small")
+        }
+        let s = data.startIndex
+        guard data[s] == 0x46, data[s + 1] == 0x4F, data[s + 2] == 0x56, data[s + 3] == 0x62 else {
+            throw MetadataError.invalidRAW("Missing X3F FOVb magic")
+        }
+        // Synthesize a placeholder TIFF header. The downstream `extractExif`
+        // call sees an empty IFD0 and no Exif sub-IFD, which is exactly what
+        // we want for X3F today — extension by future work can populate
+        // ImageMetadata fields from the X3F directory directly.
+        let header = TIFFHeader(byteOrder: .littleEndian, ifdOffset: 0)
+        return TIFFFile(rawData: data, header: header, ifds: [])
+    }
+
+    // MARK: - MRW (Minolta)
+
+    /// Parse Minolta MRW. Layout:
+    ///   0      0x00
+    ///   1..3   "MRM" (Maxxum/Dynax) or "MRI" (older DiMAGE)
+    ///   4..7   total length of MRW header blocks (big-endian uint32)
+    ///   8..    MRW blocks (PRD, TTW, WBG, RIF), then raw image data
+    /// The TTW block contains the embedded TIFF/Exif IFD; its body starts
+    /// with the standard "II*\0" or "MM\0*" TIFF magic.
+    private static func parseMRW(_ data: Data) throws -> TIFFFile {
+        guard data.count >= 8 else {
+            throw MetadataError.invalidRAW("MRW file too small")
+        }
+        let s = data.startIndex
+        guard data[s] == 0x00, data[s + 1] == 0x4D, data[s + 2] == 0x52,
+              data[s + 3] == 0x4D || data[s + 3] == 0x49 else {
+            throw MetadataError.invalidRAW("Missing MRW magic")
+        }
+        // headerLen is the number of bytes after offset 8 belonging to the
+        // MRW headers (PRD/TTW/WBG/RIF). Walk MRW blocks looking for "TTW\0"
+        // which carries the embedded TIFF.
+        let headerLen = Int(data[s + 4]) << 24
+            | Int(data[s + 5]) << 16
+            | Int(data[s + 6]) << 8
+            | Int(data[s + 7])
+        let headerEnd = min(8 + headerLen, data.count)
+        var off = 8
+        while off + 8 <= headerEnd {
+            // Each MRW block: 4-byte tag + 4-byte length (big-endian).
+            let tag = data[s + off ..< s + off + 4]
+            let blockLen = Int(data[s + off + 4]) << 24
+                | Int(data[s + off + 5]) << 16
+                | Int(data[s + off + 6]) << 8
+                | Int(data[s + off + 7])
+            let bodyStart = off + 8
+            let bodyEnd = min(bodyStart + blockLen, headerEnd)
+            // TTW block (ASCII "TTW\0" or " TTW") carries the embedded TIFF.
+            // Some MRW writers leave a leading 0x00; accept either ordering.
+            let isTTW = (tag.count == 4 && tag.contains(0x54) && tag.contains(0x57))
+            if isTTW, bodyEnd > bodyStart {
+                let inner = Data(data[s + bodyStart ..< s + bodyEnd])
+                if inner.count >= 4 {
+                    let ib = [UInt8](inner.prefix(4))
+                    let isLE = ib[0] == 0x49 && ib[1] == 0x49 && ib[2] == 0x2A && ib[3] == 0x00
+                    let isBE = ib[0] == 0x4D && ib[1] == 0x4D && ib[2] == 0x00 && ib[3] == 0x2A
+                    if isLE || isBE {
+                        return try TIFFFileParser.parse(inner)
+                    }
+                }
+            }
+            off = bodyEnd
+        }
+        throw MetadataError.invalidRAW("MRW TTW block (TIFF/Exif IFD) not found")
     }
 
     // MARK: - RAF (Fujifilm)
