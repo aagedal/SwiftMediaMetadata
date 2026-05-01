@@ -1020,4 +1020,215 @@ enum MPEGBitstream {
         while y != 0 { (x, y) = (y, x % y) }
         return x
     }
+
+    // MARK: - SEI
+
+    /// Per-stream SEI metadata extracted from H.264/H.265 SEI NAL units.
+    /// SEI is the in-band variant of MP4's `mdcv`/`clli`/`dvcC` boxes —
+    /// MPEG-TS, MKV and bare H.264/HEVC streams carry HDR + caption + timecode
+    /// info here because they have no container slot for it.
+    struct SEIData {
+        /// SMPTE ST 2086 mastering display color volume (SEI payload type 137).
+        var masteringDisplay: HDRMasteringDisplay?
+        /// CTA-861.3 content light level (SEI payload type 144).
+        var contentLightLevel: HDRContentLightLevel?
+        /// True if the stream carries CTA-708 / CEA-608 closed captions in
+        /// SEI user_data_registered_itu_t_t35 (payload type 4) with the
+        /// ATSC A/53 wrapper (provider 0x0031, user_identifier 'GA94', cc_data type 0x03).
+        var hasClosedCaptions: Bool = false
+        /// Total bytes of cc_data observed (across all SEI messages in the input).
+        var closedCaptionByteCount: Int = 0
+        /// HEVC SEI time_code (payload type 136) decoded as "HH:MM:SS:FF".
+        var timecode: String?
+        /// HEVC alpha_channel_info SEI (payload type 165) — true if alpha is signalled.
+        var hasAlphaChannel: Bool = false
+    }
+
+    /// Walk an array of SEI NAL RBSPs (emulation-prevention already stripped)
+    /// and decode all known payloads. `forHEVC == true` for H.265 streams,
+    /// `false` for H.264. SEI message structure is identical between codecs.
+    static func parseSEIMessages(_ rbsps: [Data], forHEVC: Bool) -> SEIData {
+        var sei = SEIData()
+        for rbsp in rbsps {
+            parseOneSEINALU(rbsp, forHEVC: forHEVC, into: &sei)
+        }
+        return sei
+    }
+
+    /// Parse a single SEI NAL's RBSP. Multiple SEI messages may share one NAL.
+    private static func parseOneSEINALU(_ rbsp: Data, forHEVC: Bool, into sei: inout SEIData) {
+        var i = rbsp.startIndex
+        let end = rbsp.endIndex
+        while i < end {
+            // payload_type — 0xFF bytes accumulate, the next byte is the
+            // final increment. Same encoding for payload_size.
+            var payloadType = 0
+            while i < end, rbsp[i] == 0xFF {
+                payloadType += 255
+                i += 1
+            }
+            guard i < end else { return }
+            payloadType += Int(rbsp[i])
+            i += 1
+
+            var payloadSize = 0
+            while i < end, rbsp[i] == 0xFF {
+                payloadSize += 255
+                i += 1
+            }
+            guard i < end else { return }
+            payloadSize += Int(rbsp[i])
+            i += 1
+
+            guard i + payloadSize <= end else { return }
+            let payload = rbsp.subdata(in: i ..< i + payloadSize)
+            i += payloadSize
+
+            decodeSEIPayload(type: payloadType, payload: payload, forHEVC: forHEVC, into: &sei)
+
+            // SEI messages end with rbsp_trailing_bits — typically 0x80. Stop
+            // when we hit it cleanly to avoid mis-parsing trailing zero bytes.
+            if i < end, rbsp[i] == 0x80 { return }
+        }
+    }
+
+    private static func decodeSEIPayload(type: Int, payload: Data, forHEVC: Bool, into sei: inout SEIData) {
+        switch type {
+        case 4:
+            // user_data_registered_itu_t_t35 — A/53 closed captions.
+            decodeITUTT35(payload, into: &sei)
+        case 137:
+            // mastering_display_colour_volume.
+            sei.masteringDisplay = decodeMDCVPayload(payload) ?? sei.masteringDisplay
+        case 144:
+            // content_light_level_info.
+            sei.contentLightLevel = decodeCLLIPayload(payload) ?? sei.contentLightLevel
+        case 136 where forHEVC:
+            // time_code (HEVC only).
+            if let tc = decodeTimeCodePayload(payload) {
+                sei.timecode = tc
+            }
+        case 165 where forHEVC:
+            // alpha_channel_info (HEVC RExt).
+            sei.hasAlphaChannel = true
+        default:
+            break
+        }
+    }
+
+    /// SEI payload type 4 — A/53 closed captions are wrapped in an
+    /// itu_t_t35 envelope with country=0xB5 (US), provider=0x0031,
+    /// user_identifier='GA94'.
+    private static func decodeITUTT35(_ payload: Data, into sei: inout SEIData) {
+        guard payload.count >= 9 else { return }
+        var p = payload.startIndex
+        guard payload[p] == 0xB5 else { return }
+        p += 1
+        // Skip optional itu_t_t35_country_code_extension_byte.
+        if payload[p - 1] == 0xFF {
+            guard p < payload.endIndex else { return }
+            p += 1
+        }
+        guard p + 2 <= payload.endIndex else { return }
+        let provider = (UInt16(payload[p]) << 8) | UInt16(payload[p + 1])
+        p += 2
+        guard provider == 0x0031 else { return }
+        // user_identifier (4 bytes) — 'GA94' for ATSC A/53.
+        guard p + 4 <= payload.endIndex else { return }
+        let userID = (UInt32(payload[p]) << 24)
+            | (UInt32(payload[p + 1]) << 16)
+            | (UInt32(payload[p + 2]) << 8)
+            | UInt32(payload[p + 3])
+        p += 4
+        guard userID == 0x47413934 else { return }
+        // user_data_type_code 0x03 = cc_data.
+        guard p < payload.endIndex else { return }
+        let typeCode = payload[p]
+        p += 1
+        guard typeCode == 0x03 else { return }
+        sei.hasClosedCaptions = true
+        sei.closedCaptionByteCount += max(0, payload.endIndex - p)
+    }
+
+    /// SEI payload type 137 — mastering_display_colour_volume.
+    /// Layout (24 bytes): display_primaries_x[c], y[c] for c=0..2 (G, B, R order
+    /// per H.264 D.2.27 / H.265 D.2.27), white_point_x, white_point_y (uint16),
+    /// max/min_display_mastering_luminance (uint32, 0.0001 nit units).
+    private static func decodeMDCVPayload(_ payload: Data) -> HDRMasteringDisplay? {
+        guard payload.count >= 24 else { return nil }
+        var reader = BinaryReader(data: payload)
+        guard let gx = try? reader.readUInt16BigEndian(),
+              let gy = try? reader.readUInt16BigEndian(),
+              let bx = try? reader.readUInt16BigEndian(),
+              let by = try? reader.readUInt16BigEndian(),
+              let rx = try? reader.readUInt16BigEndian(),
+              let ry = try? reader.readUInt16BigEndian(),
+              let wx = try? reader.readUInt16BigEndian(),
+              let wy = try? reader.readUInt16BigEndian(),
+              let maxL = try? reader.readUInt32BigEndian(),
+              let minL = try? reader.readUInt32BigEndian() else { return nil }
+        let chromaScale = 0.00002
+        let lumaScale = 0.0001
+        return HDRMasteringDisplay(
+            redX: Double(rx) * chromaScale,
+            redY: Double(ry) * chromaScale,
+            greenX: Double(gx) * chromaScale,
+            greenY: Double(gy) * chromaScale,
+            blueX: Double(bx) * chromaScale,
+            blueY: Double(by) * chromaScale,
+            whitePointX: Double(wx) * chromaScale,
+            whitePointY: Double(wy) * chromaScale,
+            maxLuminance: Double(maxL) * lumaScale,
+            minLuminance: Double(minL) * lumaScale
+        )
+    }
+
+    /// SEI payload type 144 — content_light_level_info (uint16 maxCLL, maxFALL).
+    private static func decodeCLLIPayload(_ payload: Data) -> HDRContentLightLevel? {
+        guard payload.count >= 4 else { return nil }
+        var reader = BinaryReader(data: payload)
+        guard let maxCLL = try? reader.readUInt16BigEndian(),
+              let maxFALL = try? reader.readUInt16BigEndian() else { return nil }
+        return HDRContentLightLevel(maxCLL: Int(maxCLL), maxFALL: Int(maxFALL))
+    }
+
+    /// SEI payload type 136 (HEVC) — time_code. Decode the first clock timestamp
+    /// to "HH:MM:SS:FF" form. The full SEI permits up to 3 timestamps; we surface
+    /// only the first (matches ffprobe's `side_data_list[].timecode`).
+    private static func decodeTimeCodePayload(_ payload: Data) -> String? {
+        var br = BitReader(payload)
+        guard br.bitsRemaining >= 2 else { return nil }
+        let numClockTS = Int(br.read(2))
+        guard numClockTS > 0 else { return nil }
+        for _ in 0..<numClockTS {
+            guard br.bitsRemaining >= 1 else { return nil }
+            let clockTimestampFlag = br.readBool()
+            guard clockTimestampFlag else { continue }
+            guard br.bitsRemaining >= 17 else { return nil }
+            _ = br.readBool() // units_field_based_flag
+            _ = br.read(5)    // counting_type
+            let fullTimestampFlag = br.readBool()
+            _ = br.readBool() // discontinuity_flag
+            _ = br.readBool() // cnt_dropped_flag
+            let nFrames = Int(br.read(9))
+            var seconds = 0, minutes = 0, hours = 0
+            if fullTimestampFlag {
+                seconds = Int(br.read(6))
+                minutes = Int(br.read(6))
+                hours = Int(br.read(5))
+            } else {
+                if br.readBool() {
+                    seconds = Int(br.read(6))
+                    if br.readBool() {
+                        minutes = Int(br.read(6))
+                        if br.readBool() {
+                            hours = Int(br.read(5))
+                        }
+                    }
+                }
+            }
+            return String(format: "%02d:%02d:%02d:%02d", hours, minutes, seconds, nFrames)
+        }
+        return nil
+    }
 }

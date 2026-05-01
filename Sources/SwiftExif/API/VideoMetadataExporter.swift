@@ -122,6 +122,16 @@ public struct VideoMetadataExporter: Sendable {
             let languages = metadata.chapters.compactMap(\.language)
             if !languages.isEmpty { dict["ChapterLanguages"] = languages }
         }
+        if !metadata.mpegPrograms.isEmpty {
+            dict["MPEGProgramCount"] = metadata.mpegPrograms.count
+            dict["MPEGProgramNumbers"] = metadata.mpegPrograms.map(\.programNumber)
+            dict["MPEGProgramPMTPIDs"] = metadata.mpegPrograms.map(\.pmtPID)
+            dict["MPEGProgramElementaryPIDs"] = metadata.mpegPrograms.map(\.elementaryPIDs)
+            let names = metadata.mpegPrograms.compactMap(\.serviceName)
+            if !names.isEmpty { dict["MPEGProgramServiceNames"] = names }
+            let providers = metadata.mpegPrograms.compactMap(\.providerName)
+            if !providers.isEmpty { dict["MPEGProgramProviderNames"] = providers }
+        }
         if let t = metadata.title { dict["Title"] = t }
         if let a = metadata.artist { dict["Artist"] = a }
         if let c = metadata.comment { dict["Comment"] = c }

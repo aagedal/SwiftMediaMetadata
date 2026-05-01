@@ -83,6 +83,10 @@ public struct VideoMetadata: Sendable {
     /// groups link to channels via UUIDs. `nil` for containers that don't
     /// support MCA labelling (everything except MXF, today).
     public var mcaAudioLabeling: MCAAudioLabeling?
+    /// PSI (Program-Specific Information) programs found in an MPEG-TS file:
+    /// PAT entries plus their PMT-described elementary PIDs and any service
+    /// name / provider learned from the DVB SDT. Empty for non-TS containers.
+    public var mpegPrograms: [MPEGProgram] = []
     public var warnings: [String]
 
     /// The original file data (needed for writing back).
@@ -416,5 +420,40 @@ public struct VideoMetadata: Sendable {
         case .bottomFieldFirst: return "BFF"
         default: return nil
         }
+    }
+}
+
+/// A single MPEG-TS program — one logical TV channel inside a multi-program
+/// transport stream (DVB / ATSC OTA capture, satellite broadcast).
+///
+/// PAT lists every program with its `programNumber` and the PID of the PMT
+/// that describes its elementary streams. The PMT then lists video/audio/
+/// subtitle PIDs. SDT (PID 0x0011) optionally adds a service name and
+/// provider label.
+public struct MPEGProgram: Sendable, Equatable {
+    /// PAT-assigned program number (DVB calls this "service_id").
+    public var programNumber: Int
+    /// PID of the PMT section that describes this program's streams.
+    public var pmtPID: Int
+    /// PIDs of every elementary stream (video/audio/subtitles) listed in
+    /// this program's PMT.
+    public var elementaryPIDs: [Int]
+    /// DVB service name from SDT, if available (e.g. "BBC ONE HD").
+    public var serviceName: String?
+    /// DVB service provider name from SDT (e.g. "BBC", "ARD").
+    public var providerName: String?
+
+    public init(
+        programNumber: Int,
+        pmtPID: Int,
+        elementaryPIDs: [Int] = [],
+        serviceName: String? = nil,
+        providerName: String? = nil
+    ) {
+        self.programNumber = programNumber
+        self.pmtPID = pmtPID
+        self.elementaryPIDs = elementaryPIDs
+        self.serviceName = serviceName
+        self.providerName = providerName
     }
 }

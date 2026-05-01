@@ -166,6 +166,13 @@ public struct VideoStream: Sendable, Equatable {
     /// from `mdcv`, `clli`, and `dvcC`/`dvvC` boxes inside the visual sample
     /// entry. Nil for SDR streams.
     public var hdr: HDRMetadata?
+    /// True when the stream carries embedded CTA-708 / CEA-608 closed
+    /// captions (detected from H.264/HEVC SEI A/53 user-data wrappers, or
+    /// from MP4 `\u{a9}cca` / Matroska CodecPrivate hints).
+    public var hasClosedCaptions: Bool?
+    /// True when the stream signals an alpha (transparency) channel via the
+    /// HEVC `alpha_channel_info` SEI message.
+    public var hasAlphaChannel: Bool?
 
     public init(index: Int) {
         self.index = index
@@ -224,6 +231,8 @@ public struct VideoStream: Sendable, Equatable {
             && lhs.title == rhs.title
             && lhs.rotation == rhs.rotation
             && lhs.hdr == rhs.hdr
+            && lhs.hasClosedCaptions == rhs.hasClosedCaptions
+            && lhs.hasAlphaChannel == rhs.hasAlphaChannel
     }
 }
 

@@ -177,21 +177,46 @@ public struct MPEGReader: Sendable {
         var firstPCR: Double? = nil
         var lastPCR: Double? = nil
 
-        // Pass 1: find PAT → PMT → elementary stream types.
-        var patPMTPids: Set<Int> = []
+        // Pass 1: find PAT → PMT → elementary stream types. Track PSI programs
+        // explicitly: PAT entries map programNumber → PMT PID; PMT scans then
+        // collect each program's elementary PIDs. SDT (PID 0x0011) supplies
+        // service / provider names where the broadcaster set them.
+        var pmtToProgram: [Int: Int] = [:]
+        var programTable: [Int: MPEGProgram] = [:]
+        var sdtEntries: [SDTEntry] = []
         for i in 0..<maxPackets {
             let packetStart = packetOffset + i * packetStride
             let (pid, unitStart, _, payloadStart) = parseTSHeaderExtended(data, at: packetStart)
             guard pid >= 0, let payloadStart else { continue }
             if pid == 0, unitStart {
-                let pmtPids = parsePAT(data, from: payloadStart, end: packetStart + packetPayloadSize)
-                patPMTPids.formUnion(pmtPids)
+                for entry in parsePAT(data, from: payloadStart, end: packetStart + packetPayloadSize) {
+                    if pmtToProgram[entry.pmtPID] == nil {
+                        pmtToProgram[entry.pmtPID] = entry.programNumber
+                        programTable[entry.programNumber] = MPEGProgram(
+                            programNumber: entry.programNumber, pmtPID: entry.pmtPID)
+                    }
+                }
                 continue
             }
-            if patPMTPids.contains(pid), unitStart {
+            if pid == 0x0011, unitStart, sdtEntries.isEmpty {
+                sdtEntries = parseSDT(data, from: payloadStart, end: packetStart + packetPayloadSize)
+                continue
+            }
+            if let progNum = pmtToProgram[pid], unitStart {
+                let beforeVideo = Set(videoPIDs.keys)
+                let beforeAudio = Set(audioPIDs.keys)
+                let beforeSub = Set(subtitlePIDs.keys)
                 parsePMT(data, from: payloadStart, end: packetStart + packetPayloadSize,
                          videoPIDs: &videoPIDs, audioPIDs: &audioPIDs,
                          subtitlePIDs: &subtitlePIDs, pcrPid: &pcrPid)
+                // Attribute newly-discovered elementary PIDs to this program.
+                let added = (Set(videoPIDs.keys).subtracting(beforeVideo))
+                    .union(Set(audioPIDs.keys).subtracting(beforeAudio))
+                    .union(Set(subtitlePIDs.keys).subtracting(beforeSub))
+                if !added.isEmpty, var prog = programTable[progNum] {
+                    prog.elementaryPIDs.append(contentsOf: added.sorted())
+                    programTable[progNum] = prog
+                }
             }
         }
 
@@ -272,6 +297,22 @@ public struct MPEGReader: Sendable {
             }
         }
 
+        // Publish PSI programs (PAT/PMT/SDT join). Multi-program TS captures
+        // (DVB / ATSC OTA) carry multiple services in one file — we expose
+        // each so consumers can pick a specific channel.
+        if !programTable.isEmpty {
+            let sdtByID = Dictionary(uniqueKeysWithValues: sdtEntries.map { ($0.serviceID, $0) })
+            metadata.mpegPrograms = programTable.values
+                .sorted { $0.programNumber < $1.programNumber }
+                .map { var p = $0
+                    if let sdt = sdtByID[p.programNumber] {
+                        p.serviceName = sdt.serviceName
+                        p.providerName = sdt.providerName
+                    }
+                    return p
+                }
+        }
+
         // Publish streams. Preserve PAT/PMT discovery order.
         var nextIndex = 0
         for (_, info) in videoPIDs.sorted(by: { $0.key < $1.key }) {
@@ -294,6 +335,12 @@ public struct MPEGReader: Sendable {
             stream.chromaLocation = info.chromaLocation
             stream.colorInfo = info.color
             stream.fieldOrder = info.fieldOrder
+            // SEI-derived metadata: HDR side-data (mdcv/clli), CTA-708 captions
+            // signalling, and HEVC time_code timestamps.
+            stream.hdr = info.hdr
+            if let tc = info.timecode { stream.timecode = tc }
+            if info.hasClosedCaptions { stream.hasClosedCaptions = true }
+            if info.hasAlphaChannel { stream.hasAlphaChannel = true }
             // Per-stream bit rate from PES byte / PTS-span if not advertised.
             if stream.bitRate == nil,
                let f = info.firstPTS, let l = info.lastPTS, l > f, info.byteCount > 0 {
@@ -491,45 +538,82 @@ public struct MPEGReader: Sendable {
     /// Walk the accumulated PES buffer looking for an H.264 SPS NAL
     /// (`nal_unit_type == 7`) and decode it. Returns true on success.
     private static func extractH264Fields(from buf: Data, into info: inout TSStreamInfo) -> Bool {
+        var seiRBSPs: [Data] = []
+        var spsFound = false
         for range in MPEGBitstream.annexBNALRanges(buf) {
             guard !range.isEmpty else { continue }
             let nalHeader = buf[buf.startIndex + range.lowerBound]
             let nalType = Int(nalHeader & 0x1F)
-            if nalType != 7 { continue }
-            // Skip the 1-byte NAL header.
-            let rbspLower = range.lowerBound + 1
-            let rbspUpper = range.upperBound
-            guard rbspLower < rbspUpper else { continue }
-            let lo = buf.startIndex + rbspLower
-            let hi = buf.startIndex + rbspUpper
-            let raw = buf.subdata(in: lo..<hi)
-            let rbsp = MPEGBitstream.stripEmulationPrevention(raw)
-            guard let f = MPEGBitstream.parseH264SPS(rbsp) else { continue }
-            applyH264Fields(f, to: &info)
-            return true
+            // SPS = 7, SEI = 6.
+            if nalType == 7, !spsFound {
+                let rbspLower = range.lowerBound + 1
+                let rbspUpper = range.upperBound
+                guard rbspLower < rbspUpper else { continue }
+                let raw = buf.subdata(in: buf.startIndex + rbspLower ..< buf.startIndex + rbspUpper)
+                let rbsp = MPEGBitstream.stripEmulationPrevention(raw)
+                if let f = MPEGBitstream.parseH264SPS(rbsp) {
+                    applyH264Fields(f, to: &info)
+                    spsFound = true
+                }
+            } else if nalType == 6 {
+                let rbspLower = range.lowerBound + 1
+                let rbspUpper = range.upperBound
+                guard rbspLower < rbspUpper else { continue }
+                let raw = buf.subdata(in: buf.startIndex + rbspLower ..< buf.startIndex + rbspUpper)
+                seiRBSPs.append(MPEGBitstream.stripEmulationPrevention(raw))
+            }
         }
-        return false
+        if !seiRBSPs.isEmpty {
+            applySEI(MPEGBitstream.parseSEIMessages(seiRBSPs, forHEVC: false), to: &info)
+            info.seiSearched = true
+        }
+        return spsFound
     }
 
     private static func extractHEVCFields(from buf: Data, into info: inout TSStreamInfo) -> Bool {
+        var seiRBSPs: [Data] = []
+        var spsFound = false
         for range in MPEGBitstream.annexBNALRanges(buf) {
             guard range.upperBound - range.lowerBound >= 2 else { continue }
             let header0 = buf[buf.startIndex + range.lowerBound]
-            // HEVC NAL header is 2 bytes; nal_unit_type is bits 1-6 of byte 0.
             let nalType = Int((header0 >> 1) & 0x3F)
-            if nalType != 33 { continue }
-            let rbspLower = range.lowerBound + 2
-            let rbspUpper = range.upperBound
-            guard rbspLower < rbspUpper else { continue }
-            let lo = buf.startIndex + rbspLower
-            let hi = buf.startIndex + rbspUpper
-            let raw = buf.subdata(in: lo..<hi)
-            let rbsp = MPEGBitstream.stripEmulationPrevention(raw)
-            guard let f = MPEGBitstream.parseHEVCSPS(rbsp) else { continue }
-            applyHEVCFields(f, to: &info)
-            return true
+            // HEVC NAL header is 2 bytes; SPS=33, PREFIX_SEI=39, SUFFIX_SEI=40.
+            if nalType == 33, !spsFound {
+                let rbspLower = range.lowerBound + 2
+                let rbspUpper = range.upperBound
+                guard rbspLower < rbspUpper else { continue }
+                let raw = buf.subdata(in: buf.startIndex + rbspLower ..< buf.startIndex + rbspUpper)
+                let rbsp = MPEGBitstream.stripEmulationPrevention(raw)
+                if let f = MPEGBitstream.parseHEVCSPS(rbsp) {
+                    applyHEVCFields(f, to: &info)
+                    spsFound = true
+                }
+            } else if nalType == 39 || nalType == 40 {
+                let rbspLower = range.lowerBound + 2
+                let rbspUpper = range.upperBound
+                guard rbspLower < rbspUpper else { continue }
+                let raw = buf.subdata(in: buf.startIndex + rbspLower ..< buf.startIndex + rbspUpper)
+                seiRBSPs.append(MPEGBitstream.stripEmulationPrevention(raw))
+            }
         }
-        return false
+        if !seiRBSPs.isEmpty {
+            applySEI(MPEGBitstream.parseSEIMessages(seiRBSPs, forHEVC: true), to: &info)
+            info.seiSearched = true
+        }
+        return spsFound
+    }
+
+    /// Merge SEI-derived metadata into a stream's accumulated state.
+    private static func applySEI(_ sei: MPEGBitstream.SEIData, to info: inout TSStreamInfo) {
+        if sei.masteringDisplay != nil || sei.contentLightLevel != nil {
+            var hdr = info.hdr ?? HDRMetadata()
+            if let md = sei.masteringDisplay { hdr.masteringDisplay = md }
+            if let cll = sei.contentLightLevel { hdr.contentLightLevel = cll }
+            info.hdr = hdr
+        }
+        if sei.hasClosedCaptions { info.hasClosedCaptions = true }
+        if let tc = sei.timecode { info.timecode = tc }
+        if sei.hasAlphaChannel { info.hasAlphaChannel = true }
     }
 
     private static func extractMPEGVideoFields(from buf: Data, into info: inout TSStreamInfo) -> Bool {
@@ -734,6 +818,16 @@ public struct MPEGReader: Sendable {
         var lastPTS: Double?
         var byteCount: Int = 0
         var done: Bool = false
+        // SEI-derived video metadata (HDR, captions, timecode, alpha) — we
+        // accumulate across PES buffers because individual SEI NALs may carry
+        // different payload types. Marked done once we've seen at least one
+        // mastering-display payload (the typical placeholder for "all the
+        // HDR info has shown up").
+        var hdr: HDRMetadata?
+        var hasClosedCaptions: Bool = false
+        var timecode: String?
+        var hasAlphaChannel: Bool = false
+        var seiSearched: Bool = false
     }
 
     /// Cap on the per-PID PES accumulator. The first SPS / PPS / IDR
@@ -746,7 +840,11 @@ public struct MPEGReader: Sendable {
     ///   table_id(1) + section_syntax(1) + section_length(2) + transport_stream_id(2) +
     ///   version(1) + section_number(1) + last_section(1) +
     ///   [program_number(2) + reserved+PMT_PID(2)]*
-    private static func parsePAT(_ data: Data, from start: Int, end: Int) -> [Int] {
+    ///
+    /// Returns each (programNumber, pmtPID) pair so callers can distinguish
+    /// multiple programs in the same TS. Program 0 is the network-information
+    /// table and is skipped.
+    private static func parsePAT(_ data: Data, from start: Int, end: Int) -> [(programNumber: Int, pmtPID: Int)] {
         guard start < end else { return [] }
         var s = start
         // Pointer field
@@ -756,15 +854,115 @@ public struct MPEGReader: Sendable {
         let sectionLength = (Int(data[data.startIndex + s + 1] & 0x0F) << 8) | Int(data[data.startIndex + s + 2])
         let sectionEnd = min(s + 3 + sectionLength - 4, end) // exclude 4-byte CRC
 
-        var pids: [Int] = []
+        var entries: [(Int, Int)] = []
         var off = s + 8
         while off + 4 <= sectionEnd {
             let programNumber = (Int(data[data.startIndex + off]) << 8) | Int(data[data.startIndex + off + 1])
             let pmtPid = (Int(data[data.startIndex + off + 2] & 0x1F) << 8) | Int(data[data.startIndex + off + 3])
-            if programNumber != 0 { pids.append(pmtPid) }
+            if programNumber != 0 { entries.append((programNumber, pmtPid)) }
             off += 4
         }
-        return pids
+        return entries
+    }
+
+    // MARK: - DVB SDT (Service Description Table)
+
+    /// Parsed SDT entry — one DVB service per transport stream. Maps
+    /// programNumber → (serviceName, providerName) so the caller can join
+    /// to the PAT/PMT tree.
+    private struct SDTEntry {
+        let serviceID: Int
+        var serviceName: String?
+        var providerName: String?
+    }
+
+    /// SDT (PID 0x0011, table_id 0x42 for "actual TS"). Layout:
+    ///   pointer + table_id(1) + section_syntax+length(2) +
+    ///   transport_stream_id(2) + version(1) + section_number(1) +
+    ///   last_section(1) + original_network_id(2) + reserved(1) +
+    ///   [service_id(2) + reserved+EIT_flags(1) + running+free_CA+
+    ///    descriptors_loop_length(2) + descriptors]*
+    private static func parseSDT(_ data: Data, from start: Int, end: Int) -> [SDTEntry] {
+        guard start < end else { return [] }
+        var s = start
+        let pointer = Int(data[data.startIndex + s])
+        s += 1 + pointer
+        guard s + 11 <= end else { return [] }
+        // table_id 0x42 = SDT actual TS, 0x46 = SDT other TS. Accept both.
+        let tableID = data[data.startIndex + s]
+        guard tableID == 0x42 || tableID == 0x46 else { return [] }
+        let sectionLength = (Int(data[data.startIndex + s + 1] & 0x0F) << 8) | Int(data[data.startIndex + s + 2])
+        let sectionEnd = min(s + 3 + sectionLength - 4, end)
+        var off = s + 11
+
+        var entries: [SDTEntry] = []
+        while off + 5 <= sectionEnd {
+            let serviceID = (Int(data[data.startIndex + off]) << 8) | Int(data[data.startIndex + off + 1])
+            let descLen = (Int(data[data.startIndex + off + 3] & 0x0F) << 8) | Int(data[data.startIndex + off + 4])
+            let descStart = off + 5
+            let descEnd = min(descStart + descLen, sectionEnd)
+            var entry = SDTEntry(serviceID: serviceID)
+            // Walk descriptors: 0x48 (service_descriptor) carries provider/service names.
+            var d = descStart
+            while d + 2 <= descEnd {
+                let tag = data[data.startIndex + d]
+                let len = Int(data[data.startIndex + d + 1])
+                let bodyStart = d + 2
+                let bodyEnd = min(bodyStart + len, descEnd)
+                if tag == 0x48, bodyEnd - bodyStart >= 3 {
+                    // service_descriptor:
+                    //   service_type(1) + provider_name_length(1) + provider_name(N) +
+                    //   service_name_length(1) + service_name(M)
+                    let provLen = Int(data[data.startIndex + bodyStart + 1])
+                    let provNameStart = bodyStart + 2
+                    let provNameEnd = min(provNameStart + provLen, bodyEnd)
+                    if provNameEnd <= bodyEnd {
+                        entry.providerName = decodeDVBString(
+                            data.subdata(in: data.startIndex + provNameStart ..< data.startIndex + provNameEnd))
+                        let svcLenOff = provNameEnd
+                        if svcLenOff < bodyEnd {
+                            let svcLen = Int(data[data.startIndex + svcLenOff])
+                            let svcStart = svcLenOff + 1
+                            let svcEnd = min(svcStart + svcLen, bodyEnd)
+                            if svcEnd <= bodyEnd {
+                                entry.serviceName = decodeDVBString(
+                                    data.subdata(in: data.startIndex + svcStart ..< data.startIndex + svcEnd))
+                            }
+                        }
+                    }
+                }
+                d = bodyEnd
+            }
+            entries.append(entry)
+            off = descEnd
+        }
+        return entries
+    }
+
+    /// DVB strings (EN 300 468) start with an optional control byte naming
+    /// the encoding. 0x01–0x0B select ISO-8859-2..-15; 0x10 + 2 bytes selects
+    /// a 16-bit ISO-8859 code page; 0x11 = UCS-2; 0x14–0x15 = UTF-16; 0x15 = UTF-8.
+    /// Without a control byte, default to ISO-6937 (we approximate with Latin-1
+    /// since true ISO-6937 needs a translation table for combining diacritics).
+    private static func decodeDVBString(_ bytes: Data) -> String? {
+        guard !bytes.isEmpty else { return nil }
+        let first = bytes[bytes.startIndex]
+        if first == 0x15 {
+            return String(data: bytes.dropFirst(), encoding: .utf8)
+        }
+        if first == 0x11 {
+            return String(data: bytes.dropFirst(), encoding: .utf16BigEndian)
+        }
+        if first >= 0x01 && first <= 0x0B {
+            // ISO-8859-(5+first-1). Fall back to Latin-1 — close enough for
+            // ASCII-range channel names which is what 99% of real-world SDTs use.
+            return String(data: bytes.dropFirst(), encoding: .isoLatin1)
+        }
+        if first < 0x20 {
+            // Unknown control byte — strip it.
+            return String(data: bytes.dropFirst(), encoding: .isoLatin1)
+        }
+        return String(data: bytes, encoding: .isoLatin1)
     }
 
     private static func parsePMT(
