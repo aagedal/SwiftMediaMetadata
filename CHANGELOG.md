@@ -43,13 +43,34 @@ the CLI; the library target follows the same numbering.
   matching writer support in `MakerNoteWriter.swift` and round-trip
   coverage in `MakerNoteReaderTests` / `MakerNoteWriterTests`.
 
-- **Blackmagic RAW (`.braw`) container metadata** — new format support that
-  reads the moov.meta slate produced by Blackmagic cameras and DaVinci
-  Resolve. Tolerates a missing `ftyp` (BRAW files often omit it) and falls
-  back to a `.mov` container shape, then parses `mdta` slate keys for
-  sensor frame rate, sensor area, LUT name, clip metadata, and the
-  remaining BMD slate fields. Routed through `MP4Parser.swift`. New format
-  enum entries in `RawFormat` / `FormatDetector`.
+- **Blackmagic RAW (`.braw`) container metadata** — new format support
+  routed through `MP4Parser`. BRAW is an ISOBMFF derivative with the
+  legacy QuickTime layout (`wide` + `mdat` at the head, `moov` tail-placed,
+  no `ftyp`); the parser now tolerates the missing `ftyp` and defaults to
+  a `.mov` container shape, with `VideoMetadata.read(from:)` promoting the
+  format to `.braw` based on extension. Standard boxes give duration,
+  project frame rate, resolution, audio, and timecode. The Blackmagic
+  slate is decoded out of `moov.meta` using QuickTime's non-FullBox
+  `mdta` layout — the parser sniffs the `meta` box header to pick the
+  right shape, so existing ISOBMFF / iTunes paths are untouched, and the
+  `mdta` value decoder grew handlers for BRAW's typed `data` payloads
+  including the BMD-specific type 71 (float32-BE pair) used for the
+  rectangle fields. Surfaces to `CameraMetadata`:
+  - camera make / model, firmware, color science generation, viewing
+    gamma + gamut, compression ratio, shutter type;
+  - off-speed `captureFps` (distinct from the mvhd/stts-derived
+    `frameRate` — a 24p clip captured at 112 fps reports `frameRate≈24`
+    and `captureFps≈112`);
+  - production slate keys: clip number, scene, take, reel, camera
+    number, environment, day/night;
+  - `sensor_area_captured`, `crop_origin` / `crop_size` / `safe_area`
+    rectangles, `LUT used`, `post_3dlut_mode`, embedded LUT name/title,
+    `frameguide_aspect_ratio`, `gamut_compression_enable`.
+
+  Per-frame interpretation attributes (white point, tint, absolute ISO,
+  shutter angle) live in proprietary `bfdn` / `ctrn` boxes inside the
+  codec sample entry and remain unparsed. Verified against Pyxis 12K /
+  6K and Cinema 6K samples; values match DaVinci Resolve.
 
 - **ExifTool / ffprobe parity initiative** — `PARITY_PLAN.md` lays out the
   delta between swift-exif's output and ExifTool / ffprobe, and several

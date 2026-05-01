@@ -18,6 +18,7 @@ A native Swift library for reading and writing image and video metadata — Exif
 | PDF | Yes | — | XMP, C2PA, document metadata |
 | PSD (Photoshop) | Yes | Yes | Exif, IPTC, XMP, ICC |
 | MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, profile, fps, field order, bit depth, chroma subsampling, pixel format, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language, QuickTime `tmcd` timecode |
+| Blackmagic RAW (.braw) | Yes | — | Container metadata via QuickTime layout (no `ftyp`, tail-placed `moov`): resolution, project frame rate, audio, timecode, plus the `moov.meta` slate — camera make/model, firmware, viewing gamma/gamut, color science, compression ratio, shutter type, sensor capture FPS (off-speed), production slate (clip number / scene / take / reel / camera / environment / day-night), sensor area, crop / safe-area rectangles, LUT used, post-3DLUT mode, frameguide aspect ratio, gamut compression. Per-frame interpretation attributes (white point, tint, absolute ISO) live in proprietary `bfdn`/`ctrn` boxes and remain unparsed |
 | MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
 | Matroska (.mkv) | Yes | — | Stream info (codec, profile, fps, dimensions, bit depth, chroma, chroma location, color, pixel format) decoded from both `Tracks` and `CodecPrivate` (hvcC/av1C/avcC), Segment-level `COMMENT`/`DESCRIPTION` tags, audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
 | WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) + subtitle tracks |
@@ -327,6 +328,25 @@ Source coverage:
   `HH:MM:SS:FF` with SMPTE 12M drop-frame arithmetic. Also: embedded XMP
   (uuid `BE7ACFCB-…`), GPS (`©xyz`), C2PA manifests, and Sony NRT sidecar
   auto-discovery.
+- **Blackmagic RAW (`.braw`)**: ISOBMFF derivative with the legacy QuickTime
+  layout — `wide` + `mdat` at the head, `moov` tail-placed, no `ftyp`.
+  Standard boxes (`mvhd`, `tkhd`, `stsd`, `stts`, `mdhd`) yield duration,
+  project frame rate (e.g. 24p), resolution, audio, and timecode. The
+  Blackmagic slate is parsed out of `moov.meta` using QuickTime's
+  non-FullBox `mdta` layout — a sniff at the box header disambiguates the
+  ISOBMFF/iTunes FullBox shape from the QuickTime shape so existing MP4 /
+  iTunes parsing stays untouched. The `mdta` decoder handles BRAW's typed
+  payloads, including the BMD-specific type 71 (float32 BE pair) used for
+  rectangle fields like `sensor_area_captured`. Surfaces to
+  `CameraMetadata`: camera make / model, firmware, viewing gamma / gamut,
+  color science generation, compression ratio, shutter type, off-speed
+  flag, and the production slate (clip number, scene, take, reel, camera
+  number, environment, day/night). Off-speed shoots populate
+  `captureFps` distinct from the `frameRate` — a 24p clip captured at
+  112 fps reports `frameRate=24` and `captureFps≈112`. Per-frame BRAW
+  interpretation (white point, tint, absolute ISO, shutter angle) lives
+  in proprietary `bfdn` / `ctrn` boxes inside the codec sample entry and
+  remains unparsed.
 - **MXF (SMPTE 377-1)**: picture and sound essence descriptors parsed from
   header metadata — `StoredWidth`/`StoredHeight`, `DisplayWidth`/`DisplayHeight`,
   `FrameLayout` (scan type), `ComponentDepth`,
@@ -453,13 +473,14 @@ if let c2pa = try await readVideoC2PAMetadata(from: videoURL) {
     }
 }
 
-// Sony NonRealTimeMeta (RDD-18) camera metadata — embedded or sidecar .XML.
+// Camera metadata — Sony NonRealTimeMeta (RDD-18) embedded or sidecar .XML,
+// or Blackmagic RAW slate from `moov.meta`.
 if let cam = try await readVideoCameraMetadata(from: videoURL) {
-    print(cam.deviceManufacturer)    // "Sony"
-    print(cam.deviceModelName)       // "PXW-FX9"
+    print(cam.deviceManufacturer)    // "Sony" / "Blackmagic Design"
+    print(cam.deviceModelName)       // "PXW-FX9" / "Pyxis 12K"
     print(cam.lensModelName)         // "Sony FE 24-70mm F2.8 GM"
-    print(cam.captureFps)            // 23.98
-    print(cam.captureGammaEquation)  // "SLog3"
+    print(cam.captureFps)            // 23.98 (off-speed FPS for BRAW)
+    print(cam.captureGammaEquation)  // "SLog3" / "Blackmagic Film Gen 5"
 }
 
 // Both in one pass (cheaper than calling the two above separately).
