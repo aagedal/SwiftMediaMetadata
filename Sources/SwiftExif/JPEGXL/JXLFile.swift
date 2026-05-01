@@ -6,10 +6,16 @@ public struct JXLFile: Sendable {
     public let isContainer: Bool
     /// Top-level boxes (only present in container format).
     public var boxes: [ISOBMFFBox]
+    /// Pixel dimensions decoded from the JXL codestream SizeHeader, if
+    /// available. Set at parse time so callers don't need access to the
+    /// raw codestream bytes.
+    public let imageDimensions: (width: Int, height: Int)?
 
-    public init(isContainer: Bool, boxes: [ISOBMFFBox] = []) {
+    public init(isContainer: Bool, boxes: [ISOBMFFBox] = [],
+                imageDimensions: (width: Int, height: Int)? = nil) {
         self.isContainer = isContainer
         self.boxes = boxes
+        self.imageDimensions = imageDimensions
     }
 
     /// Find the first box of the given type.

@@ -132,6 +132,14 @@ public struct MetadataExporter: Sendable {
             dict["File:ImageHeight"] = dims.height
         }
 
+        // JXL SizeHeader from the codestream — bare codestreams and Exif-less
+        // container JXLs have no PixelXDimension to fall back on.
+        if case .jpegXL(let jxlFile) = metadata.container,
+           let dims = jxlFile.imageDimensions {
+            dict["File:ImageWidth"] = dims.width
+            dict["File:ImageHeight"] = dims.height
+        }
+
         // BMP header info
         if case .bmp(let bmpFile) = metadata.container {
             dict["BMP:ImageWidth"] = Int(bmpFile.width)
