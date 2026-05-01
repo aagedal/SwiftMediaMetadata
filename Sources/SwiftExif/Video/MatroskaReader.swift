@@ -601,6 +601,7 @@ public struct MatroskaReader: Sendable {
 
         switch trackType {
         case 1: // Video
+            metadata.streamOrder.append(.video(metadata.videoStreams.count))
             var stream = VideoStream(index: metadata.videoStreams.count)
             stream.codec = codecID
             stream.codecName = codecLongNameMatroska(codecID)
@@ -653,6 +654,7 @@ public struct MatroskaReader: Sendable {
             metadata.videoStreams.append(stream)
 
         case 2: // Audio
+            metadata.streamOrder.append(.audio(metadata.audioStreams.count))
             var stream = AudioStream(index: metadata.audioStreams.count)
             stream.codec = codecID
             stream.codecName = codecLongNameMatroska(codecID)
@@ -682,6 +684,7 @@ public struct MatroskaReader: Sendable {
             metadata.audioStreams.append(stream)
 
         case 0x11: // Subtitle (Matroska TrackType value 17)
+            metadata.streamOrder.append(.subtitle(metadata.subtitleStreams.count))
             var stream = SubtitleStream(index: metadata.subtitleStreams.count)
             stream.codec = codecID
             stream.codecName = subtitleLongNameMatroska(codecID)
