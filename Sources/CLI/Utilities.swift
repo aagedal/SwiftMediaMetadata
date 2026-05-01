@@ -189,3 +189,144 @@ private func parseOneCondition(_ str: String) throws -> MetadataCondition {
 
     throw ValidationError("Cannot parse condition: '\(str)'. Use Field=Value, Field>N, Field~Substring, or Field?")
 }
+
+// MARK: - Date reformatting (-d)
+
+/// Tag-key suffixes whose values should be passed through the `-d` reformatter.
+/// Anything containing one of these substrings (case-insensitive) is treated
+/// as a date/time string. Mirrors the set of tags ExifTool reformats with `-d`.
+private let dateTagKeywords: [String] = [
+    "DateTime", "DateCreated", "DateTimeOriginal", "DateTimeDigitized",
+    "ModifyDate", "CreateDate", "TimeStamp", "Date", "FileModifyDate",
+    "FileAccessDate", "FileInodeChangeDate", "OffsetTime",
+    "SubSecCreateDate", "SubSecModifyDate", "SubSecDateTimeOriginal",
+    "GPSDateTime", "ExpirationDate", "ReleaseDate", "ReferenceDate",
+    "DigitalCreationDate",
+]
+
+/// True when `key` looks like a date/time tag eligible for `-d` reformatting.
+func isDateTagKey(_ key: String) -> Bool {
+    let lower = key.lowercased()
+    return dateTagKeywords.contains { lower.contains($0.lowercased()) }
+}
+
+/// Reformat a date string using a strftime-style pattern.
+/// Falls back to the original string if parsing fails — the spec is forgiving:
+/// inputs that aren't dates pass through unchanged.
+func reformatDateString(_ input: String, pattern: String) -> String {
+    guard let date = parseFlexibleDate(input) else { return input }
+    return strftimeFormat(date, pattern: pattern) ?? input
+}
+
+/// Apply `-d` reformatting in-place to a `[String: String]` dictionary.
+func applyDateFormat(to dict: inout [String: String], pattern: String?) {
+    guard let pattern = pattern else { return }
+    for (key, value) in dict where isDateTagKey(key) {
+        dict[key] = reformatDateString(value, pattern: pattern)
+    }
+}
+
+/// Parse a date string in any of the formats EXIF/IPTC/XMP commonly emit:
+///   "2024:03:15 12:30:45"   (EXIF)
+///   "2024:03:15 12:30:45+02:00"
+///   "2024-03-15T12:30:45Z"  (ISO 8601 / XMP)
+///   "20240315"              (IPTC date-only)
+///   "12:30:45"              (IPTC time-only — uses today's date)
+private func parseFlexibleDate(_ input: String) -> Date? {
+    let trimmed = input.trimmingCharacters(in: .whitespaces)
+    let formats = [
+        "yyyy:MM:dd HH:mm:ss",
+        "yyyy:MM:dd HH:mm:ssXXX",
+        "yyyy:MM:dd HH:mm:ssZZZZZ",
+        "yyyy-MM-dd'T'HH:mm:ssXXX",
+        "yyyy-MM-dd'T'HH:mm:ssZZZZZ",
+        "yyyy-MM-dd'T'HH:mm:ss'Z'",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyyMMdd",
+        "yyyy:MM:dd",
+        "yyyy-MM-dd",
+    ]
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = TimeZone(identifier: "UTC")
+    for fmt in formats {
+        f.dateFormat = fmt
+        if let d = f.date(from: trimmed) { return d }
+    }
+    return nil
+}
+
+/// Format `date` using a strftime-style pattern. Supports the directives
+/// most commonly used by ExifTool's `-d` flag: %Y %m %d %H %M %S %F %T %j %A %a %B %b %p %z %Z %s %%.
+private func strftimeFormat(_ date: Date, pattern: String) -> String? {
+    let cal = Calendar(identifier: .gregorian)
+    var calUTC = cal
+    calUTC.timeZone = TimeZone(identifier: "UTC")!
+    let comps = calUTC.dateComponents(
+        [.year, .month, .day, .hour, .minute, .second, .weekday],
+        from: date)
+    let year = comps.year ?? 0
+    let month = comps.month ?? 0
+    let day = comps.day ?? 0
+    let hour = comps.hour ?? 0
+    let minute = comps.minute ?? 0
+    let second = comps.second ?? 0
+    let weekday = comps.weekday ?? 1
+    // Day-of-year is `dayOfYear` on macOS 15+, but stays available as the
+    // .dayOfYear ordinality query on older targets.
+    let dayOfYear = calUTC.ordinality(of: .day, in: .year, for: date) ?? 0
+
+    let weekdayLong = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    let weekdayShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    let monthLong = ["January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December"]
+    let monthShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    var out = ""
+    var i = pattern.startIndex
+    while i < pattern.endIndex {
+        let c = pattern[i]
+        if c == "%", let next = pattern.index(i, offsetBy: 1, limitedBy: pattern.endIndex), next < pattern.endIndex {
+            let directive = pattern[next]
+            switch directive {
+            case "Y": out += String(format: "%04d", year)
+            case "y": out += String(format: "%02d", year % 100)
+            case "m": out += String(format: "%02d", month)
+            case "d": out += String(format: "%02d", day)
+            case "e": out += String(format: "%2d", day)
+            case "H": out += String(format: "%02d", hour)
+            case "I":
+                let h12 = ((hour + 11) % 12) + 1
+                out += String(format: "%02d", h12)
+            case "M": out += String(format: "%02d", minute)
+            case "S": out += String(format: "%02d", second)
+            case "F": out += String(format: "%04d-%02d-%02d", year, month, day)
+            case "T": out += String(format: "%02d:%02d:%02d", hour, minute, second)
+            case "j": out += String(format: "%03d", dayOfYear)
+            case "A": out += weekdayLong[max(0, min(6, weekday - 1))]
+            case "a": out += weekdayShort[max(0, min(6, weekday - 1))]
+            case "B": out += monthLong[max(0, min(11, month - 1))]
+            case "b", "h": out += monthShort[max(0, min(11, month - 1))]
+            case "p": out += hour < 12 ? "AM" : "PM"
+            case "s":
+                let epoch = Int(date.timeIntervalSince1970)
+                out += String(epoch)
+            case "z": out += "+0000"
+            case "Z": out += "UTC"
+            case "%": out += "%"
+            case "n": out += "\n"
+            case "t": out += "\t"
+            default:
+                out += "%"
+                out.append(directive)
+            }
+            i = pattern.index(after: next)
+        } else {
+            out.append(c)
+            i = pattern.index(after: i)
+        }
+    }
+    return out
+}

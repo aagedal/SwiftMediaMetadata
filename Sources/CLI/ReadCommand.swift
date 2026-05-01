@@ -40,6 +40,10 @@ struct ReadCommand: ParsableCommand {
     @Flag(name: .long, help: "For video/audio files, emit per-stream detail (ffprobe-style).")
     var streams = false
 
+    @Option(name: [.customShort("d"), .long],
+            help: "Reformat date/time tags using a strftime pattern (e.g. \"%Y-%m-%d\", \"%FT%T\"). Applies to DateTime*, GPS*Date*, FileModifyDate, etc.")
+    var dateFormat: String?
+
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
@@ -66,7 +70,8 @@ struct ReadCommand: ParsableCommand {
         for url in urls {
             if supportedAudioExtensions.contains(url.pathExtension.lowercased()) {
                 let am = try AudioMetadata.read(from: url)
-                let dict = AudioMetadataExporter.buildDictionary(am).mapValues { String(describing: $0) }
+                var dict = AudioMetadataExporter.buildDictionary(am).mapValues { String(describing: $0) }
+                applyDateFormat(to: &dict, pattern: dateFormat)
                 audioDicts.append(dict)
                 audioNames.append(url.lastPathComponent)
             } else if supportedVideoExtensions.contains(url.pathExtension.lowercased()) {
@@ -75,7 +80,8 @@ struct ReadCommand: ParsableCommand {
                 // Stringify for the display/CSV/table path; retain the
                 // native typed dict for JSON stream output so nested arrays
                 // like Timecodes serialise as real JSON arrays.
-                let dict = rawDict.mapValues { String(describing: $0) }
+                var dict = rawDict.mapValues { String(describing: $0) }
+                applyDateFormat(to: &dict, pattern: dateFormat)
                 videoDicts.append(dict)
                 videoRawDicts.append(rawDict)
                 videoNames.append(url.lastPathComponent)
@@ -98,6 +104,7 @@ struct ReadCommand: ParsableCommand {
                 }
                 var filtered = filterByGroups(dict, groups: groups, fields: fieldList)
                 if let tagFilter { filtered = tagFilter.apply(to: filtered).mapValues { String(describing: $0) } }
+                applyDateFormat(to: &filtered, pattern: dateFormat)
                 imageDicts.append(filtered)
                 imageNames.append(url.lastPathComponent)
             }
