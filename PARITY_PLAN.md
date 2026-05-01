@@ -191,16 +191,30 @@ All four HEIC stills issues land together. Test file:
   - Tolerate a missing `ftyp` in `MP4Parser.parse` (default to `.mov`)
   - Promote `metadata.format` to `.braw` in `VideoMetadata.read(from:url:)`
     based on the path extension
-- **What we extract today**: duration, project frame rate (from stts),
-  width/height (8K verified on Pyxis 12K samples), audio stream
-  details, codec FourCC (`brlt`/`brhq`/`brst` for the BRAW quality
-  presets), creation date, timecode.
-- **What we don't extract**: BMD's proprietary clip metadata —
-  off-speed sensor FPS (e.g. 112 fps when project rate is 24), ISO,
-  white point, tint, lens info, color science generation, gamma /
-  LUT. These live in custom boxes inside `moov`/`udta`. Adding them
-  would need a small BRAW-specific parser; defer unless a concrete
-  user need lands.
+- **What we extract today**:
+  - Container shape: duration, project frame rate (from stts),
+    width/height (8K verified on Pyxis 12K samples), audio stream
+    details, codec FourCC (`brlt`/`brhq`/`brst` for the BRAW quality
+    presets), creation date, timecode.
+  - BMD clip slate (read from the `moov.meta` mdta keys table — the
+    same shape ffmpeg's mov demuxer uses): camera make/model
+    (`manufacturer`, `camera_type`), camera body UUID (`camera_id`),
+    capture gamma (`viewing_gamma`), color gamut + science generation
+    (`viewing_gamut`, `viewing_bmdgen`), compression ratio, firmware,
+    shutter type, off-speed flag, sensor capture FPS (computed from
+    `offspeed_frame_time`, surfaced as `CameraMetadata.captureFps`
+    distinct from the project `frameRate`), and the production slate
+    (clip number, scene, take, reel, camera number, environment, day
+    /night, …). Required widening `parseMetaBox` to sniff QuickTime's
+    non-FullBox `meta` layout and adding a moov-level `meta` walk.
+- **What we don't extract**: per-frame processing attributes that the
+  BRAW SDK exposes — white-point Kelvin, tint, ISO (the `analog_gain`
+  key is just a multiplier; the absolute ISO derives from a
+  camera-specific dual-base mapping that isn't in the moov), lens
+  details when the slate `lens_type` field is empty. These live in
+  the BMD-proprietary child boxes inside the `brlt`/`brhq`/`brst`
+  sample entry (`bfdn`, `ctrn`, `vsrc`, `bver`) and would need
+  reverse-engineering work to read.
 - **Codec long-name table**: not added. The FourCCs surface as-is
   (`brlt`, `brhq`, `brst`); BMD's official mapping isn't documented
   publicly enough to commit to friendly names without verification.

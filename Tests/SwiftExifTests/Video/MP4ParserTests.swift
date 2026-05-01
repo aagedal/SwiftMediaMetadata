@@ -141,6 +141,123 @@ final class MP4ParserTests: XCTestCase {
         XCTAssertThrowsError(try VideoMetadata.read(from: data))
     }
 
+    /// BRAW writes its full clip slate (camera_type, viewing_gamma,
+    /// offspeed_frame_time, …) under moov.meta using the QuickTime
+    /// non-FullBox layout. MP4Parser must (1) walk moov.meta — not just
+    /// udta.meta or top-level meta, (2) detect the no-version-flags
+    /// QuickTime layout, and (3) decode the typed `data` payloads (UTF-8,
+    /// float32-BE, signed-int) into camera fields. This test stitches a
+    /// minimal moov and asserts both the sensor-vs-project frame rates and
+    /// the slate user-meta arrays land in CameraMetadata.
+    func testParseBlackmagicRAWClipMetadata() throws {
+        // 1) keys table — 1-based index lookup. Use just the keys we set.
+        let keyList = [
+            "manufacturer", "camera_type", "viewing_gamma",
+            "offspeed_frame_time", "offspeed", "viewing_bmdgen",
+            "braw_compression_ratio",
+        ]
+        var keysPayload = BinaryWriter(capacity: 256)
+        keysPayload.writeBytes([0x00, 0x00, 0x00, 0x00]) // version+flags
+        keysPayload.writeUInt32BigEndian(UInt32(keyList.count))
+        for k in keyList {
+            let bytes = Data(k.utf8)
+            keysPayload.writeUInt32BigEndian(UInt32(8 + bytes.count))
+            keysPayload.writeString("mdta", encoding: .ascii)
+            keysPayload.writeBytes(bytes)
+        }
+        let keysBox = buildBox("keys", data: keysPayload.data)
+
+        // 2) ilst items — each item is a box whose 4-byte type is the
+        //    big-endian key index, wrapping a `data` box with type
+        //    indicator + locale + payload.
+        func makeItem(index: UInt32, typeIndicator: UInt32, payload: Data) -> Data {
+            var d = BinaryWriter(capacity: 32 + payload.count)
+            d.writeUInt32BigEndian(typeIndicator)
+            d.writeUInt32BigEndian(0) // locale
+            d.writeBytes(payload)
+            let dataBox = buildBox("data", data: d.data)
+
+            var itemBytes = BinaryWriter(capacity: 16 + dataBox.count)
+            itemBytes.writeUInt32BigEndian(UInt32(8 + dataBox.count))
+            // The "type" position carries a big-endian key index in this
+            // namespace, not an ASCII FourCC.
+            itemBytes.writeUInt32BigEndian(index)
+            itemBytes.writeBytes(dataBox)
+            return itemBytes.data
+        }
+
+        var ilstPayload = Data()
+        ilstPayload.append(makeItem(index: 1, typeIndicator: 1, payload: Data("Blackmagic Design".utf8)))
+        ilstPayload.append(makeItem(index: 2, typeIndicator: 1, payload: Data("Blackmagic PYXIS 12K".utf8)))
+        ilstPayload.append(makeItem(index: 3, typeIndicator: 1, payload: Data("Blackmagic Design Film".utf8)))
+        // float32 BE: 1/112 ≈ 0.00892857. Bit pattern of Float(0.008928571).
+        let frameTime = Float(1.0 / 112.0)
+        var ftBytes = frameTime.bitPattern.bigEndian
+        let ftData = Data(bytes: &ftBytes, count: 4)
+        ilstPayload.append(makeItem(index: 4, typeIndicator: 23, payload: ftData))
+        // 16-bit signed BE: 1 (offspeed = true)
+        ilstPayload.append(makeItem(index: 5, typeIndicator: 76, payload: Data([0x00, 0x01])))
+        // 16-bit signed BE: 5 (color science Generation 5)
+        ilstPayload.append(makeItem(index: 6, typeIndicator: 76, payload: Data([0x00, 0x05])))
+        // UTF-8: "12:1"
+        ilstPayload.append(makeItem(index: 7, typeIndicator: 1, payload: Data("12:1".utf8)))
+        let ilstBox = buildBox("ilst", data: ilstPayload)
+
+        // 3) hdlr advertising mdta-style metadata, then meta wrapping
+        //    hdlr+keys+ilst in the QuickTime non-FullBox layout (no
+        //    version+flags prefix on the meta payload).
+        var hdlrPayload = BinaryWriter(capacity: 32)
+        hdlrPayload.writeBytes(Data(repeating: 0, count: 4)) // FullBox header
+        hdlrPayload.writeBytes(Data(repeating: 0, count: 4)) // pre_defined
+        hdlrPayload.writeString("mdta", encoding: .ascii)    // handler_type
+        hdlrPayload.writeBytes(Data(repeating: 0, count: 12)) // reserved
+        hdlrPayload.writeBytes([0x00]) // empty name terminator
+        let hdlrBox = buildBox("hdlr", data: hdlrPayload.data)
+
+        var metaPayload = Data()
+        metaPayload.append(hdlrBox)
+        metaPayload.append(keysBox)
+        metaPayload.append(ilstBox)
+        let metaBox = buildBox("meta", data: metaPayload)
+
+        // 4) Build moov: mvhd + minimal trak (so format detection still
+        //    passes) + meta. Use the ftyp-less BRAW layout.
+        var mvhd = BinaryWriter(capacity: 128)
+        mvhd.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(0)
+        mvhd.writeUInt32BigEndian(25)    // movie timescale
+        mvhd.writeUInt32BigEndian(520)   // duration → 20.8s
+        mvhd.writeBytes(Data(repeating: 0, count: 80))
+        let mvhdBox = buildBox("mvhd", data: mvhd.data)
+
+        var moovPayload = Data()
+        moovPayload.append(mvhdBox)
+        moovPayload.append(metaBox)
+        let moovBox = buildBox("moov", data: moovPayload)
+
+        // 5) Wrap with a BRAW-style wide+mdat preamble.
+        var file = BinaryWriter(capacity: moovBox.count + 32)
+        file.writeUInt32BigEndian(8)
+        file.writeString("wide", encoding: .ascii)
+        file.writeUInt32BigEndian(8)
+        file.writeString("mdat", encoding: .ascii)
+        file.writeBytes(moovBox)
+
+        let metadata = try VideoMetadata.read(from: file.data)
+        let cam = try XCTUnwrap(metadata.camera)
+        XCTAssertEqual(cam.deviceManufacturer, "Blackmagic Design")
+        XCTAssertEqual(cam.deviceModelName, "Blackmagic PYXIS 12K")
+        XCTAssertEqual(cam.captureGammaEquation, "Blackmagic Design Film")
+        // Sensor capture rate from offspeed_frame_time. Project rate stays
+        // at the mvhd-derived 25 (520 / 25 = 20.8s; frame rate is unset
+        // here because there's no real video trak with stts).
+        XCTAssertEqual(cam.captureFps ?? 0, 112.0, accuracy: 0.05)
+        // Slate fields surface as parallel name/content arrays.
+        XCTAssertEqual(cam.userMetaNames, ["offspeed", "viewing_bmdgen", "braw_compression_ratio"])
+        XCTAssertEqual(cam.userMetaContents, ["true", "Generation 5", "12:1"])
+    }
+
     /// Legacy QuickTime / Blackmagic RAW files have no ftyp at the top —
     /// they start with `wide` + `mdat` and place moov at the file tail.
     /// MP4Parser must tolerate that and still pull duration from mvhd.

@@ -147,6 +147,14 @@ public struct MP4Parser: Sendable {
             parseUDTA(udta.data, into: &metadata)
         }
 
+        // Some writers place mdta-style metadata directly under `moov` rather
+        // than wrapped in `udta` — Blackmagic RAW does this with its full
+        // camera/clip slate (camera_type, viewing_gamma, offspeed_frame_time …).
+        // ffmpeg's mov demuxer reads this same shape.
+        if let meta = moovChildren.first(where: { $0.type == "meta" }) {
+            parseMetaBox(meta.data, into: &metadata)
+        }
+
         // Check for top-level meta box (some files put XMP here)
         if let meta = boxes.first(where: { $0.type == "meta" }) {
             parseMetaBox(meta.data, into: &metadata)
@@ -2180,9 +2188,19 @@ public struct MP4Parser: Sendable {
     }
 
     private static func parseMetaBox(_ data: Data, into metadata: inout VideoMetadata) {
-        // meta is a FullBox — skip 4-byte version/flags header
-        guard data.count > 4 else { return }
-        let metaPayload = data.suffix(from: data.startIndex + 4)
+        // ISOBMFF (HEIF, iTunes) treats `meta` as a FullBox with a 4-byte
+        // version+flags header in front of the children. QuickTime — used
+        // by Blackmagic RAW and some camera-original .mov writers — emits
+        // `meta` as a regular Box where children start at offset 0.
+        // Detect by sniffing: in the FullBox layout, bytes 4..7 are the first
+        // child's *size* (a binary number), and in the QuickTime layout
+        // they're the first child's *type* (ASCII). When 4..7 looks like an
+        // ASCII box type, we're in QT mode and the 4-byte skip is wrong.
+        guard data.count >= 8 else { return }
+        let firstChildTypeRange = data.startIndex + 4 ..< data.startIndex + 8
+        let isQuickTimeLayout = isLikelyBoxType(data.subdata(in: firstChildTypeRange))
+        let payloadStart = isQuickTimeLayout ? data.startIndex : data.startIndex + 4
+        let metaPayload = data.suffix(from: payloadStart)
         guard let children = try? ISOBMFFBoxReader.parseBoxes(from: Data(metaPayload)) else { return }
 
         if let ilst = children.first(where: { $0.type == "ilst" }) {
@@ -2234,6 +2252,13 @@ public struct MP4Parser: Sendable {
         guard !keys.isEmpty,
               let items = try? ISOBMFFBoxReader.parseBoxes(from: ilstData) else { return }
 
+        // Slate metadata harvested from Blackmagic-RAW `mdta` keys. Built up
+        // across the loop, then folded into metadata.camera (creating it if
+        // the container has none). Order matters (userMetaNames/Contents are
+        // emitted as parallel arrays), so push in scan order.
+        var bmdSlateNames: [String] = []
+        var bmdSlateContents: [String] = []
+
         for item in items {
             // Each item's box "type" is actually a 4-byte big-endian index into keys.
             let typeBytes = item.type.unicodeScalars.compactMap { UInt8(exactly: $0.value) }
@@ -2247,18 +2272,165 @@ public struct MP4Parser: Sendable {
 
             guard let dataBox = (try? ISOBMFFBoxReader.parseBoxes(from: item.data))?
                     .first(where: { $0.type == "data" }),
-                  dataBox.data.count > 8 else { continue }
+                  dataBox.data.count >= 8 else { continue }
+            // data box layout (after the box header is stripped by parseBoxes):
+            //   type_indicator(4) + locale(4) + payload
+            let typeIndicator = dataBox.data
+                .prefix(4)
+                .reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
             let payload = dataBox.data.suffix(from: dataBox.data.startIndex + 8)
 
             switch key {
             case "com.apple.quicktime.content.identifier":
-                if let s = String(data: payload, encoding: .utf8) {
+                if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload) {
                     metadata.contentIdentifier = s
                 }
+
+            // --- Blackmagic RAW clip metadata (BRAW writes mdta keys without a namespace) ---
+
+            case "manufacturer":
+                if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload) {
+                    updateCamera(&metadata) { $0.deviceManufacturer = s }
+                }
+            case "camera_type":
+                if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload) {
+                    updateCamera(&metadata) { $0.deviceModelName = s }
+                }
+            case "camera_id":
+                // A UUID, but it's the only stable per-body identifier BRAW emits.
+                if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload) {
+                    updateCamera(&metadata) { $0.deviceSerialNumber = s }
+                }
+            case "lens_type":
+                if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload),
+                   !s.isEmpty {
+                    updateCamera(&metadata) { $0.lensModelName = s }
+                }
+            case "viewing_gamma":
+                if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload) {
+                    updateCamera(&metadata) { $0.captureGammaEquation = s }
+                }
+            case "offspeed_frame_time":
+                // Sensor (off-speed) capture rate. The mvhd/stts-derived
+                // VideoMetadata.frameRate stays as the *project* rate; this
+                // surfaces as camera.captureFps so consumers can tell the two
+                // apart (a 24p clip captured at 112 fps reports frameRate=24,
+                // captureFps=112).
+                if let t = decodeMDTAFloat(typeIndicator: typeIndicator, payload: payload),
+                   t > 0 {
+                    updateCamera(&metadata) { $0.captureFps = 1.0 / t }
+                }
+
+            // BMD slate fields without a CameraMetadata home — surface as
+            // userMetaNames/userMetaContents pairs alongside Sony NRT user
+            // descriptive metadata.
+            case "firmware_version", "braw_compression_ratio", "viewing_gamut",
+                 "shutter_type", "clip_number", "reel_name", "scene", "shot_type",
+                 "take", "take_type", "production_name", "director",
+                 "camera_number", "camera_operator", "date_recorded",
+                 "environment", "day_night", "location", "filters":
+                if let s = decodeMDTAString(typeIndicator: typeIndicator, payload: payload),
+                   !s.isEmpty {
+                    bmdSlateNames.append(key)
+                    bmdSlateContents.append(s)
+                }
+            case "viewing_bmdgen":
+                if let n = decodeMDTAInt(typeIndicator: typeIndicator, payload: payload) {
+                    bmdSlateNames.append(key)
+                    bmdSlateContents.append("Generation \(n)")
+                }
+            case "offspeed", "offspeed_is_constant", "anamorphic_enable", "good_take":
+                if let n = decodeMDTAInt(typeIndicator: typeIndicator, payload: payload) {
+                    bmdSlateNames.append(key)
+                    bmdSlateContents.append(n == 0 ? "false" : "true")
+                }
+            case "analog_gain":
+                if let v = decodeMDTAFloat(typeIndicator: typeIndicator, payload: payload) {
+                    bmdSlateNames.append(key)
+                    bmdSlateContents.append(String(format: "%g", v))
+                }
+
             default:
                 break
             }
         }
+
+        if !bmdSlateNames.isEmpty {
+            // Preserve any pre-existing user-meta entries (e.g. from a Sony
+            // NRT sidecar that was merged earlier) by appending.
+            updateCamera(&metadata) {
+                $0.userMetaNames.append(contentsOf: bmdSlateNames)
+                $0.userMetaContents.append(contentsOf: bmdSlateContents)
+            }
+        }
+    }
+
+    /// Apply a mutation to `metadata.camera`, lazily materialising the value
+    /// when the container hadn't populated it yet.
+    private static func updateCamera(_ metadata: inout VideoMetadata, _ mutate: (inout CameraMetadata) -> Void) {
+        var cam = metadata.camera ?? CameraMetadata()
+        mutate(&cam)
+        metadata.camera = cam
+    }
+
+    /// Heuristic: is this 4-byte slice likely an ISOBMFF box type rather than
+    /// a binary length? Box types are conventionally lowercase letters, sometimes
+    /// with digits, the QuickTime copyright sentinel `©` (0xA9), or a trailing
+    /// space. Length fields parsed from FullBox headers are binary numbers and
+    /// almost always have one or more zero bytes in their high positions.
+    private static func isLikelyBoxType(_ bytes: Data) -> Bool {
+        guard bytes.count == 4 else { return false }
+        for b in bytes {
+            let isLower = b >= 0x61 && b <= 0x7A
+            let isUpper = b >= 0x41 && b <= 0x5A
+            let isDigit = b >= 0x30 && b <= 0x39
+            let isSpace = b == 0x20
+            let isCopyright = b == 0xA9 // QuickTime ©nam, ©day, etc.
+            if !(isLower || isUpper || isDigit || isSpace || isCopyright) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Decode an Apple `data` box payload as a UTF-8 string when the type
+    /// indicator says it's text (1) or the value happens to be ASCII.
+    private static func decodeMDTAString(typeIndicator: UInt32, payload: Data) -> String? {
+        if typeIndicator == 1 {
+            return String(data: payload, encoding: .utf8)
+        }
+        // Some writers emit type 0 for short strings — try UTF-8 anyway.
+        return String(data: payload, encoding: .utf8)
+    }
+
+    /// Decode `data` payload as a float (type 23 = float32 BE, 24 = float64 BE).
+    private static func decodeMDTAFloat(typeIndicator: UInt32, payload: Data) -> Double? {
+        switch typeIndicator {
+        case 23 where payload.count == 4:
+            let bits = payload.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            return Double(Float(bitPattern: bits))
+        case 24 where payload.count == 8:
+            let bits = payload.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            return Double(bitPattern: bits)
+        default:
+            return nil
+        }
+    }
+
+    /// Decode `data` payload as a signed integer (types 21, 67, 75, 76, 77).
+    /// Width follows the payload length; the high bit drives sign extension.
+    private static func decodeMDTAInt(typeIndicator: UInt32, payload: Data) -> Int64? {
+        guard [21, 22, 67, 75, 76, 77].contains(Int(typeIndicator)),
+              !payload.isEmpty, payload.count <= 8 else { return nil }
+        var n: UInt64 = 0
+        for b in payload { n = (n << 8) | UInt64(b) }
+        let isSigned = typeIndicator != 22
+        if isSigned, let first = payload.first, first & 0x80 != 0 {
+            // Sign-extend using the actual payload width.
+            let mask = (UInt64(1) << (payload.count * 8)) &- 1
+            n |= ~mask
+        }
+        return Int64(bitPattern: n)
     }
 
     private static func parseILST(_ data: Data, into metadata: inout VideoMetadata) {
