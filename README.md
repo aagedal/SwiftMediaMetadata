@@ -7,25 +7,32 @@ A native Swift library for reading and writing image and video metadata — Exif
 | Format | Read | Write | Metadata Types |
 |--------|------|-------|----------------|
 | JPEG | Yes | Yes | Exif, IPTC, XMP, C2PA, ICC |
-| TIFF | Yes | Yes | Exif, IPTC, XMP, ICC |
-| RAW (DNG, CR2, CR3, NEF, NRW, ARW, RAF, RW2, ORF, PEF, SRW, .raw) | Yes | Yes | Exif, IPTC, XMP, MakerNotes, ICC |
-| JPEG XL (container) | Yes | Yes | Exif, XMP, ICC |
-| PNG | Yes | Yes | Exif, XMP, ICC |
+| TIFF | Yes | Yes | Exif, IPTC, XMP, C2PA, ICC |
+| RAW (DNG, CR2, CR3, NEF, NRW, ARW, RAF, RW2, ORF, PEF, SRW, .raw, IIQ, 3FR, FFF, X3F, MRW) | Yes | Yes | Exif, IPTC, XMP, MakerNotes, ICC |
+| JPEG XL (container) | Yes | Yes | Exif, XMP, C2PA, ICC |
+| PNG | Yes | Yes | Exif, XMP, C2PA, ICC |
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
-| WebP | Yes | Yes | Exif, XMP, ICC |
+| WebP | Yes | Yes | Exif, XMP, C2PA, ICC |
+| GIF | Yes | — | XMP, C2PA |
+| PDF | Yes | — | XMP, C2PA, document metadata |
+| PSD (Photoshop) | Yes | Yes | Exif, IPTC, XMP, ICC |
 | MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, profile, fps, field order, bit depth, chroma subsampling, pixel format, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language, QuickTime `tmcd` timecode |
 | MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
 | Matroska (.mkv) | Yes | — | Stream info (codec, profile, fps, dimensions, bit depth, chroma, chroma location, color, pixel format) decoded from both `Tracks` and `CodecPrivate` (hvcC/av1C/avcC), Segment-level `COMMENT`/`DESCRIPTION` tags, audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
 | WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) + subtitle tracks |
 | AVI (RIFF) | Yes | — | Stream info (codec, fps, dimensions, bit depth) + audio (codec, sample rate, channels), INFO tags |
 | MPEG-PS / MPEG-TS / M2TS | Yes | — | Sequence-header stream facts (resolution, fps, aspect, bit rate), PMT elementary-stream inventory (DVB subtitles / teletext / PGS with language), M2TS (Blu-ray BDAV, 192-byte packets) auto-detected |
-| MP3 (ID3v1 / ID3v2) | Yes | Yes | Tags + codec, sample rate, channels, bit rate, duration |
-| FLAC | Yes | Yes | Tags + sample rate, channels, bit depth, duration |
+| MP3 (ID3v1 / ID3v2) | Yes | Yes | Tags + codec, sample rate, channels, bit rate, duration; ID3v2 frame detail (TXXX/WXXX/PRIV/GEOB/CHAP/CTOC) |
+| FLAC | Yes | Yes | Tags + sample rate, channels, bit depth, duration; SeekTable + CueSheet |
 | M4A | Yes | Yes | Tags + codec, sample rate, channels, bit depth, channel layout, bit rate, duration |
 | Ogg Opus (.opus) | Yes | — | Vorbis comments + channels, sample rate, channel layout, duration |
 | Ogg Vorbis (.ogg / .oga) | Yes | — | Vorbis comments + channels, sample rate, bit rate, duration |
+| WAV / BWF (RIFF) | Yes | Yes | LIST/INFO tags, Broadcast WAVE `bext` (v0/v1/v2), iXML, C2PA, sample rate, channels, bit depth |
+| AIFF / AIFC | Yes | Yes | NAME/AUTH/(c)/ANNO/COMT chunks, COMM 80-bit sample rate, channels, bit depth |
 | XMP sidecar (.xmp) | Yes | Yes | XMP |
+| C2PA sidecar (.c2pa) | Yes | — | External JUMBF manifest store next to the asset |
+| AAE sidecar (Apple Photos) | Yes | — | iPhone/iPad edit-decision sidecar |
 | Sony NRT sidecar (.XML) | Yes | — | Camera metadata auto-probed next to MP4/MXF |
 
 ## Requirements
@@ -399,9 +406,10 @@ returns each track individually under `videoStreams` / `audioStreams` /
 
 ### Audio Metadata
 
-Standalone MP3, FLAC, M4A, Ogg Opus (.opus) and Ogg Vorbis (.ogg/.oga) files
-expose codec, sample rate, channel count, channel layout, bit depth, and bit
-rate alongside ID3/Vorbis tags:
+Standalone MP3, FLAC, M4A, Ogg Opus (.opus), Ogg Vorbis (.ogg/.oga),
+RIFF WAV / Broadcast WAVE (.wav), and AIFF / AIFC (.aif / .aiff) files
+expose codec, sample rate, channel count, channel layout, bit depth,
+and bit rate alongside container-specific tags:
 
 ```swift
 let audio = try AudioMetadata.read(from: mp3URL)
@@ -409,6 +417,22 @@ print(audio.codec, audio.codecName)  // "mp3", "MP3"
 print(audio.sampleRate, audio.channels, audio.bitrate, audio.bitDepth)
 print(audio.title, audio.artist, audio.album)
 ```
+
+Format-specific detail:
+
+- **MP3 (ID3v1 / ID3v2)**: full ID3v2 frame decode including `TXXX`
+  user-defined text, `WXXX` user URL, `PRIV` private frames, `GEOB`
+  general encapsulated objects, and `CHAP` / `CTOC` chapter/table-of-
+  contents frames.
+- **FLAC**: Vorbis comments plus `SEEKTABLE` (sample → byte offsets)
+  and `CUESHEET` (track index points for CD-DA mastering).
+- **WAV / BWF (RIFF)**: `LIST INFO` tags (`INAM`/`IART`/`ICMT`/`ICRD`/…),
+  Broadcast WAVE `bext` v0 / v1 (UMID) / v2 (loudness fields), and
+  iXML — read **and** write, with the `bext` chunk rewritten in place
+  preserving the surrounding `data` / `LIST` chunks.
+- **AIFF / AIFC**: `NAME` / `AUTH` / `(c) ` / `ANNO` / `COMT` chunks
+  decoded from IFF, COMM 80-bit IEEE 754 sample-rate field handled
+  natively — read and write.
 
 #### Async video API
 
@@ -456,9 +480,13 @@ video.camera?.deviceManufacturer   // pulled from the sidecar
 
 ### C2PA Content Provenance
 
-Access embedded C2PA manifests for content authenticity — works across
-JPEG (APP11), PNG (caBX), JPEG XL, AVIF, HEIF, MP4/MOV (uuid or
-top-level jumb), and MXF (SMPTE UL or Dark KLV):
+Access embedded C2PA manifests for content authenticity. Coverage:
+JPEG (APP11), TIFF (Exif sub-IFD or DNG private tag), PNG (caBX),
+JPEG XL, AVIF, HEIF, WebP (C2PA RIFF chunk), GIF (Application
+Extension), PDF (catalog `/Metadata`), MP4 / MOV (uuid or top-level
+`jumb`), MXF (SMPTE UL or Dark KLV), Broadcast WAVE (`C2PA` LIST
+chunk), and external `.c2pa` sidecars. Hash bindings and ECDSA
+signatures are verified against the embedded certificate chain:
 
 ```swift
 if let c2pa = metadata.c2pa {
@@ -489,13 +517,28 @@ The JSON exporter surfaces the same fields under `HasContentCredentials`,
 `ActionsSoftwareAgent` — matching the field set consumed by downstream
 apps that previously shelled out to ExifTool.
 
+Each assertion is decoded into a typed payload (`c2pa.actions(.v2)`,
+`c2pa.hash.data` / `c2pa.hash.bmff(.v3)`, `c2pa.training-mining`,
+`c2pa.thumbnail.*`, `stds.exif`, `stds.iptc`, `stds.schema-org.*`)
+rather than left as opaque CBOR. Hash assertions are verified against
+the asset bytes; signature assertions are verified with ECDSA over the
+embedded certificate chain — failures are surfaced via
+`c2pa.verification` rather than thrown.
+
 ### MakerNotes
 
-Camera-specific manufacturer metadata (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic):
+Camera-specific manufacturer metadata for Canon, Nikon, Sony, Fujifilm,
+Olympus, Panasonic, Apple (iPhone / iPad), DJI, Samsung, Pentax, Leica,
+and Sigma. Canon and Sony parsers extract array-tag depth (Canon
+CameraSettings / ShotInfo / AFInfo2 / FileInfo / SensorInfo, Sony
+0x01xx / 0x2xxx / 0xB0xx blocks) — including a curated FE-mount lens
+ID table for Sony — alongside basic identifiers (serial, firmware,
+lens model). Apple iPhone surfaces Live Photo `ContentIdentifier`,
+HDR image type, burst UUID, and acceleration vector.
 
 ```swift
 if let makerNote = metadata.exif?.makerNote {
-    print(makerNote.manufacturer)  // .canon, .nikon, .sony, etc.
+    print(makerNote.manufacturer)  // .canon, .nikon, .sony, .apple, .dji, …
     for (name, value) in makerNote.tags {
         print("\(name): \(value)")
     }
@@ -727,28 +770,37 @@ print("\(result.succeeded) files updated, \(result.failed.count) errors")
 ```
 Sources/SwiftExif/
 ├── API/            # Public API: ImageMetadata, BatchProcessor, FormatDetector,
-│                   #   MetadataExporter, CSVExporter, PrintConverter, MetadataRenamer
+│                   #   MetadataExporter, CSVExporter, PrintConverter,
+│                   #   MetadataRenamer, CompositeTagCalculator
 ├── Binary/         # Low-level binary readers/writers, CRC32, ISO BMFF
 ├── Exif/           # Exif IFD parsing and writing
-├── IPTC/           # IPTC IIM reader/writer, Photoshop IRB
+├── IPTC/           # IPTC IIM reader/writer (Records 1/2/3/6/7/8 + PLUS), Photoshop IRB
 ├── XMP/            # XMP reader/writer with namespace mapping
-├── C2PA/           # C2PA manifest/claim/signature parsing
+├── C2PA/           # C2PA manifest/claim/signature parsing + ECDSA verification
 ├── CBOR/           # CBOR decoder for C2PA payloads
-├── MakerNote/      # Camera-specific MakerNote parsers
-├── Composite/      # Computed/derived tag calculator
+├── MakerNote/      # Camera-specific MakerNote parsers (12 manufacturers)
 ├── GPX/            # GPX track parser and geotagging
 ├── Geolocation/    # Offline reverse geocoder (GeoNames + k-d tree)
-├── ICC/            # ICC color profile reader
-├── JPEG/           # JPEG segment parser and writer
+├── ICC/            # ICC color profile reader (TRC, primaries, A2B/B2A LUTs, chad)
+├── JPEG/           # JPEG segment parser and writer (incl. CIPA DC-007 MPF)
 ├── TIFF/           # TIFF/RAW file parser and writer
-├── RAW/            # Camera RAW format support
+├── RAW/            # Camera RAW format support (DNG, CR2/CR3, NEF, ARW, RAF,
+│                   #   RW2, ORF, PEF, IIQ, 3FR, FFF, X3F, MRW, …)
+├── CR3/            # Canon CR3 (ISOBMFF) parser and writer
 ├── PNG/            # PNG chunk parser and writer
 ├── JPEGXL/         # JPEG XL box parser and writer
 ├── AVIF/           # AVIF (ISOBMFF) parser and writer
-├── HEIF/           # HEIF/HEIC parser and writer
+├── HEIF/           # HEIF/HEIC parser and writer with auxiliary image walk
 ├── WebP/           # WebP (RIFF container) parser and writer
-└── Video/          # MP4/MOV/M4V metadata parser, MXF KLV reader,
-                    #   Sony NonRealTimeMeta (NRT / RDD-18) XML parser
+├── GIF/            # GIF parser (XMP + C2PA Application Extension)
+├── BMP/            # BMP / DIB header reader
+├── SVG/            # SVG metadata reader
+├── PDF/            # PDF document metadata + catalog `/Metadata` XMP
+├── PSD/            # Photoshop document parser and writer
+├── Apple/          # AAE sidecar parser (Apple Photos edit decisions)
+├── Audio/          # MP3/FLAC/M4A/Ogg/WAV/AIFF tag and codec readers + writers
+└── Video/          # MP4/MOV/M4V/MXF/MKV/WebM/AVI/MPEG-TS metadata parsers,
+                    #   Sony NonRealTimeMeta (NRT / RDD-18) XML parser, GoPro GPMF
 ```
 
 ## Benchmark
