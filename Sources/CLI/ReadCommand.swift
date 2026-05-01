@@ -83,7 +83,9 @@ struct ReadCommand: ParsableCommand {
                     // Audio files have one stream; emit the same shape as
                     // ffprobe so downstream tooling can treat .mp3/.m4a/.flac
                     // exactly like a single-track container.
-                    let format = buildAudioFileFormatDict(am)
+                    let fileSize = (try? FileManager.default
+                        .attributesOfItem(atPath: url.path)[.size] as? Int64) ?? nil
+                    let format = buildAudioFileFormatDict(am, fileSize: fileSize)
                     let streamDicts = [buildAudioFileStreamDict(am)]
                     perStreamReports.append((url.lastPathComponent, format,
                                              streamDicts, []))
@@ -480,14 +482,25 @@ struct ReadCommand: ParsableCommand {
 
     /// Build the clip-level `format` block for an audio file. Mirrors the
     /// fields ffprobe puts under `format` for the same input.
-    private func buildAudioFileFormatDict(_ am: AudioMetadata) -> [String: Any] {
+    ///
+    /// `format.bit_rate` is the **whole-file** rate (file_size × 8 ÷ duration),
+    /// which differs from the audio stream's declared bitrate whenever the
+    /// container has overhead or the encoder used AAC priming/postroll
+    /// (iTunSMPB-style padding for lossless trim). ffprobe always reports the
+    /// whole-file rate at format level; the per-stream value lives on the
+    /// stream dict (`am.bitrate`).
+    private func buildAudioFileFormatDict(_ am: AudioMetadata, fileSize: Int64? = nil) -> [String: Any] {
         var f: [String: Any] = [:]
         f["FileFormat"] = audioFormatLongName(am.format)
         f["FormatLongName"] = audioFormatLongName(am.format)
         f["NumStreams"] = 1
         f["AudioStreamCount"] = 1
         if let v = am.duration { f["Duration"] = v }
-        if let v = am.bitrate  { f["BitRate"]  = v }
+        if let size = fileSize, size > 0, let dur = am.duration, dur > 0 {
+            f["BitRate"] = Int(Double(size) * 8.0 / dur)
+        } else if let v = am.bitrate {
+            f["BitRate"] = v
+        }
         if let v = am.codec     { f["AudioCodec"]      = v }
         if let v = am.sampleRate { f["AudioSampleRate"] = v }
         if let v = am.channels   { f["AudioChannels"]   = v }

@@ -261,6 +261,23 @@ public struct MP4Parser: Sendable {
             }
         }
 
+        // Format-level duration: keep mvhd, but cap it at max(audio, video
+        // stream durations) if mvhd is larger. Real-world files routinely
+        // declare mvhd as the longest mdhd of *any* track, including subtitle
+        // / chapter tracks whose declared length exceeds the playable a/v
+        // essence — ChapterMarkerDualSubtitle.mp4 has subtitle2 mdhd=98.691s
+        // but audio/video both end at ~71.16s, and ffprobe reports 71.146s.
+        // We don't blindly use max(av) instead, because for healthy files
+        // mvhd is *smaller* than the longest av stream (mvhd respects the
+        // edit-list-trimmed window while audio mdhd reports the raw essence)
+        // and ffprobe still prefers the mvhd value in that case.
+        let avDurations = metadata.videoStreams.compactMap(\.duration)
+                        + metadata.audioStreams.compactMap(\.duration)
+        if let avMax = avDurations.max(), avMax > 0,
+           let mvhd = metadata.duration, mvhd > avMax {
+            metadata.duration = avMax
+        }
+
         // Container bit_rate fallback (matches ffprobe `format.bit_rate`).
         let containerBytes = metadata.fileSize ?? Int64(data.count)
         if metadata.bitRate == nil,
