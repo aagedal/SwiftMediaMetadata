@@ -123,6 +123,15 @@ public struct MetadataExporter: Sendable {
             }
         }
 
+        // JPEG SOF dimensions — the canonical pixel size of the encoded
+        // image, distinct from Exif's PixelXDimension (which can drift after
+        // edits). Mirrors ExifTool's File:ImageWidth/ImageHeight.
+        if case .jpeg(let jpegFile) = metadata.container,
+           let dims = jpegFile.imageDimensions {
+            dict["File:ImageWidth"] = dims.width
+            dict["File:ImageHeight"] = dims.height
+        }
+
         // BMP header info
         if case .bmp(let bmpFile) = metadata.container {
             dict["BMP:ImageWidth"] = Int(bmpFile.width)
@@ -142,6 +151,19 @@ public struct MetadataExporter: Sendable {
             dict["GIF:ImageHeight"] = Int(gifFile.height)
             let comments = gifFile.comments
             if !comments.isEmpty { dict["GIF:Comment"] = comments.joined(separator: "; ") }
+        }
+
+        // For formats without a dedicated container-level dimension extractor
+        // (TIFF/RAW/HEIF/JXL/AVIF/WebP/CR3), fall back to Exif's rendered
+        // dimensions (PixelXDimension/Y, tags 0xA002/0xA003). This matches
+        // ExifTool's File:ImageWidth/Height behaviour for these formats.
+        if dict["File:ImageWidth"] == nil,
+           let w = metadata.exif?.pixelXDimension {
+            dict["File:ImageWidth"] = Int(w)
+        }
+        if dict["File:ImageHeight"] == nil,
+           let h = metadata.exif?.pixelYDimension {
+            dict["File:ImageHeight"] = Int(h)
         }
 
         // SVG dimensions
@@ -379,6 +401,39 @@ public struct MetadataExporter: Sendable {
             if let v = entry.uint32Value(endian: exif.byteOrder) { dict["ImageHeight"] = Int(v) }
             else if let v = entry.uint16Value(endian: exif.byteOrder) { dict["ImageHeight"] = Int(v) }
         }
+
+        // Lens & body identity (ExifTool emits these under EXIF group)
+        if let v = exif.bodySerialNumber { dict["SerialNumber"] = v }
+        if let v = exif.lensSerialNumber { dict["LensSerialNumber"] = v }
+        if let v = exif.cameraOwnerName { dict["CameraOwnerName"] = v }
+
+        // LensSpecification (tag 0xA432): four rationals (minFL, maxFL, minF, maxF).
+        // ExifTool labels this "LensInfo" and renders it as "70-200mm f/2.8".
+        if let entry = exif.exifIFD?.entry(for: ExifTag.lensSpecification),
+           entry.type == .rational, entry.count >= 4 {
+            var reader = BinaryReader(data: entry.valueData)
+            var rats: [(UInt32, UInt32)] = []
+            for _ in 0..<4 {
+                guard let n = try? reader.readUInt32(endian: exif.byteOrder),
+                      let d = try? reader.readUInt32(endian: exif.byteOrder) else { break }
+                rats.append((n, d))
+            }
+            if rats.count == 4 {
+                func fmt(_ r: (UInt32, UInt32)) -> String {
+                    if r.1 == 0 { return "?" }
+                    let v = Double(r.0) / Double(r.1)
+                    if v == v.rounded() { return String(format: "%g", v) }
+                    // %.10g preserves enough precision for Apple's high-resolution
+                    // rationals (e.g. iPhone front camera reports 2.690000057mm).
+                    return String(format: "%.10g", v)
+                }
+                let minFL = fmt(rats[0]); let maxFL = fmt(rats[1])
+                let minF  = fmt(rats[2]); let maxF  = fmt(rats[3])
+                let flStr = (minFL == maxFL) ? "\(minFL)mm" : "\(minFL)-\(maxFL)mm"
+                let fStr  = (minF  == maxF)  ? "f/\(minF)"  : "f/\(minF)-\(maxF)"
+                dict["LensInfo"] = "\(flStr) \(fStr)"
+            }
+        }
     }
 
     // MARK: - IPTC Fields
@@ -454,7 +509,7 @@ public struct MetadataExporter: Sendable {
     private static func addXMPFields(_ dict: inout [String: Any], _ xmp: XMPData) {
         for key in xmp.allKeys.sorted() {
             guard let (prefix, localName) = resolveXMPKey(key) else { continue }
-            let exportKey = "XMP-\(prefix):\(localName)"
+            let exportKey = "XMP-\(prefix):\(capitalizingFirst(localName))"
 
             if let value = xmp.value(namespace: extractNamespace(from: key), property: localName) {
                 switch value {
@@ -516,11 +571,19 @@ public struct MetadataExporter: Sendable {
         var out: [String: Any] = [:]
         for (k, v) in fields {
             let key: String
-            if let (prefix, ln) = resolveXMPKey(k) { key = "\(prefix):\(ln)" }
+            if let (prefix, ln) = resolveXMPKey(k) { key = "\(prefix):\(capitalizingFirst(ln))" }
             else { key = k }
             out[key] = renderXMPValue(v)
         }
         return out
+    }
+
+    /// ExifTool capitalizes the first character of XMP property local names
+    /// (e.g. dc:creator → Creator). RDF allows either case; this matches
+    /// ExifTool's output convention so downstream consumers see the same keys.
+    private static func capitalizingFirst(_ s: String) -> String {
+        guard let first = s.first else { return s }
+        return String(first).uppercased() + s.dropFirst()
     }
 
     private static func renderXMPValue(_ value: XMPValue) -> Any {

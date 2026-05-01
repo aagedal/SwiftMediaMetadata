@@ -52,6 +52,28 @@ public struct JPEGFile: Sendable {
         segments.first { $0.isPhotoshop }
     }
 
+    /// Image dimensions read from the SOF (Start Of Frame) marker.
+    /// SOF carries the canonical pixel dimensions of the encoded JPEG, which
+    /// don't always match Exif's ImageWidth/PixelXDimension when the file was
+    /// edited or cropped after metadata was written. Returns nil if no SOF is
+    /// present or its payload is too short.
+    public var imageDimensions: (width: Int, height: Int)? {
+        // All SOF markers (FFC0-FFCF) except DHT (FFC4) and JPG (FFC8).
+        let sofMarkers: Set<UInt16> = [
+            0xFFC0, 0xFFC1, 0xFFC2, 0xFFC3,
+            0xFFC5, 0xFFC6, 0xFFC7,
+            0xFFC9, 0xFFCA, 0xFFCB,
+            0xFFCD, 0xFFCE, 0xFFCF,
+        ]
+        guard let sof = segments.first(where: { sofMarkers.contains($0.rawMarker) }),
+              sof.data.count >= 5 else { return nil }
+        // Payload: 1 byte precision, 2 bytes height, 2 bytes width (big-endian).
+        let bytes = [UInt8](sof.data)
+        let height = (Int(bytes[1]) << 8) | Int(bytes[2])
+        let width  = (Int(bytes[3]) << 8) | Int(bytes[4])
+        return (width, height)
+    }
+
     // MARK: - Segment Mutation
 
     /// Replace the first segment matching the marker with a new segment.
