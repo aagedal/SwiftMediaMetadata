@@ -349,6 +349,19 @@ public struct MXFReader: Sendable {
             }
         }
 
+        // Per-track duration: MXF descriptors don't carry an mdhd-style
+        // per-track duration the way MP4 does — every track shares the
+        // package's edit-list timeline, so the file-level duration applies
+        // to each stream. ffprobe propagates it the same way.
+        if let formatDur = metadata.duration, formatDur > 0 {
+            for i in metadata.videoStreams.indices where metadata.videoStreams[i].duration == nil {
+                metadata.videoStreams[i].duration = formatDur
+            }
+            for i in metadata.audioStreams.indices where metadata.audioStreams[i].duration == nil {
+                metadata.audioStreams[i].duration = formatDur
+            }
+        }
+
         // Container bit_rate fallback (matches ffprobe `format.bit_rate`).
         let containerBytes = metadata.fileSize ?? Int64(data.count)
         if metadata.bitRate == nil,
