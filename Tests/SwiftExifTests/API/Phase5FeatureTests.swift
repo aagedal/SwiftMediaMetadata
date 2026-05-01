@@ -517,25 +517,25 @@ final class PrintConverterTests: XCTestCase {
 
     func testGPSLatitude() {
         let result = PrintConverter.formatGPSCoordinate(59.9139, isLatitude: true)
-        XCTAssertTrue(result.contains("59°"))
+        XCTAssertTrue(result.contains("59 deg"))
         XCTAssertTrue(result.contains("N"))
     }
 
     func testGPSLatitudeSouth() {
         let result = PrintConverter.formatGPSCoordinate(-33.8688, isLatitude: true)
-        XCTAssertTrue(result.contains("33°"))
+        XCTAssertTrue(result.contains("33 deg"))
         XCTAssertTrue(result.contains("S"))
     }
 
     func testGPSLongitude() {
         let result = PrintConverter.formatGPSCoordinate(10.7522, isLongitude: true)
-        XCTAssertTrue(result.contains("10°"))
+        XCTAssertTrue(result.contains("10 deg"))
         XCTAssertTrue(result.contains("E"))
     }
 
     func testGPSLongitudeWest() {
         let result = PrintConverter.formatGPSCoordinate(-73.9857, isLongitude: true)
-        XCTAssertTrue(result.contains("73°"))
+        XCTAssertTrue(result.contains("73 deg"))
         XCTAssertTrue(result.contains("W"))
     }
 

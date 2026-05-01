@@ -173,11 +173,11 @@ All four HEIC stills issues land together. Test file:
 
 ## Phase 4 — Cosmetic / low-priority
 
-| Issue | Plan |
-|---|---|
-| GPS `°` vs ` deg` separator | Replace `°` with ` deg` in `formatGPSCoordinate` (`PrintConverter.swift:56–63`). 1 LOC. |
-| Subtitle codec `tx3g` vs `mov_text` | Add alias in MP4Parser codec map. 1 LOC. |
-| H.265 `Main 4:2:2 10` vs ffprobe `Rext` | Both correct. Leave. |
+| Issue | Plan | Status |
+|---|---|---|
+| GPS `°` vs ` deg` separator | Replace `°` with ` deg` in `formatGPSCoordinate` (`PrintConverter.swift:56–63`). 1 LOC. | Done 2026-05-01 |
+| Subtitle codec `tx3g` vs `mov_text` | Add alias in `ffprobeShortSubtitleCodec` (`ReadCommand.swift:420–431`). 1 LOC. | Done 2026-05-01 |
+| H.265 `Main 4:2:2 10` vs ffprobe `Rext` | Both correct. Leave. | — |
 
 ---
 

@@ -380,7 +380,10 @@ public struct PrintConverter: Sendable {
             direction = ""
         }
 
-        return String(format: "%d° %d' %.2f\" %@", degrees, minutes, seconds, direction).trimmingCharacters(in: .whitespaces)
+        // ExifTool default print conversion uses ` deg` (the GPSPosition
+        // composite reads as `47 deg 22' 0.36" N`). The degree-symbol form
+        // shows up only with the legacy `-c "%.6f deg"` format flag.
+        return String(format: "%d deg %d' %.2f\" %@", degrees, minutes, seconds, direction).trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - IPTC Digital Source Type

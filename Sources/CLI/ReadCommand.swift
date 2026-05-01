@@ -426,6 +426,10 @@ struct ReadCommand: ParsableCommand {
         case "S_VOBSUB": return "dvd_subtitle"
         case "S_HDMV/PGS": return "hdmv_pgs_subtitle"
         case "S_HDMV/TEXTST": return "hdmv_text_subtitle"
+        // ffmpeg maps both 3GPP timed text (`tx3g`) and QuickTime text
+        // (`text`) sample entries to AV_CODEC_ID_MOV_TEXT, so its
+        // `codec_name` is `mov_text` for either FourCC.
+        case "tx3g", "text": return "mov_text"
         default: return nil
         }
     }
