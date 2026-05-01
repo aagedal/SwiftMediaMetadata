@@ -389,6 +389,24 @@ public struct MPEGReader: Sendable {
             let bytes = Int64(data.count)
             metadata.bitRate = Int(Double(bytes) * 8.0 / duration)
         }
+
+        // Per-stream duration: MPEG-TS doesn't have a track-header duration
+        // the way MP4 does. ffprobe walks every PES packet's PTS to compute
+        // exact per-stream span (so streams can differ by a few hundred ms
+        // depending on which packet ends last) — that's a full-file scan we
+        // don't want to do up-front. Propagate the file-level duration to
+        // each stream as a sensible default so consumers don't see nil.
+        if let formatDur = metadata.duration, formatDur > 0 {
+            for i in metadata.videoStreams.indices where metadata.videoStreams[i].duration == nil {
+                metadata.videoStreams[i].duration = formatDur
+            }
+            for i in metadata.audioStreams.indices where metadata.audioStreams[i].duration == nil {
+                metadata.audioStreams[i].duration = formatDur
+            }
+            for i in metadata.subtitleStreams.indices where metadata.subtitleStreams[i].duration == nil {
+                metadata.subtitleStreams[i].duration = formatDur
+            }
+        }
     }
 
     /// Per-PID PES accumulator. On a unit-start packet, flush the
