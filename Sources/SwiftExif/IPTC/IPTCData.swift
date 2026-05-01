@@ -338,4 +338,61 @@ public struct IPTCData: Equatable, Sendable {
             else { removeAll(for: .expirationTime) }
         }
     }
+
+    // MARK: - Convenience Properties (News Photo Record 3)
+
+    /// Read a Record 3/8 numeric tag, decoding the underlying binary form.
+    /// Returns nil if the tag is missing or undersized.
+    public func intValue(for tag: IPTCTag) -> Int? {
+        guard let ds = datasets.first(where: { $0.tag == tag }) else { return nil }
+        switch tag.dataType {
+        case .int8u:  return ds.uint8Value().map { Int($0) }
+        case .int16u: return ds.uint16Value().map { Int($0) }
+        case .int32u: return ds.uint32Value().map { Int($0) }
+        case .digits, .string:
+            return ds.stringValue(encoding: encoding).flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        case .binary:
+            return nil
+        }
+    }
+
+    /// IPTC Record 3:20 — image width in pixels for transmitted news photos.
+    public var iptcImageWidth: Int? { intValue(for: .iptcImageWidth) }
+    /// IPTC Record 3:30 — image height in pixels.
+    public var iptcImageHeight: Int? { intValue(for: .iptcImageHeight) }
+    /// IPTC Record 3:40 — pixel width in micrometres × 100.
+    public var iptcPixelWidth: Int? { intValue(for: .iptcPixelWidth) }
+    /// IPTC Record 3:50 — pixel height in micrometres × 100.
+    public var iptcPixelHeight: Int? { intValue(for: .iptcPixelHeight) }
+    /// IPTC Record 3:55 — 0=Main, 1=Reduced resolution, 2=Logo, 3=Rasterized caption.
+    public var supplementalType: Int? { intValue(for: .supplementalType) }
+    /// IPTC Record 3:60 — color representation (0x000=No color, 0x404=Monochrome, 0x3F8=4:4:4, ...).
+    public var colorRepresentation: Int? { intValue(for: .colorRepresentation) }
+    /// IPTC Record 3:64 — interchange color space (1=X/Y/Z, 2=RGB, 3=CMY, 4=L/A/B, 5=YCbCr, 6=RGB+alpha, ...).
+    public var interchangeColorSpace: Int? { intValue(for: .interchangeColorSpace) }
+    /// IPTC Record 3:65 — color sequence (1=A then B then C, 2=interleaved).
+    public var colorSequence: Int? { intValue(for: .colorSequence) }
+    /// IPTC Record 3:66 — embedded ICC profile.
+    public var iccProfileData: Data? { rawValue(for: .iccProfile) }
+    /// IPTC Record 3:86 — bits per sample (typically 8 or 16).
+    public var iptcBitsPerSample: Int? { intValue(for: .iptcBitsPerSample) }
+    /// IPTC Record 3:90 — sample structure (1=4:2:2 etc.).
+    public var sampleStructure: Int? { intValue(for: .sampleStructure) }
+    /// IPTC Record 3:102 — image rotation in degrees (0, 90, 180, 270).
+    public var iptcImageRotation: Int? { intValue(for: .iptcImageRotation) }
+    /// IPTC Record 3:110 — data compression method (0=uncompressed, 1=PackBits, 2=JPEG, ...).
+    public var dataCompressionMethod: Int? { intValue(for: .dataCompressionMethod) }
+    /// IPTC Record 3:135 — bits per component.
+    public var bitsPerComponent: Int? { intValue(for: .bitsPerComponent) }
+
+    // MARK: - Convenience Properties (ObjectData Records 6, 7, 8)
+
+    /// IPTC Record 7:10 — ObjectData preview file format (1=NewsPhoto, 2=Hires, 4=GIF, 5=JPEG, 6=Photo CD, ...).
+    public var objectDataPreviewFileFormat: Int? { intValue(for: .objectDataPreviewFileFormat) }
+    /// IPTC Record 7:20 — ObjectData preview file format version.
+    public var objectDataPreviewFileFormatVersion: Int? { intValue(for: .objectDataPreviewFileFormatVersion) }
+    /// IPTC Record 7:30 — embedded preview bytes (typically a JPEG).
+    public var objectDataPreviewData: Data? { rawValue(for: .objectDataPreviewData) }
+    /// IPTC Record 8:10 — confirmed object data size (Post-ObjectData trailer).
+    public var confirmedDataSize: Int? { intValue(for: .confirmedDataSize) }
 }

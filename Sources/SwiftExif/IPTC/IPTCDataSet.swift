@@ -39,4 +39,20 @@ public struct IPTCDataSet: Equatable, Sendable {
         guard rawValue.count >= 2 else { return nil }
         return UInt16(rawValue[rawValue.startIndex]) << 8 | UInt16(rawValue[rawValue.startIndex + 1])
     }
+
+    /// Decode as a single-byte unsigned integer.
+    public func uint8Value() -> UInt8? {
+        guard rawValue.count >= 1 else { return nil }
+        return rawValue[rawValue.startIndex]
+    }
+
+    /// Decode as UInt32 big-endian (Record 3 / Record 8 numeric fields).
+    public func uint32Value() -> UInt32? {
+        guard rawValue.count >= 4 else { return nil }
+        let s = rawValue.startIndex
+        return UInt32(rawValue[s]) << 24
+            | UInt32(rawValue[s + 1]) << 16
+            | UInt32(rawValue[s + 2]) << 8
+            | UInt32(rawValue[s + 3])
+    }
 }

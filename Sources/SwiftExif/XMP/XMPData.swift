@@ -570,6 +570,119 @@ public struct XMPData: Equatable, Sendable {
         set { setValue(.array(newValue), namespace: XMPNamespace.plus, property: "PropertyReleaseID") }
     }
 
+    // MARK: - PLUS Wire-Service / License Transaction Fields
+    //
+    // PLUS Coalition v1.2.1 license-tracking fields. Wire services (AP, Reuters,
+    // AFP) and DAMs use these to identify a specific licensing transaction and
+    // its time window. Fields use code-point URIs from
+    // ns.useplus.org/LDF/ldf-XMPSpecification.html.
+
+    /// Image suppliers (plus:ImageSupplier) — agencies/creators that provided the image.
+    public var imageSupplier: [IPTCImageSupplier] {
+        get {
+            guard let items = flatStructuredArrayValue(namespace: XMPNamespace.plus, property: "ImageSupplier") else { return [] }
+            return items.map { IPTCImageSupplier(fields: $0) }
+        }
+        set {
+            if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "ImageSupplier") }
+            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.plus, property: "ImageSupplier") }
+        }
+    }
+
+    /// Supplier's image identifier in the PLUS namespace (plus:ImageSupplierImageID).
+    /// Distinct from the IPTC Extension `imageSupplierImageID` — most files use
+    /// the iptcExt form, but PLUS-aware DAMs sometimes write both.
+    public var plusImageSupplierImageID: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "ImageSupplierImageID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "ImageSupplierImageID") }
+    }
+
+    /// License transaction identifier (plus:LicenseTransactionID).
+    public var licenseTransactionID: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "LicenseTransactionID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "LicenseTransactionID") }
+    }
+
+    /// License transaction date (plus:LicenseTransactionDate, ISO 8601).
+    public var licenseTransactionDate: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "LicenseTransactionDate") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "LicenseTransactionDate") }
+    }
+
+    /// License start date (plus:LicenseStartDate, ISO 8601).
+    public var licenseStartDate: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "LicenseStartDate") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "LicenseStartDate") }
+    }
+
+    /// License end date (plus:LicenseEndDate, ISO 8601).
+    public var licenseEndDate: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "LicenseEndDate") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "LicenseEndDate") }
+    }
+
+    /// License status code-point URI (plus:LicenseStatus).
+    /// Standard values: "...US-EXP" (expired), "...US-LIC" (licensed),
+    /// "...US-PND" (pending), "...US-CAN" (cancelled).
+    public var licenseStatus: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "LicenseStatus") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "LicenseStatus") }
+    }
+
+    /// License document identifier (plus:LicenseDocumentID).
+    public var licenseDocumentID: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "LicenseDocumentID") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "LicenseDocumentID") }
+    }
+
+    /// Copyright status code-point URI (plus:CopyrightStatus).
+    /// Standard values: "...CS-PRO" (protected), "...CS-PUB" (public domain),
+    /// "...CS-UNK" (unknown).
+    public var copyrightStatus: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "CopyrightStatus") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "CopyrightStatus") }
+    }
+
+    /// Copyright registration number (plus:CopyrightRegistrationNumber).
+    public var copyrightRegistrationNumber: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "CopyrightRegistrationNumber") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "CopyrightRegistrationNumber") }
+    }
+
+    /// Model release status in the PLUS namespace (plus:ModelReleaseStatus).
+    /// "...MR-NON" (none), "...MR-NAP" (not applicable), "...MR-LMR" (limited or
+    /// incomplete), "...MR-UMR" (unlimited). Most files use the iptcExt form.
+    public var plusModelReleaseStatus: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "ModelReleaseStatus") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "ModelReleaseStatus") }
+    }
+
+    /// Property release status in the PLUS namespace (plus:PropertyReleaseStatus).
+    public var plusPropertyReleaseStatus: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "PropertyReleaseStatus") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "PropertyReleaseStatus") }
+    }
+
+    /// Data-mining permission code-point URI (plus:DataMining).
+    /// Standard values: "...DM-PRO" (protected), "...DM-NMP" (not for mining
+    /// permitted), "...DM-AIN" (all incl. AI training).
+    public var dataMining: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "DataMining") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "DataMining") }
+    }
+
+    /// Other constraints (plus:OtherConstraints).
+    public var plusOtherConstraints: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "OtherConstraints") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "OtherConstraints") }
+    }
+
+    /// Other license requirements (plus:OtherLicenseRequirements).
+    public var plusOtherLicenseRequirements: String? {
+        get { simpleValue(namespace: XMPNamespace.plus, property: "OtherLicenseRequirements") }
+        set { setSimpleOrRemove(newValue, namespace: XMPNamespace.plus, property: "OtherLicenseRequirements") }
+    }
+
     // MARK: - EXIF / TIFF Camera Metadata
 
     // Values in XMP arrive pre-serialized (rationals as "1/125", lists as rdf:Seq). Numeric parsing

@@ -158,6 +158,111 @@ public struct MetadataExporter: Sendable {
                 dict["ICCProfile:Description"] = desc
             }
             dict["ICCProfile:Size"] = Int(icc.profileSize)
+            if let v = icc.profileVersion { dict["ICCProfile:Version"] = v }
+            if let cls = icc.deviceClass { dict["ICCProfile:Class"] = cls }
+            dict["ICCProfile:ConnectionSpace"] = icc.profileConnectionSpace.trimmingCharacters(in: .whitespaces)
+            if let dt = icc.creationDate { dict["ICCProfile:CreationDate"] = dt }
+            if let pp = icc.primaryPlatform { dict["ICCProfile:PrimaryPlatform"] = pp }
+            if let m = icc.manufacturer { dict["ICCProfile:Manufacturer"] = m }
+            if let mo = icc.model { dict["ICCProfile:Model"] = mo }
+            if let ri = icc.renderingIntent { dict["ICCProfile:RenderingIntent"] = Int(ri) }
+            if let cr = icc.creator { dict["ICCProfile:Creator"] = cr }
+            if let pid = icc.profileID { dict["ICCProfile:ProfileID"] = pid }
+            if let cp = icc.copyright { dict["ICCProfile:Copyright"] = cp }
+            if let wp = icc.mediaWhitePoint {
+                dict["ICCProfile:MediaWhitePoint"] = String(format: "%.4f %.4f %.4f", wp.x, wp.y, wp.z)
+            }
+            if let bp = icc.mediaBlackPoint {
+                dict["ICCProfile:MediaBlackPoint"] = String(format: "%.4f %.4f %.4f", bp.x, bp.y, bp.z)
+            }
+            if let chad = icc.chromaticAdaptation {
+                dict["ICCProfile:ChromaticAdaptation"] = chad.map { String(format: "%.4f", $0) }.joined(separator: " ")
+            }
+            if let r = icc.redColorant {
+                dict["ICCProfile:RedColorant"] = String(format: "%.4f %.4f %.4f", r.x, r.y, r.z)
+            }
+            if let g = icc.greenColorant {
+                dict["ICCProfile:GreenColorant"] = String(format: "%.4f %.4f %.4f", g.x, g.y, g.z)
+            }
+            if let b = icc.blueColorant {
+                dict["ICCProfile:BlueColorant"] = String(format: "%.4f %.4f %.4f", b.x, b.y, b.z)
+            }
+            if let trc = icc.redTRC { dict["ICCProfile:RedTRC"] = describeTRC(trc) }
+            if let trc = icc.greenTRC { dict["ICCProfile:GreenTRC"] = describeTRC(trc) }
+            if let trc = icc.blueTRC { dict["ICCProfile:BlueTRC"] = describeTRC(trc) }
+            if let trc = icc.grayTRC { dict["ICCProfile:GrayTRC"] = describeTRC(trc) }
+            if let lut = icc.aToB0 { dict["ICCProfile:AToB0"] = describeLUT(lut) }
+            if let lut = icc.aToB1 { dict["ICCProfile:AToB1"] = describeLUT(lut) }
+            if let lut = icc.aToB2 { dict["ICCProfile:AToB2"] = describeLUT(lut) }
+            if let lut = icc.bToA0 { dict["ICCProfile:BToA0"] = describeLUT(lut) }
+            if let lut = icc.bToA1 { dict["ICCProfile:BToA1"] = describeLUT(lut) }
+            if let lut = icc.bToA2 { dict["ICCProfile:BToA2"] = describeLUT(lut) }
+            if let n = icc.namedColorCount { dict["ICCProfile:NamedColorCount"] = n }
+            if icc.hasViewingConditions { dict["ICCProfile:ViewingConditions"] = true }
+            if icc.hasMeasurement { dict["ICCProfile:Measurement"] = true }
+        }
+
+        // DNG private tags (Adobe DNG specification 1.7).
+        if let dng = metadata.dng {
+            if let v = dng.dngVersion { dict["DNG:DNGVersion"] = v }
+            if let v = dng.dngBackwardVersion { dict["DNG:DNGBackwardVersion"] = v }
+            if let v = dng.uniqueCameraModel { dict["DNG:UniqueCameraModel"] = v }
+            if let v = dng.cameraSerialNumber { dict["DNG:CameraSerialNumber"] = v }
+            if let v = dng.calibrationIlluminant1 { dict["DNG:CalibrationIlluminant1"] = Int(v) }
+            if let v = dng.calibrationIlluminant2 { dict["DNG:CalibrationIlluminant2"] = Int(v) }
+            if let v = dng.colorMatrix1 {
+                dict["DNG:ColorMatrix1"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.colorMatrix2 {
+                dict["DNG:ColorMatrix2"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.cameraCalibration1 {
+                dict["DNG:CameraCalibration1"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.cameraCalibration2 {
+                dict["DNG:CameraCalibration2"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.asShotNeutral {
+                dict["DNG:AsShotNeutral"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.asShotWhiteXY {
+                dict["DNG:AsShotWhiteXY"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.baselineExposure { dict["DNG:BaselineExposure"] = v }
+            if let v = dng.baselineNoise { dict["DNG:BaselineNoise"] = v }
+            if let v = dng.baselineSharpness { dict["DNG:BaselineSharpness"] = v }
+            if let v = dng.lensInfo {
+                dict["DNG:LensInfo"] = v.map { String(format: "%.2f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.defaultCropOrigin {
+                dict["DNG:DefaultCropOrigin"] = v.map { String(format: "%.0f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.defaultCropSize {
+                dict["DNG:DefaultCropSize"] = v.map { String(format: "%.0f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.profileName { dict["DNG:ProfileName"] = v }
+            if let v = dng.profileCopyright { dict["DNG:ProfileCopyright"] = v }
+            if let v = dng.previewApplicationName { dict["DNG:PreviewApplicationName"] = v }
+            if let v = dng.previewApplicationVersion { dict["DNG:PreviewApplicationVersion"] = v }
+            if let v = dng.previewSettingsName { dict["DNG:PreviewSettingsName"] = v }
+            if let v = dng.originalRawFileName { dict["DNG:OriginalRawFileName"] = v }
+            if let v = dng.rawDataUniqueID { dict["DNG:RawDataUniqueID"] = v }
+            if let v = dng.colorimetricReference { dict["DNG:ColorimetricReference"] = Int(v) }
+            if let v = dng.profileEmbedPolicy { dict["DNG:ProfileEmbedPolicy"] = Int(v) }
+            if let v = dng.profileHueSatMapDims {
+                dict["DNG:ProfileHueSatMapDims"] = v.map { String($0) }.joined(separator: " ")
+            }
+            if let v = dng.profileLookTableDims {
+                dict["DNG:ProfileLookTableDims"] = v.map { String($0) }.joined(separator: " ")
+            }
+            if let v = dng.noiseProfile {
+                dict["DNG:NoiseProfile"] = v.map { String(format: "%.6g", $0) }.joined(separator: " ")
+            }
+            if let v = dng.baselineExposureOffset { dict["DNG:BaselineExposureOffset"] = v }
+            if let v = dng.opcodeList1Size { dict["DNG:OpcodeList1Size"] = v }
+            if let v = dng.opcodeList2Size { dict["DNG:OpcodeList2Size"] = v }
+            if let v = dng.opcodeList3Size { dict["DNG:OpcodeList3Size"] = v }
+            if let v = dng.profileLookTableSampleCount { dict["DNG:ProfileLookTableSamples"] = v }
         }
 
         // MPF (Multi-Picture Format) — Live Photo aux frames, depth maps,
@@ -320,6 +425,28 @@ public struct MetadataExporter: Sendable {
 
         let contacts = iptc.contacts
         if !contacts.isEmpty { dict["IPTC:Contact"] = contacts }
+
+        // Record 3 (News Photo) — wire-service / NewsML photo descriptors.
+        if let v = iptc.iptcImageWidth { dict["IPTC:IPTCImageWidth"] = v }
+        if let v = iptc.iptcImageHeight { dict["IPTC:IPTCImageHeight"] = v }
+        if let v = iptc.iptcPixelWidth { dict["IPTC:IPTCPixelWidth"] = v }
+        if let v = iptc.iptcPixelHeight { dict["IPTC:IPTCPixelHeight"] = v }
+        if let v = iptc.supplementalType { dict["IPTC:SupplementalType"] = v }
+        if let v = iptc.colorRepresentation { dict["IPTC:ColorRepresentation"] = v }
+        if let v = iptc.interchangeColorSpace { dict["IPTC:InterchangeColorSpace"] = v }
+        if let v = iptc.colorSequence { dict["IPTC:ColorSequence"] = v }
+        if let v = iptc.iptcBitsPerSample { dict["IPTC:IPTCBitsPerSample"] = v }
+        if let v = iptc.sampleStructure { dict["IPTC:SampleStructure"] = v }
+        if let v = iptc.iptcImageRotation { dict["IPTC:IPTCImageRotation"] = v }
+        if let v = iptc.dataCompressionMethod { dict["IPTC:DataCompressionMethod"] = v }
+        if let v = iptc.bitsPerComponent { dict["IPTC:BitsPerComponent"] = v }
+        if let v = iptc.iccProfileData { dict["IPTC:ICC_ProfileSize"] = v.count }
+
+        // Record 7 (ObjectData preview) and Record 8 (Post-ObjectData trailer).
+        if let v = iptc.objectDataPreviewFileFormat { dict["IPTC:ObjectPreviewFileFormat"] = v }
+        if let v = iptc.objectDataPreviewFileFormatVersion { dict["IPTC:ObjectPreviewFileVersion"] = v }
+        if let v = iptc.objectDataPreviewData { dict["IPTC:ObjectPreviewSize"] = v.count }
+        if let v = iptc.confirmedDataSize { dict["IPTC:ConfirmedObjectSize"] = v }
     }
 
     // MARK: - XMP Fields
@@ -347,6 +474,23 @@ public struct MetadataExporter: Sendable {
     }
 
     // MARK: - Helpers
+
+    private static func describeTRC(_ trc: ICCToneCurve) -> String {
+        switch trc {
+        case .identity:
+            return "Identity"
+        case .gamma(let g):
+            return String(format: "Gamma %.4f", g)
+        case .table(let n):
+            return "Table (\(n) samples)"
+        case .parametric(let fn):
+            return "Parametric (function \(fn))"
+        }
+    }
+
+    private static func describeLUT(_ lut: ICCLUTSummary) -> String {
+        "\(lut.kind.rawValue) \(lut.inputChannels)→\(lut.outputChannels)"
+    }
 
     private static func formatName(_ format: ImageFormat) -> String {
         switch format {

@@ -108,6 +108,63 @@ public struct IPTCTag: Hashable, Comparable, CustomStringConvertible, Sendable {
     public static let writerEditor                   = IPTCTag(record: 2, dataSet: 122)
     public static let languageIdentifier             = IPTCTag(record: 2, dataSet: 135)
 
+    // MARK: - Record 3 Tags (News Photo)
+    //
+    // IPTC IIM v4.2 §1.5 — pixel-format and color-pipeline metadata that travels
+    // with a transmitted news photo. Wire services (AP, Reuters, AFP, EPA) still
+    // use these for binary photo distribution. Most fields are uint8 or uint16u
+    // because they encode codepoints from CCSDS / ISO color-space tables.
+
+    public static let newsPhotoVersion       = IPTCTag(record: 3, dataSet: 0)
+    public static let iptcPictureNumber      = IPTCTag(record: 3, dataSet: 10)
+    public static let iptcImageWidth         = IPTCTag(record: 3, dataSet: 20)
+    public static let iptcImageHeight        = IPTCTag(record: 3, dataSet: 30)
+    public static let iptcPixelWidth         = IPTCTag(record: 3, dataSet: 40)
+    public static let iptcPixelHeight        = IPTCTag(record: 3, dataSet: 50)
+    public static let supplementalType       = IPTCTag(record: 3, dataSet: 55)
+    public static let colorRepresentation    = IPTCTag(record: 3, dataSet: 60)
+    public static let interchangeColorSpace  = IPTCTag(record: 3, dataSet: 64)
+    public static let colorSequence          = IPTCTag(record: 3, dataSet: 65)
+    public static let iccProfile             = IPTCTag(record: 3, dataSet: 66)
+    public static let colorCalibrationMatrix = IPTCTag(record: 3, dataSet: 70)
+    public static let lookupTable            = IPTCTag(record: 3, dataSet: 80)
+    public static let numIndexEntries        = IPTCTag(record: 3, dataSet: 84)
+    public static let colorPalette           = IPTCTag(record: 3, dataSet: 85)
+    public static let iptcBitsPerSample      = IPTCTag(record: 3, dataSet: 86)
+    public static let sampleStructure        = IPTCTag(record: 3, dataSet: 90)
+    public static let scanningDirection      = IPTCTag(record: 3, dataSet: 100)
+    public static let iptcImageRotation      = IPTCTag(record: 3, dataSet: 102)
+    public static let dataCompressionMethod  = IPTCTag(record: 3, dataSet: 110)
+    public static let quantizationMethod     = IPTCTag(record: 3, dataSet: 120)
+    public static let endPoints              = IPTCTag(record: 3, dataSet: 125)
+    public static let excursionTolerance     = IPTCTag(record: 3, dataSet: 130)
+    public static let bitsPerComponent       = IPTCTag(record: 3, dataSet: 135)
+    public static let maximumDensityRange    = IPTCTag(record: 3, dataSet: 140)
+    public static let gammaCompensatedValue  = IPTCTag(record: 3, dataSet: 145)
+
+    // MARK: - Record 6 Tags (Pre-ObjectData Descriptor)
+    //
+    // Wraps the ObjectData (Record 7) — the carrier record for the actual
+    // photo bytes in IIM transmissions. Only one field is defined.
+
+    public static let subfile                = IPTCTag(record: 6, dataSet: 10)
+
+    // MARK: - Record 7 Tags (ObjectData)
+    //
+    // Carries the actual binary content (preview JPEG, or full image) inside
+    // an IIM stream. Used by wire services and NewsML legacy tooling.
+
+    public static let objectDataPreviewFileFormat        = IPTCTag(record: 7, dataSet: 10)
+    public static let objectDataPreviewFileFormatVersion = IPTCTag(record: 7, dataSet: 20)
+    public static let objectDataPreviewData              = IPTCTag(record: 7, dataSet: 30)
+
+    // MARK: - Record 8 Tags (Post-ObjectData Descriptor)
+    //
+    // Trailer record after Record 7. ConfirmedDataSize lets receivers
+    // sanity-check that no bytes were truncated in transit.
+
+    public static let confirmedDataSize      = IPTCTag(record: 8, dataSet: 10)
+
     // MARK: - Name Lookup
 
     /// Find an IPTC tag by its metadata name (e.g. "Headline", "By-line", "Keywords").
@@ -176,12 +233,53 @@ public struct IPTCTag: Hashable, Comparable, CustomStringConvertible, Sendable {
         .captionAbstract:           TagMetadata(name: "Caption-Abstract", maxLength: 2000, isRepeatable: false, dataType: .string),
         .writerEditor:              TagMetadata(name: "Writer-Editor", maxLength: 32, isRepeatable: true, dataType: .string),
         .languageIdentifier:        TagMetadata(name: "LanguageIdentifier", maxLength: 3, isRepeatable: false, dataType: .string),
+
+        // Record 3 (News Photo)
+        .newsPhotoVersion:          TagMetadata(name: "NewsPhotoVersion", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .iptcPictureNumber:         TagMetadata(name: "IPTCPictureNumber", maxLength: 16, isRepeatable: false, dataType: .string),
+        .iptcImageWidth:            TagMetadata(name: "IPTCImageWidth", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .iptcImageHeight:           TagMetadata(name: "IPTCImageHeight", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .iptcPixelWidth:            TagMetadata(name: "IPTCPixelWidth", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .iptcPixelHeight:           TagMetadata(name: "IPTCPixelHeight", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .supplementalType:          TagMetadata(name: "SupplementalType", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .colorRepresentation:       TagMetadata(name: "ColorRepresentation", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .interchangeColorSpace:     TagMetadata(name: "InterchangeColorSpace", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .colorSequence:             TagMetadata(name: "ColorSequence", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .iccProfile:                TagMetadata(name: "ICC_Profile", maxLength: nil, isRepeatable: false, dataType: .binary),
+        .colorCalibrationMatrix:    TagMetadata(name: "ColorCalibrationMatrix", maxLength: nil, isRepeatable: false, dataType: .binary),
+        .lookupTable:               TagMetadata(name: "LookupTable", maxLength: nil, isRepeatable: false, dataType: .binary),
+        .numIndexEntries:           TagMetadata(name: "NumIndexEntries", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .colorPalette:              TagMetadata(name: "ColorPalette", maxLength: nil, isRepeatable: false, dataType: .binary),
+        .iptcBitsPerSample:         TagMetadata(name: "IPTCBitsPerSample", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .sampleStructure:           TagMetadata(name: "SampleStructure", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .scanningDirection:         TagMetadata(name: "ScanningDirection", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .iptcImageRotation:         TagMetadata(name: "IPTCImageRotation", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .dataCompressionMethod:     TagMetadata(name: "DataCompressionMethod", maxLength: 4, isRepeatable: false, dataType: .int32u),
+        .quantizationMethod:        TagMetadata(name: "QuantizationMethod", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .endPoints:                 TagMetadata(name: "EndPoints", maxLength: nil, isRepeatable: false, dataType: .binary),
+        .excursionTolerance:        TagMetadata(name: "ExcursionTolerance", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .bitsPerComponent:          TagMetadata(name: "BitsPerComponent", maxLength: 1, isRepeatable: false, dataType: .int8u),
+        .maximumDensityRange:       TagMetadata(name: "MaximumDensityRange", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .gammaCompensatedValue:     TagMetadata(name: "GammaCompensatedValue", maxLength: 2, isRepeatable: false, dataType: .int16u),
+
+        // Record 6 (Pre-ObjectData Descriptor)
+        .subfile:                   TagMetadata(name: "Subfile", maxLength: nil, isRepeatable: true, dataType: .binary),
+
+        // Record 7 (ObjectData)
+        .objectDataPreviewFileFormat:        TagMetadata(name: "ObjectPreviewFileFormat", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .objectDataPreviewFileFormatVersion: TagMetadata(name: "ObjectPreviewFileVersion", maxLength: 2, isRepeatable: false, dataType: .int16u),
+        .objectDataPreviewData:              TagMetadata(name: "ObjectPreviewData", maxLength: 256_000, isRepeatable: false, dataType: .binary),
+
+        // Record 8 (Post-ObjectData Descriptor)
+        .confirmedDataSize:         TagMetadata(name: "ConfirmedObjectSize", maxLength: 4, isRepeatable: false, dataType: .int32u),
     ]
 }
 
 public enum IPTCDataType: Sendable {
     case string    // Text string
     case digits    // Numeric characters only
+    case int8u     // 1-byte unsigned integer
     case int16u    // 2-byte unsigned integer (big-endian)
+    case int32u    // 4-byte unsigned integer (big-endian)
     case binary    // Raw bytes
 }

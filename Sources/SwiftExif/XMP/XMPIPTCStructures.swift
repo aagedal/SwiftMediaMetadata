@@ -329,3 +329,33 @@ public struct IPTCLicensor: Equatable, Sendable {
         return fields
     }
 }
+
+// MARK: - IPTC Image Supplier (PLUS)
+
+/// Image Supplier structure (plus:ImageSupplier).
+/// PLUS distinguishes the image *supplier* (the agency or creator who provided
+/// the image) from the *licensor* (who licenses the rights). Required by
+/// AAP/PACA distribution agreements.
+public struct IPTCImageSupplier: Equatable, Sendable {
+    public var imageSupplierID: String?
+    public var imageSupplierName: String?
+
+    public init(imageSupplierID: String? = nil, imageSupplierName: String? = nil) {
+        self.imageSupplierID = imageSupplierID
+        self.imageSupplierName = imageSupplierName
+    }
+
+    public init(fields: [String: String]) {
+        let ns = XMPNamespace.plus
+        self.imageSupplierID = fields[ns + "ImageSupplierID"]
+        self.imageSupplierName = fields[ns + "ImageSupplierName"]
+    }
+
+    public func toFields() -> [String: String] {
+        let ns = XMPNamespace.plus
+        var fields: [String: String] = [:]
+        if let v = imageSupplierID { fields[ns + "ImageSupplierID"] = v }
+        if let v = imageSupplierName { fields[ns + "ImageSupplierName"] = v }
+        return fields
+    }
+}

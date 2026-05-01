@@ -13,11 +13,14 @@ public struct ImageMetadata: Sendable {
     /// segment carries the MPF block — typical for Apple Live Photo aux
     /// images, Sony multi-shot bursts, and stereo / 3D JPEG pairs.
     public var mpf: MPFData?
+    /// Adobe DNG private tags (color matrices, default crop, opcode lists,
+    /// noise profile). Populated only for files marked with DNGVersion (0xC612).
+    public var dng: DNGMetadata?
 
     /// Non-fatal issues encountered during parsing (e.g. corrupted C2PA data).
     public var warnings: [String]
 
-    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, iccProfile: ICCProfile? = nil, mpf: MPFData? = nil, warnings: [String] = []) {
+    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, iccProfile: ICCProfile? = nil, mpf: MPFData? = nil, dng: DNGMetadata? = nil, warnings: [String] = []) {
         self.container = container
         self.format = format
         self.iptc = iptc
@@ -26,6 +29,7 @@ public struct ImageMetadata: Sendable {
         self.c2pa = c2pa
         self.iccProfile = iccProfile
         self.mpf = mpf
+        self.dng = dng
         self.warnings = warnings
     }
 
@@ -1296,7 +1300,10 @@ public struct ImageMetadata: Sendable {
         // Extract ICC profile (tag 0x8773)
         let iccProfile = TIFFFileParser.extractICCProfile(from: tiffFile)
 
-        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)
+        // DNG private tags (only populated for DNG-marked files)
+        let dng = DNGMetadataReader.read(from: tiffFile)
+
+        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile, dng: dng)
     }
 
     private static func readRAW(from data: Data, format: ImageFormat) throws -> ImageMetadata {
@@ -1313,8 +1320,9 @@ public struct ImageMetadata: Sendable {
         iptc = try TIFFFileParser.extractIPTC(from: tiffFile)
         xmp = try TIFFFileParser.extractXMP(from: tiffFile)
         let iccProfile = TIFFFileParser.extractICCProfile(from: tiffFile)
+        let dng = DNGMetadataReader.read(from: tiffFile)
 
-        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile)
+        return ImageMetadata(container: .tiff(tiffFile), format: format, iptc: iptc, exif: exif, xmp: xmp, iccProfile: iccProfile, dng: dng)
     }
 
     private static func readJPEGXL(from data: Data) throws -> ImageMetadata {
