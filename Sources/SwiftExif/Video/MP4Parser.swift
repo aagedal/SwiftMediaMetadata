@@ -567,6 +567,7 @@ public struct MP4Parser: Sendable {
         }()
 
         if handlerType == "vide", let stsdBox {
+            metadata.streamOrder.append(.video(metadata.videoStreams.count))
             var stream = VideoStream(index: metadata.videoStreams.count)
             stream.duration = trackDuration
             stream.frameCount = samples
@@ -631,6 +632,7 @@ public struct MP4Parser: Sendable {
             if metadata.displayWidth == nil { metadata.displayWidth = stream.displayWidth }
             if metadata.displayHeight == nil { metadata.displayHeight = stream.displayHeight }
         } else if handlerType == "soun", let stsdBox {
+            metadata.streamOrder.append(.audio(metadata.audioStreams.count))
             var stream = AudioStream(index: metadata.audioStreams.count)
             stream.duration = trackDuration
             stream.language = language
@@ -664,6 +666,7 @@ public struct MP4Parser: Sendable {
             if metadata.audioSampleRate == nil { metadata.audioSampleRate = stream.sampleRate }
             if metadata.audioChannels == nil { metadata.audioChannels = stream.channels }
         } else if isSubtitleHandler(handlerType), !isChapterTextTrack, let stsdBox {
+            metadata.streamOrder.append(.subtitle(metadata.subtitleStreams.count))
             var stream = SubtitleStream(index: metadata.subtitleStreams.count)
             stream.duration = trackDuration
             stream.language = language
@@ -672,7 +675,64 @@ public struct MP4Parser: Sendable {
             if dispositions.isForced { stream.isForced = true }
             if dispositions.isHearingImpaired { stream.isHearingImpaired = true }
             metadata.subtitleStreams.append(stream)
+        } else if isDataHandler(handlerType) || isChapterTextTrack {
+            // Anything ffprobe reports with `codec_type=data`: timecode
+            // (`tmcd`), Apple metadata (`meta`/`mdta`), GoPro GPMF (`gpmd`),
+            // embedded thumbnails (`pict`), and the QuickTime text tracks
+            // referenced via `tref:chap` for chapter titles. We expose them
+            // so per-stream listings line up 1:1 with ffprobe's count.
+            metadata.streamOrder.append(.data(metadata.dataStreams.count))
+            var stream = DataStream(index: metadata.dataStreams.count, handlerType: handlerType)
+            stream.duration = trackDuration
+            stream.language = language
+            stream.isDefault = tkhdIsDefault
+            if let stsdBox {
+                parseDataSampleEntry(stsdBox.data, into: &stream)
+            }
+            stream.codecName = stream.codecName ?? dataHandlerLongName(handlerType, isChapter: isChapterTextTrack)
+            metadata.dataStreams.append(stream)
         }
+    }
+
+    /// Handler types that carry timed metadata payloads rather than rendered
+    /// audio/video/subtitle samples. ffprobe groups all of these under
+    /// `codec_type=data`.
+    private static func isDataHandler(_ type: String) -> Bool {
+        switch type {
+        case "tmcd", "meta", "mdta", "gpmd", "pict", "url ", "data":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Best-effort human label for a data-track handler. Used when the
+    /// stsd sample-entry inspection didn't produce a more specific name.
+    private static func dataHandlerLongName(_ type: String, isChapter: Bool) -> String? {
+        if isChapter { return "QuickTime Chapter" }
+        switch type {
+        case "tmcd": return "QuickTime Timecode"
+        case "meta", "mdta": return "QuickTime Metadata"
+        case "gpmd": return "GoPro GPMF"
+        case "pict": return "Image"
+        default: return nil
+        }
+    }
+
+    /// Pull the FourCC from the first sample entry in `stsd` for data
+    /// tracks. The ISOBMFF SampleEntry layout is shared, so the same
+    /// "skip FullBox header + entry_count + entry_size" recipe used for
+    /// audio / subtitle tracks works here too.
+    private static func parseDataSampleEntry(_ stsdData: Data, into stream: inout DataStream) {
+        guard stsdData.count >= 16 else { return }
+        var reader = BinaryReader(data: stsdData)
+        _ = try? reader.readBytes(4) // FullBox header
+        _ = try? reader.readUInt32BigEndian() // entry_count
+        guard reader.remainingCount >= 8 else { return }
+        _ = try? reader.readUInt32BigEndian() // entry_size
+        guard let codecBytes = try? reader.readBytes(4),
+              let codec = String(data: codecBytes, encoding: .ascii) else { return }
+        stream.codec = codec
     }
 
     /// ISOBMFF handler types that advertise subtitle / timed-text / closed-

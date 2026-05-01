@@ -56,6 +56,15 @@ public struct VideoMetadata: Sendable {
     public var audioStreams: [AudioStream]
     /// Per-track subtitle / timed-text / closed-caption streams.
     public var subtitleStreams: [SubtitleStream]
+    /// Per-track data streams (timecode `tmcd`, Apple `meta`/`mdta`, GoPro
+    /// `gpmd`, embedded `pict` thumbnails, chapter-text tracks, …).
+    /// Anything ffprobe surfaces with `codec_type=data`.
+    public var dataStreams: [DataStream]
+    /// Stream emission order matching the trak iteration order in the file.
+    /// Each entry locates a typed stream by kind + index. Empty for parsers
+    /// that haven't been migrated yet — consumers fall back to the legacy
+    /// type-grouped emission in that case.
+    public var streamOrder: [StreamKind]
     /// Chapter markers declared by the container (MP4/MOV `chpl` or QuickTime
     /// text-track chapters; Matroska `Chapters` master element). Ordered by
     /// `startTime`. Empty when the container exposes no chapter information.
@@ -98,6 +107,8 @@ public struct VideoMetadata: Sendable {
         self.videoStreams = []
         self.audioStreams = []
         self.subtitleStreams = []
+        self.dataStreams = []
+        self.streamOrder = []
         self.timecodes = []
         self.chapters = []
     }

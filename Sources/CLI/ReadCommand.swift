@@ -69,7 +69,7 @@ struct ReadCommand: ParsableCommand {
         // `format` carries the video "clip-level" block — emitted via JSON
         // serialization, so the value type is `[String: Any]` to preserve
         // nested arrays (e.g. Timecodes: [{ value, source, frameRate }]).
-        var perStreamReports: [(name: String, format: [String: Any], streams: [[String: Any]])] = []
+        var perStreamReports: [(name: String, format: [String: Any], streams: [[String: Any]], chapters: [[String: Any]])] = []
 
         for url in urls {
             if supportedAudioExtensions.contains(url.pathExtension.lowercased()) {
@@ -92,7 +92,9 @@ struct ReadCommand: ParsableCommand {
                 videoRawDicts.append(rawDict)
                 videoNames.append(url.lastPathComponent)
                 if streams {
-                    perStreamReports.append((url.lastPathComponent, rawDict, buildStreamDicts(vm)))
+                    perStreamReports.append((url.lastPathComponent, rawDict,
+                                             buildStreamDicts(vm),
+                                             buildChapterDicts(vm)))
                 }
             } else {
                 let metadata = try ImageMetadata.read(from: url)
@@ -165,9 +167,38 @@ struct ReadCommand: ParsableCommand {
     }
 
     private func buildStreamDicts(_ vm: VideoMetadata) -> [[String: Any]] {
+        // When the parser populated streamOrder (MP4/MOV/M4V today) we emit
+        // streams in the source's trak iteration order — that's what ffprobe
+        // does, and it preserves any audio-first / video-second files like
+        // the Atomos Ninja ProRes RAW recordings. Other parsers (MKV, MXF,
+        // AVI, MPEG) still grouped-by-type until they're migrated; in that
+        // case we keep the legacy [video, audio, subtitle] ordering.
+        if !vm.streamOrder.isEmpty {
+            var rows: [[String: Any]] = []
+            for kind in vm.streamOrder {
+                switch kind {
+                case .video(let i)    where i < vm.videoStreams.count:
+                    rows.append(buildVideoStreamDict(vm.videoStreams[i]))
+                case .audio(let i)    where i < vm.audioStreams.count:
+                    rows.append(buildAudioStreamDict(vm.audioStreams[i]))
+                case .subtitle(let i) where i < vm.subtitleStreams.count:
+                    rows.append(buildSubtitleStreamDict(vm.subtitleStreams[i]))
+                case .data(let i)     where i < vm.dataStreams.count:
+                    rows.append(buildDataStreamDict(vm.dataStreams[i]))
+                default: continue
+                }
+            }
+            return rows
+        }
         var rows: [[String: Any]] = []
-        for stream in vm.videoStreams {
-            var d: [String: Any] = ["StreamType": "video", "Index": String(stream.index)]
+        for stream in vm.videoStreams { rows.append(buildVideoStreamDict(stream)) }
+        for stream in vm.audioStreams { rows.append(buildAudioStreamDict(stream)) }
+        for stream in vm.subtitleStreams { rows.append(buildSubtitleStreamDict(stream)) }
+        return rows
+    }
+
+    private func buildVideoStreamDict(_ stream: VideoStream) -> [String: Any] {
+        var d: [String: Any] = ["StreamType": "video", "Index": String(stream.index)]
             if let v = stream.codec          { d["Codec"]            = v }
             if let v = stream.codecName      { d["CodecName"]        = v }
             if let v = stream.codec, let s = ffprobeShortVideoCodec(v) { d["CodecShort"] = s }
@@ -226,58 +257,68 @@ struct ReadCommand: ParsableCommand {
                 if let r = c.fullRange { d["ColorRange"] = r ? "pc" : "tv" }
                 if let l = c.label     { d["ColorSpace"] = l }
             }
-            rows.append(d)
+            return d
+    }
+
+    private func buildAudioStreamDict(_ stream: AudioStream) -> [String: Any] {
+        var d: [String: Any] = ["StreamType": "audio", "Index": String(stream.index)]
+        if let v = stream.codec         { d["Codec"]         = v }
+        if let v = stream.codecName     { d["CodecName"]     = v }
+        if let v = stream.codec, let s = ffprobeShortAudioCodec(v, bitDepth: stream.bitDepth) {
+            d["CodecShort"] = s
         }
-        for stream in vm.audioStreams {
-            var d: [String: Any] = ["StreamType": "audio", "Index": String(stream.index)]
-            if let v = stream.codec         { d["Codec"]         = v }
-            if let v = stream.codecName     { d["CodecName"]     = v }
-            if let v = stream.codec, let s = ffprobeShortAudioCodec(v, bitDepth: stream.bitDepth) {
-                d["CodecShort"] = s
-            }
-            if let v = stream.profile       { d["Profile"]       = v }
-            if let v = stream.sampleRate    { d["SampleRate"]    = String(v) }
-            if let v = stream.channels      { d["Channels"]      = String(v) }
-            if let v = stream.channelLayout { d["ChannelLayout"] = v }
-            if let v = stream.bitDepth      { d["BitDepth"]      = String(v) }
-            if let v = stream.bitRate       { d["BitRate"]       = String(v) }
-            if let v = stream.duration      { d["Duration"]      = String(v) }
-            if let v = stream.language      { d["Language"]      = v }
-            d["IsDefault"] = String(stream.isDefault ?? true)
-            if let v = stream.title         { d["Title"]         = v }
-            if let v = stream.mcaChannelLabel             { d["MCAChannelLabel"]             = v }
-            if let v = stream.mcaChannelName              { d["MCAChannelName"]              = v }
-            if let v = stream.mcaSoundfieldGroup          { d["MCASoundfieldGroup"]          = v }
-            if let v = stream.mcaGroupOfSoundfieldGroups  { d["MCAGroupOfSoundfieldGroups"]  = v }
-            rows.append(d)
+        if let v = stream.profile       { d["Profile"]       = v }
+        if let v = stream.sampleRate    { d["SampleRate"]    = String(v) }
+        if let v = stream.channels      { d["Channels"]      = String(v) }
+        if let v = stream.channelLayout { d["ChannelLayout"] = v }
+        if let v = stream.bitDepth      { d["BitDepth"]      = String(v) }
+        if let v = stream.bitRate       { d["BitRate"]       = String(v) }
+        if let v = stream.duration      { d["Duration"]      = String(v) }
+        if let v = stream.language      { d["Language"]      = v }
+        d["IsDefault"] = String(stream.isDefault ?? true)
+        if let v = stream.title         { d["Title"]         = v }
+        if let v = stream.mcaChannelLabel             { d["MCAChannelLabel"]             = v }
+        if let v = stream.mcaChannelName              { d["MCAChannelName"]              = v }
+        if let v = stream.mcaSoundfieldGroup          { d["MCASoundfieldGroup"]          = v }
+        if let v = stream.mcaGroupOfSoundfieldGroups  { d["MCAGroupOfSoundfieldGroups"]  = v }
+        return d
+    }
+
+    private func buildSubtitleStreamDict(_ stream: SubtitleStream) -> [String: Any] {
+        var d: [String: Any] = ["StreamType": "subtitle", "Index": String(stream.index)]
+        if let v = stream.codec             { d["Codec"]     = v }
+        if let v = stream.codecName         { d["CodecName"] = v }
+        if let v = stream.codec, let s = ffprobeShortSubtitleCodec(v) { d["CodecShort"] = s }
+        if let v = stream.language          { d["Language"]  = v }
+        if let v = stream.title             { d["Title"]     = v }
+        d["IsDefault"]         = String(stream.isDefault ?? true)
+        d["IsForced"]          = String(stream.isForced ?? false)
+        d["IsHearingImpaired"] = String(stream.isHearingImpaired ?? false)
+        if let v = stream.duration          { d["Duration"]  = String(v) }
+        return d
+    }
+
+    private func buildDataStreamDict(_ stream: DataStream) -> [String: Any] {
+        var d: [String: Any] = ["StreamType": "data", "Index": String(stream.index)]
+        d["HandlerType"] = stream.handlerType
+        if let v = stream.codec     { d["Codec"]     = v }
+        if let v = stream.codecName { d["CodecName"] = v }
+        if let s = ffprobeShortDataCodec(handler: stream.handlerType, codec: stream.codec) {
+            d["CodecShort"] = s
         }
-        for stream in vm.subtitleStreams {
-            var d: [String: Any] = ["StreamType": "subtitle", "Index": String(stream.index)]
-            if let v = stream.codec             { d["Codec"]     = v }
-            if let v = stream.codecName         { d["CodecName"] = v }
-            if let v = stream.codec, let s = ffprobeShortSubtitleCodec(v) { d["CodecShort"] = s }
-            if let v = stream.language          { d["Language"]  = v }
-            if let v = stream.title             { d["Title"]     = v }
-            d["IsDefault"]         = String(stream.isDefault ?? true)
-            d["IsForced"]          = String(stream.isForced ?? false)
-            d["IsHearingImpaired"] = String(stream.isHearingImpaired ?? false)
-            if let v = stream.duration          { d["Duration"]  = String(v) }
-            rows.append(d)
-        }
-        // Chapters aren't streams per se, but ffprobe groups them alongside
-        // streams in `--streams` output when invoked with `-show_chapters`, so
-        // surface them here with StreamType="chapter" for parity.
-        for ch in vm.chapters {
-            var d: [String: String] = ["StreamType": "chapter", "Index": String(ch.index)]
-            if let id = ch.id { d["ChapterUID"] = String(id) }
-            d["StartTime"] = String(ch.startTime)
-            if let v = ch.endTime  { d["EndTime"]  = String(v) }
-            if let v = ch.duration { d["Duration"] = String(v) }
-            if let v = ch.title    { d["Title"]    = v }
-            if let v = ch.language { d["Language"] = v }
-            rows.append(d)
-        }
-        return rows
+        if let v = stream.language  { d["Language"]  = v }
+        if let v = stream.title     { d["Title"]     = v }
+        if let v = stream.duration  { d["Duration"]  = String(v) }
+        d["IsDefault"] = String(stream.isDefault ?? false)
+        return d
+    }
+
+    /// Mirror ffprobe's `codec_name` for a data-track handler. ffprobe maps
+    /// QuickTime chapter-text tracks to `bin_data` (despite the stsd FourCC
+    /// being `text`); for `tmcd`/`mebx`/`mdta` it leaves codec_name unset.
+    private func ffprobeShortDataCodec(handler: String, codec: String?) -> String? {
+        if handler == "text" { return "bin_data" }
+        return nil
     }
 
     private func gcdInt(_ a: Int, _ b: Int) -> Int {
@@ -378,21 +419,43 @@ struct ReadCommand: ParsableCommand {
         }
     }
 
-    private func printStreamsJSON(_ reports: [(name: String, format: [String: Any], streams: [[String: Any]])]) {
+    private func printStreamsJSON(_ reports: [(name: String, format: [String: Any], streams: [[String: Any]], chapters: [[String: Any]])]) {
         var out: [[String: Any]] = []
         for report in reports {
-            out.append([
+            // Mirror ffprobe's `-show_streams -show_chapters` shape: streams
+            // and chapters are sibling top-level arrays. Chapters used to be
+            // mixed into `streams` with StreamType="chapter", which inflated
+            // the stream count for files like ChapterMarkerTest.mov; ffprobe
+            // never reports them that way.
+            var rec: [String: Any] = [
                 "file": report.name,
                 // Clip-level metadata (ffprobe "format") — exposes Timecode,
                 // Duration, BitRate, FormatLongName, creation dates, GPS, etc.
                 // that don't belong on any single stream.
                 "format": report.format,
                 "streams": report.streams,
-            ])
+            ]
+            if !report.chapters.isEmpty { rec["chapters"] = report.chapters }
+            out.append(rec)
         }
         if let data = try? JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]) {
             print(String(data: data, encoding: .utf8) ?? "[]")
         }
+    }
+
+    private func buildChapterDicts(_ vm: VideoMetadata) -> [[String: Any]] {
+        var rows: [[String: Any]] = []
+        for ch in vm.chapters {
+            var d: [String: Any] = ["Index": String(ch.index)]
+            if let id = ch.id { d["ChapterUID"] = String(id) }
+            d["StartTime"] = String(ch.startTime)
+            if let v = ch.endTime  { d["EndTime"]  = String(v) }
+            if let v = ch.duration { d["Duration"] = String(v) }
+            if let v = ch.title    { d["Title"]    = v }
+            if let v = ch.language { d["Language"] = v }
+            rows.append(d)
+        }
+        return rows
     }
 
     private func printTable(_ dict: [String: String]) {

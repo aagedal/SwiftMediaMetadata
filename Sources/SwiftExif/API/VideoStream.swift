@@ -414,6 +414,41 @@ public struct SubtitleStream: Sendable, Equatable {
     }
 }
 
+/// A non-AV "data" track — anything ffprobe reports with `codec_type=data`.
+/// QuickTime timecode (`tmcd`), Apple metadata (`mdta`/`meta`), GoPro GPMF
+/// (`gpmd`), embedded thumbnails (`pict`), and chapter-text tracks all land
+/// here. We expose them as streams so per-track listings line up 1:1 with
+/// ffprobe's stream count.
+public struct DataStream: Sendable, Equatable {
+    public var index: Int
+    /// MP4/MOV `hdlr` type (e.g. "tmcd", "meta", "mdta", "gpmd", "pict",
+    /// "text"). Carries the source of the track for callers that want to
+    /// distinguish a timecode track from a generic metadata track.
+    public var handlerType: String
+    /// FourCC from the first sample entry in `stsd`, when present.
+    public var codec: String?
+    /// Human-readable codec label ("Timecode", "Apple Metadata", "GoPro GPMF").
+    public var codecName: String?
+    public var language: String?
+    public var title: String?
+    public var isDefault: Bool?
+    public var duration: TimeInterval?
+
+    public init(index: Int, handlerType: String) {
+        self.index = index
+        self.handlerType = handlerType
+    }
+}
+
+/// Discriminated locator for a per-track stream in `VideoMetadata.streamOrder`.
+/// The associated value is the index into the matching typed array.
+public enum StreamKind: Sendable, Equatable {
+    case video(Int)
+    case audio(Int)
+    case subtitle(Int)
+    case data(Int)
+}
+
 /// An audio track (stream) inside a container.
 public struct AudioStream: Sendable, Equatable {
     public var index: Int
