@@ -312,6 +312,17 @@ public struct MP4Parser: Sendable {
             metadata.bitRate = Int(Double(containerBytes) * 8.0 / dur)
         }
 
+        // Sony RTMD summary — populated when an `rtmd` timed-metadata track
+        // is present (Alpha A1 / A7S III / FX3 / FX30 etc). Reads only the
+        // first rtmd sample, so it stays cheap. Per-frame harvest lives
+        // behind the `rtmd-frames` CLI subcommand.
+        if RTMDReader.hasRTMDTrack(in: data) {
+            metadata.rtmd = RTMDSummary(
+                imuSampleRateHz: RTMDReader.estimateIMUSampleRate(in: data),
+                firstFrame: RTMDReader.firstFrameSnapshot(from: data)
+            )
+        }
+
         return metadata
     }
 

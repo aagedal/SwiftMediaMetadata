@@ -28,6 +28,7 @@ struct SwiftExifCLI: ParsableCommand {
             DeleteOriginalCommand.self,
             MXFLabelsCommand.self,
             BRAWFramesCommand.self,
+            RTMDFramesCommand.self,
         ],
         defaultSubcommand: ReadCommand.self
     )

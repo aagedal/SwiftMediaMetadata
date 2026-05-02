@@ -92,6 +92,12 @@ public struct VideoMetadata: Sendable {
     /// groups link to channels via UUIDs. `nil` for containers that don't
     /// support MCA labelling (everything except MXF, today).
     public var mcaAudioLabeling: MCAAudioLabeling?
+    /// Sony RTMD (Real-Time Metadata) clip summary, populated when an MP4/MOV
+    /// carries an `rtmd` timed-metadata track (Sony Alpha A1, A7S III, FX3,
+    /// FX30, …). Carries the IMU sample rate plus a first-frame snapshot of
+    /// ISO / exposure / lens / GPS. The full per-frame stream is exposed via
+    /// the `rtmd-frames` CLI subcommand.
+    public var rtmd: RTMDSummary?
     /// PSI (Program-Specific Information) programs found in an MPEG-TS file:
     /// PAT entries plus their PMT-described elementary PIDs and any service
     /// name / provider learned from the DVB SDT. Empty for non-TS containers.

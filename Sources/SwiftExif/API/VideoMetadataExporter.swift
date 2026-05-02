@@ -230,6 +230,25 @@ public struct VideoMetadataExporter: Sendable {
             }
         }
 
+        if let rtmd = metadata.rtmd {
+            dict["HasRTMDTrack"] = true
+            if let rate = rtmd.imuSampleRateHz {
+                dict["RTMDIMUSampleRateHz"] = rate
+            }
+            if let f = rtmd.firstFrame {
+                if let v = f.iso                    { dict["RTMDFirstFrameISO"]            = v }
+                if let v = f.exposureTimeSeconds    { dict["RTMDFirstFrameExposureTime"]   = v }
+                if let v = f.fNumber                { dict["RTMDFirstFrameFNumber"]        = v }
+                if let v = f.focalLengthMm          { dict["RTMDFirstFrameFocalLengthMm"]  = v }
+                if let v = f.whiteBalance           { dict["RTMDFirstFrameWhiteBalance"]   = v }
+                if let v = f.frameRate              { dict["RTMDFirstFrameFrameRate"]      = v }
+                if let v = f.dateTime               { dict["RTMDFirstFrameDateTime"]       = v }
+                if let v = f.serialNumber           { dict["RTMDFirstFrameSerialNumber"]   = v }
+                if let v = f.gpsLatitude            { dict["RTMDFirstFrameGPSLatitude"]    = v }
+                if let v = f.gpsLongitude           { dict["RTMDFirstFrameGPSLongitude"]   = v }
+            }
+        }
+
         if let labeling = metadata.mcaAudioLabeling, !labeling.isEmpty {
             // Top-level MCA labelling block (SMPTE ST 377-4 / ST 2020-1).
             // Channels resolve to AudioStream slots by `TrackIndex`; the
