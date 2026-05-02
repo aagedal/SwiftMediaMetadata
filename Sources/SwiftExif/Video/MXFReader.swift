@@ -222,6 +222,16 @@ public struct MXFReader: Sendable {
                 }
             }
         }
+        // ARRI ALEXA / AMIRA carry slate, lens, camera, medium, frameline,
+        // and viewing-LUT metadata as JSON blobs in custom KLV metadata
+        // sets. The blob signature `\x80\x7B LL LL {` is unambiguous; scan
+        // the same header region NRT XML uses and merge any decoded fields.
+        let arriBlobs = ARRIJSONParser.findEmbeddedJSONBlobs(in: data)
+        if !arriBlobs.isEmpty {
+            var cam = metadata.camera ?? CameraMetadata()
+            ARRIJSONParser.merge(arriBlobs, into: &cam)
+            if !cam.isEmpty { metadata.camera = cam }
+        }
         // Surface any Sony NRT LtcChangeTable start timecode. Dedupes
         // against MXF Material / File package values via recordTimecode.
         metadata.ingestNRTTimecode()
@@ -901,6 +911,18 @@ public struct MXFReader: Sendable {
         let s = ul.startIndex
         let kind = ul[s + 11]
         let variant = ul[s + 13]
+
+        // ARRIRAW (SMPTE-registered as picture coding
+        // urn:smpte:ul:060e2b34.0401010d.04010201.02010103). It sits in a
+        // different sub-registry than the kind=0x04/0x02 codecs the rest of
+        // this function handles (byte 11 == 0x01), so match the trailing
+        // 8-byte item designator directly to avoid cross-registry collisions.
+        if ul[s + 8] == 0x04, ul[s + 9] == 0x01,
+           ul[s + 10] == 0x02, ul[s + 11] == 0x01,
+           ul[s + 12] == 0x02, ul[s + 13] == 0x01,
+           ul[s + 14] == 0x01, ul[s + 15] == 0x03 {
+            return ("arriraw", "ARRIRAW")
+        }
 
         // Video registry (SMPTE 335 / RP 224 / RP 2008).
         if kind == 0x04 {

@@ -100,6 +100,24 @@ final class MXFReaderTests: XCTestCase {
         XCTAssertEqual(stream.codecName, "MPEG-2 Video")
     }
 
+    func testParsePictureDescriptorMapsARRIRAWUL() {
+        // ARRIRAW picture coding UL — SMPTE-registered as
+        // urn:smpte:ul:060e2b34.0401010d.04010201.02010103. Lives in a
+        // different sub-registry (byte 11 == 0x01) than the codecs handled
+        // by the kind=0x04 / kind=0x02 branches, so the parser matches the
+        // full trailing 8-byte item designator instead.
+        let ul = Data([
+            0x06, 0x0E, 0x2B, 0x34, 0x04, 0x01, 0x01, 0x0D,
+            0x04, 0x01, 0x02, 0x01, 0x02, 0x01, 0x01, 0x03,
+        ])
+        let body = localTagLV(0x3201, value: ul)
+        var stream = VideoStream(index: 0)
+        var duration: TimeInterval? = nil
+        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+        XCTAssertEqual(stream.codec, "arriraw")
+        XCTAssertEqual(stream.codecName, "ARRIRAW")
+    }
+
     func testParsePictureDescriptorDetectsAVCIntraHigh10() {
         // AVC-Intra ULs use kind=0x02, variant=0x32, byte14 high nibble 0x20.
         let ul = pictureCodingUL(kind: 0x02, variant: 0x32, byte14: 0x21)
