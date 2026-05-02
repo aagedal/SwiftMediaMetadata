@@ -382,6 +382,16 @@ Source coverage:
 
   Off-speed shoots populate `captureFps` distinct from `frameRate` — a 24p
   clip captured at 112 fps reports `frameRate=24` and `captureFps≈112`.
+
+  **Per-frame export** — `swift-exif braw-frames <file.braw>` walks every
+  frame's `bmdf` header (or every `mebx` IMU sample) and emits CSV for
+  graphing. Three streams: `attributes` (default; one row per video
+  frame with shutter / aperture / focal length / focus distance / ISO /
+  WB Kelvin / tint), `gyroscope` (rad/s vec3 at ~1 kHz), and
+  `accelerometer` (m/s² vec3, gravity observable on the up-axis).
+  Numeric columns; opens directly in Excel / pandas / matplotlib /
+  gnuplot. Public Swift API: `BRAWFrameReader.readAttributes(from:)`
+  and `BRAWFrameReader.readMotionSamples(from:stream:)`.
 - **MXF (SMPTE 377-1)**: picture and sound essence descriptors parsed from
   header metadata — `StoredWidth`/`StoredHeight`, `DisplayWidth`/`DisplayHeight`,
   `FrameLayout` (scan type), `ComponentDepth`,

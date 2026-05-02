@@ -1156,7 +1156,7 @@ public struct MP4Parser: Sendable {
 
     /// Return the four-byte handler type on a trak (`vide`, `soun`, `tmcd`, …),
     /// or nil when the trak lacks mdia/hdlr.
-    private static func trakHandlerType(_ trakData: Data) -> String? {
+    internal static func trakHandlerType(_ trakData: Data) -> String? {
         guard let trakChildren = try? ISOBMFFBoxReader.parseBoxes(from: trakData),
               let mdia = trakChildren.first(where: { $0.type == "mdia" }),
               let mdiaChildren = try? ISOBMFFBoxReader.parseBoxes(from: mdia.data),
@@ -1182,7 +1182,7 @@ public struct MP4Parser: Sendable {
     /// mdhd (media header): returns duration in seconds (using this track's timescale),
     /// the timescale itself (so callers can compute r_frame_rate from stts), and
     /// the ISO 639-2/T language code if set.
-    private static func parseMDHD(_ data: Data) -> (duration: TimeInterval?, language: String?, timescale: UInt32)? {
+    internal static func parseMDHD(_ data: Data) -> (duration: TimeInterval?, language: String?, timescale: UInt32)? {
         guard data.count >= 4 else { return nil }
         var reader = BinaryReader(data: data)
         guard let version = try? reader.readUInt8() else { return nil }
@@ -2582,11 +2582,26 @@ public struct MP4Parser: Sendable {
         }
     }
 
-    /// Read Blackmagic RAW's per-frame interpretation header at the start
-    /// of frame 0 in mdat to recover ISO, white-balance Kelvin/tint, and
-    /// the lens-string fields the camera bakes alongside them. The header
-    /// is a `bmdf` (Blackmagic Design Frame) box wrapping a sequence of
-    /// small typed atoms; the ones we decode are:
+    /// Decoded contents of a BRAW per-frame `bmdf` header. All fields are
+    /// optional because individual atoms can be absent on a given camera
+    /// body / firmware combo (e.g. lens strings are empty when no
+    /// electronic lens is attached). Used both by the slate path
+    /// (`parseBRAWFirstFrameAttributes`, frame 0 only) and by
+    /// `BRAWFrameReader.readAttributes` (every frame).
+    internal struct BRAWFramePayload: Sendable {
+        var shutterAngle: String?
+        var aperture: String?
+        var focalLength: String?
+        var focusDistance: String?
+        var iso: Int?
+        var whiteBalanceKelvin: Int?
+        var whiteBalanceTint: Int?
+    }
+
+    /// Decode the BRAW per-frame `bmdf` header from a Data window starting
+    /// at the first byte of the box (`[size BE][type 'bmdf'][children…]`).
+    ///
+    /// The header is a sequence of small typed atoms; we decode:
     ///
     ///   `shtv`  size=32  utf-8 padded — shutter angle (e.g. "180°")
     ///   `aptr`  size=32  utf-8 padded — aperture (e.g. "f2.7")
@@ -2602,12 +2617,86 @@ public struct MP4Parser: Sendable {
     /// (`srte`, `innd`, `agpf`, `asct`, `asti`, `expo`, `shdp`, `dcp[ugrb]`,
     /// `skip`) carry per-frame state we haven't yet mapped.
     ///
-    /// Surface as slate user-meta entries — we don't promote any of them
-    /// to dedicated fields on `CameraMetadata` because that struct is
-    /// shared with other formats (Sony NRT, MXF) and these aren't part
-    /// of its public surface today. We deliberately ignore subsequent
-    /// frames: across all three test clips the values are identical for
-    /// every frame, so reading frame 0 yields the clip-level default.
+    /// Returns `nil` when no decodable atom is present; otherwise returns
+    /// a payload with whichever fields the camera populated.
+    internal static func decodeBRAWFrameHeader(_ window: Data) -> BRAWFramePayload? {
+        // Locate an atom by its 4-char type. Returns the payload range
+        // within `window`. The 4 bytes preceding the type field are the
+        // box size; payload size = size - 8.
+        func locate(_ atom: String) -> Range<Data.Index>? {
+            guard let r = window.range(of: Data(atom.utf8)),
+                  r.lowerBound >= window.startIndex + 4 else { return nil }
+            let sizeStart = r.lowerBound - 4
+            let size = Int(readUInt32BE(window, at: sizeStart))
+            guard size >= 8 else { return nil }
+            let payloadStart = r.upperBound
+            let payloadEnd = payloadStart + (size - 8)
+            guard payloadEnd <= window.endIndex else { return nil }
+            return payloadStart..<payloadEnd
+        }
+
+        // BMD pads a fixed-size buffer with NULs after the UTF-8 string;
+        // trim at the first NUL and reject empty strings (which appear on
+        // bodies without electronic lens contacts).
+        func decodePaddedString(_ payload: Range<Data.Index>) -> String? {
+            let bytes = window[payload]
+            let endIdx = bytes.firstIndex(of: 0) ?? bytes.endIndex
+            let trimmed = bytes[bytes.startIndex..<endIdx]
+            guard let s = String(data: Data(trimmed), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !s.isEmpty else { return nil }
+            return s
+        }
+
+        var p = BRAWFramePayload()
+        if let r = locate("shtv") { p.shutterAngle = decodePaddedString(r) }
+        if let r = locate("aptr") { p.aperture = decodePaddedString(r) }
+        if let r = locate("fcln") { p.focalLength = decodePaddedString(r) }
+        if let r = locate("dsnc") { p.focusDistance = decodePaddedString(r) }
+        if let r = locate("isoe"), r.count == 4 {
+            p.iso = Int(readUInt32BE(window, at: r.lowerBound))
+        }
+        if let r = locate("wkel"), r.count == 4 {
+            p.whiteBalanceKelvin = Int(readUInt32BE(window, at: r.lowerBound))
+        }
+        if let r = locate("wtin"), r.count == 2 {
+            let bits = (UInt16(window[r.lowerBound]) << 8)
+                     |  UInt16(window[r.lowerBound + 1])
+            p.whiteBalanceTint = Int(Int16(bitPattern: bits))
+        }
+        // All-nil payload: nothing to surface.
+        if p.shutterAngle == nil && p.aperture == nil && p.focalLength == nil
+           && p.focusDistance == nil && p.iso == nil
+           && p.whiteBalanceKelvin == nil && p.whiteBalanceTint == nil {
+            return nil
+        }
+        return p
+    }
+
+    /// Slice the `bmdf` window out of `fullData` for the chunk at the
+    /// given absolute file offset. The `bmdf` box's first 4 bytes declare
+    /// its size — typically 256 bytes on smaller-resolution clips, 1024
+    /// on PYXIS 12K. Cap at 4 KiB so we never walk into image data.
+    /// Returns `nil` when the offset isn't inside the file.
+    internal static func brawFrameWindow(
+        at chunkOffset: UInt64, in fullData: Data
+    ) -> Data? {
+        let s = Int(chunkOffset)
+        guard s >= 0, s + 8 <= fullData.count else { return nil }
+        let bmdfSize = readUInt32BE(fullData, at: fullData.startIndex + s)
+        let windowSize = min(max(Int(bmdfSize), 256), 4096)
+        guard s + windowSize <= fullData.count else { return nil }
+        return fullData.subdata(in: (fullData.startIndex + s)..<(fullData.startIndex + s + windowSize))
+    }
+
+    /// Read frame 0's `bmdf` header for the BRAW slate path. Across the
+    /// three test clips the per-frame values are identical, so frame 0
+    /// yields the clip-level default — no per-frame iteration in the
+    /// `read` flow. (`BRAWFrameReader.readAttributes` walks every frame.)
+    /// Surfaces as slate user-meta entries; we don't promote to dedicated
+    /// `CameraMetadata` fields because that struct is shared with other
+    /// formats (Sony NRT, MXF) and ISO/WB/lens-strings aren't part of its
+    /// public surface today.
     private static func parseBRAWFirstFrameAttributes(
         _ trakData: Data, fullData: Data, into metadata: inout VideoMetadata
     ) {
@@ -2637,79 +2726,22 @@ public struct MP4Parser: Sendable {
             }
             return nil
         }()
-        guard let offset = chunkOffset else { return }
-        // Each BRAW frame opens with a `bmdf` (Blackmagic Design Frame)
-        // metadata header whose declared size is the first 4 bytes —
-        // typically 256 bytes on smaller-resolution clips and 1024 bytes
-        // on PYXIS 12K. Cap at 4 KiB so we never walk into image data.
-        let s = Int(offset)
-        guard s >= 0, s + 8 <= fullData.count else { return }
-        let bmdfSize = readUInt32BE(fullData, at: fullData.startIndex + s)
-        let windowSize = min(max(Int(bmdfSize), 256), 4096)
-        guard s + windowSize <= fullData.count else { return }
-        let window = fullData.subdata(in: (fullData.startIndex + s)..<(fullData.startIndex + s + windowSize))
-
-        // Locate an atom by its 4-char type. Returns the box-size header,
-        // and the payload range within `window`. The 4 bytes preceding the
-        // type field are the box size; payload size = size - 8.
-        func locate(_ atom: String) -> (size: Int, payload: Range<Data.Index>)? {
-            guard let r = window.range(of: Data(atom.utf8)),
-                  r.lowerBound >= window.startIndex + 4 else { return nil }
-            let sizeStart = r.lowerBound - 4
-            let size = Int(readUInt32BE(window, at: sizeStart))
-            guard size >= 8 else { return nil }
-            let payloadStart = r.upperBound
-            let payloadEnd = payloadStart + (size - 8)
-            guard payloadEnd <= window.endIndex else { return nil }
-            return (size, payloadStart..<payloadEnd)
-        }
-
-        // BMD pads a fixed-size buffer with NULs after the UTF-8 string;
-        // trim at the first NUL and reject empty strings (which appear on
-        // bodies without electronic lens contacts).
-        func decodePaddedString(_ payload: Range<Data.Index>) -> String? {
-            let bytes = window[payload]
-            let endIdx = bytes.firstIndex(of: 0) ?? bytes.endIndex
-            let trimmed = bytes[bytes.startIndex..<endIdx]
-            guard let s = String(data: Data(trimmed), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !s.isEmpty else { return nil }
-            return s
-        }
+        guard let offset = chunkOffset,
+              let window = brawFrameWindow(at: offset, in: fullData),
+              let payload = decodeBRAWFrameHeader(window) else { return }
 
         // Order of slate appends matches the bmdf walk order (shtv → aptr
         // → fcln → dsnc → isoe → wkel → wtin) so consumers reading the
         // arrays sequentially see the values in their natural layout.
         var slateNames: [String] = []
         var slateContents: [String] = []
-        let stringFields: [(atom: String, slate: String)] = [
-            ("shtv", "shutter_angle"),
-            ("aptr", "aperture"),
-            ("fcln", "focal_length"),
-            ("dsnc", "focus_distance"),
-        ]
-        for (atom, slate) in stringFields {
-            if let loc = locate(atom), let s = decodePaddedString(loc.payload) {
-                slateNames.append(slate)
-                slateContents.append(s)
-            }
-        }
-        if let loc = locate("isoe"), loc.payload.count == 4 {
-            let v = readUInt32BE(window, at: loc.payload.lowerBound)
-            slateNames.append("iso")
-            slateContents.append("\(v)")
-        }
-        if let loc = locate("wkel"), loc.payload.count == 4 {
-            let v = readUInt32BE(window, at: loc.payload.lowerBound)
-            slateNames.append("white_balance_kelvin")
-            slateContents.append("\(v)")
-        }
-        if let loc = locate("wtin"), loc.payload.count == 2 {
-            let bits = (UInt16(window[loc.payload.lowerBound]) << 8)
-                     |  UInt16(window[loc.payload.lowerBound + 1])
-            slateNames.append("white_balance_tint")
-            slateContents.append("\(Int16(bitPattern: bits))")
-        }
+        if let s = payload.shutterAngle { slateNames.append("shutter_angle"); slateContents.append(s) }
+        if let s = payload.aperture { slateNames.append("aperture"); slateContents.append(s) }
+        if let s = payload.focalLength { slateNames.append("focal_length"); slateContents.append(s) }
+        if let s = payload.focusDistance { slateNames.append("focus_distance"); slateContents.append(s) }
+        if let v = payload.iso { slateNames.append("iso"); slateContents.append("\(v)") }
+        if let v = payload.whiteBalanceKelvin { slateNames.append("white_balance_kelvin"); slateContents.append("\(v)") }
+        if let v = payload.whiteBalanceTint { slateNames.append("white_balance_tint"); slateContents.append("\(v)") }
 
         guard !slateNames.isEmpty else { return }
         updateCamera(&metadata) {
@@ -2721,7 +2753,7 @@ public struct MP4Parser: Sendable {
     /// Read the FourCC of the first sample entry from an stsd box payload,
     /// skipping the FullBox version+flags and entry_count. Used to gate
     /// BRAW-specific extraction off the codec ID without re-walking stsd.
-    private static func parseFirstStsdCodec(_ stsdData: Data) -> String? {
+    internal static func parseFirstStsdCodec(_ stsdData: Data) -> String? {
         var reader = BinaryReader(data: stsdData)
         _ = try? reader.readBytes(4) // version+flags
         _ = try? reader.readUInt32BigEndian() // entry_count
@@ -2733,7 +2765,7 @@ public struct MP4Parser: Sendable {
 
     /// Big-endian uint32 read from a Data slice at an absolute index.
     /// Caller guarantees `index + 4 <= data.endIndex`.
-    private static func readUInt32BE(_ data: Data, at index: Data.Index) -> UInt32 {
+    internal static func readUInt32BE(_ data: Data, at index: Data.Index) -> UInt32 {
         return (UInt32(data[index]) << 24)
             | (UInt32(data[index + 1]) << 16)
             | (UInt32(data[index + 2]) << 8)
@@ -3092,7 +3124,7 @@ public struct MP4Parser: Sendable {
     }
 
     /// Running-sum sample start ticks (cumulative sample_delta in stts).
-    private static func sttsSampleStartTicks(_ data: Data) -> [UInt64]? {
+    internal static func sttsSampleStartTicks(_ data: Data) -> [UInt64]? {
         guard data.count >= 8 else { return nil }
         var reader = BinaryReader(data: data)
         _ = try? reader.readBytes(4)
@@ -3117,7 +3149,7 @@ public struct MP4Parser: Sendable {
 
     /// Per-sample sizes from stsz. Handles both uniform size and per-sample
     /// size modes.
-    private static func stszSampleSizes(_ data: Data) -> [Int]? {
+    internal static func stszSampleSizes(_ data: Data) -> [Int]? {
         guard data.count >= 12 else { return nil }
         var reader = BinaryReader(data: data)
         _ = try? reader.readBytes(4)
@@ -3139,7 +3171,7 @@ public struct MP4Parser: Sendable {
     /// stsc entries: [first_chunk, samples_per_chunk, sample_description_index].
     /// Return just the first_chunk / samples_per_chunk pairs — the description
     /// index is irrelevant for chapter text, which always uses entry 1.
-    private static func stscSamplesPerChunk(_ data: Data) -> [(firstChunk: Int, samplesPerChunk: Int)] {
+    internal static func stscSamplesPerChunk(_ data: Data) -> [(firstChunk: Int, samplesPerChunk: Int)] {
         guard data.count >= 8 else { return [] }
         var reader = BinaryReader(data: data)
         _ = try? reader.readBytes(4)
@@ -3155,7 +3187,7 @@ public struct MP4Parser: Sendable {
     }
 
     /// All stco chunk offsets.
-    private static func stcoOffsets(_ data: Data) -> [UInt32] {
+    internal static func stcoOffsets(_ data: Data) -> [UInt32] {
         guard data.count >= 8 else { return [] }
         var reader = BinaryReader(data: data)
         _ = try? reader.readBytes(4)
@@ -3170,7 +3202,7 @@ public struct MP4Parser: Sendable {
     }
 
     /// All co64 chunk offsets.
-    private static func co64Offsets(_ data: Data) -> [UInt64] {
+    internal static func co64Offsets(_ data: Data) -> [UInt64] {
         guard data.count >= 8 else { return [] }
         var reader = BinaryReader(data: data)
         _ = try? reader.readBytes(4)
@@ -3190,7 +3222,7 @@ public struct MP4Parser: Sendable {
     ///
     /// When stsc is empty (single-chunk case typical of chapter tracks), every
     /// sample lives in chunk 0.
-    private static func sampleFileOffsets(
+    internal static func sampleFileOffsets(
         sampleCount: Int,
         sizes: [Int],
         samplesPerChunk: [(firstChunk: Int, samplesPerChunk: Int)],

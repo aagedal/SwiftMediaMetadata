@@ -6,6 +6,56 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.6.0] — 2026-05-02
+
+### Added
+
+- **Per-frame BRAW metadata export → CSV (`swift-exif braw-frames`)** —
+  new CLI subcommand and public reader that walk every frame of a BRAW
+  clip. Two streams:
+  - **Attributes** (default): one row per video frame with the seven
+    `bmdf` fields (shutter angle, aperture, focal length, focus
+    distance, ISO, white-balance Kelvin, white-balance tint) plus
+    `frame_index` and `timestamp_s`. Columns are emitted as numeric
+    where possible (suffixes `°`, `f`, `mm` stripped) so the CSV
+    graphs directly without a preprocess step.
+  - **`gyroscope` / `accelerometer`**: per-sample IMU vec3 from the
+    BMD `mebx` motion-data tracks. Decoded by reverse-engineering the
+    20-byte sample format `[size BE][key id "mogy"/"moac"][3× float32 LE]`
+    — the float payload is little-endian, a BMD-specific quirk inside
+    an otherwise big-endian container. Sample rate ≈ 1 kHz; gravity is
+    visible on the up-axis at record-start (e.g. ~9.89 m/s² on +Y for
+    Cinema 6K samples).
+
+  New public API:
+  - `BRAWFrameAttribute`, `BRAWMotionSample`, `BRAWMotionStream` types.
+  - `BRAWFrameReader.readAttributes(from:)` — `[BRAWFrameAttribute]`.
+  - `BRAWFrameReader.readMotionSamples(from:stream:)` — `[BRAWMotionSample]`.
+
+  CLI:
+  ```
+  swift-exif braw-frames clip.braw                       # attrs CSV → stdout
+  swift-exif braw-frames -s gyroscope clip.braw -o g.csv # IMU CSV → file
+  swift-exif braw-frames -s accelerometer clip.braw
+  ```
+
+  Implementation lives in
+  [`Sources/SwiftExif/Video/BRAWFrameReader.swift`](Sources/SwiftExif/Video/BRAWFrameReader.swift)
+  and [`Sources/CLI/BRAWFramesCommand.swift`](Sources/CLI/BRAWFramesCommand.swift).
+  Reuses `MP4Parser`'s stbl walkers (`stcoOffsets` / `co64Offsets` /
+  `sampleFileOffsets` / `sttsSampleStartTicks` / `stszSampleSizes` /
+  `stscSamplesPerChunk`) — all promoted from `private` to `internal`.
+  `parseBRAWFirstFrameAttributes` was refactored to delegate to a
+  shared `decodeBRAWFrameHeader(_:)` so the slate path (frame 0 only)
+  and the new full-walk path can't drift apart.
+
+  Coverage: five new tests in
+  [`Tests/SwiftExifTests/Video/BRAWFrameReaderTests.swift`](Tests/SwiftExifTests/Video/BRAWFrameReaderTests.swift)
+  — multi-frame walk, non-BRAW-throws, gyroscope round-trip,
+  accelerometer-absent (returns empty), and key-id-mismatch (partial
+  read terminates cleanly). Verified against three real BRAW samples
+  (Cinema 6K `brhq`, PYXIS 6K `brst`, PYXIS 12K `brlt`).
+
 ## [1.5.1] — 2026-05-01
 
 ### Added
