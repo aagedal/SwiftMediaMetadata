@@ -81,8 +81,8 @@ final class Phase26TagsFromFileEndToEndTests: CLITestCase {
 
         let read = try CLITestHarness.run(["read", "--format", "json", dest.path])
         XCTAssertEqual(read.exitCode, 0, "stderr: \(read.stderr)")
-        XCTAssertTrue(read.stdout.contains("XMP-dc:title"),
-                      "XMP-dc:title missing from:\n\(read.stdout)")
+        XCTAssertTrue(read.stdout.contains("XMP-dc:Title"),
+                      "XMP-dc:Title missing from:\n\(read.stdout)")
         XCTAssertTrue(read.stdout.contains("Wire photo"))
         XCTAssertTrue(read.stdout.contains("A short caption."))
     }
@@ -114,8 +114,8 @@ final class Phase26TagsFromFileEndToEndTests: CLITestCase {
         XCTAssertEqual(read.exitCode, 0, "stderr: \(read.stderr)")
         XCTAssertTrue(read.stdout.contains("Just the headline"))
         // No description should have been written.
-        XCTAssertFalse(read.stdout.contains("XMP-dc:description"),
-                       "unexpected XMP-dc:description in:\n\(read.stdout)")
+        XCTAssertFalse(read.stdout.contains("XMP-dc:Description"),
+                       "unexpected XMP-dc:Description in:\n\(read.stdout)")
     }
 }
 #endif
