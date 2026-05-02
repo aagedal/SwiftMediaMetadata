@@ -317,11 +317,14 @@ public struct ARRIJSONParser: Sendable {
         if let n = value as? NSNumber {
             // NSNumber covers Int, Double, and Bool — we already handled Bool
             // above; check the underlying type to avoid stringifying integers
-            // as "12.0".
-            if CFNumberIsFloatType(n) {
-                return String(format: "%g", n.doubleValue)
+            // as "12.0". CoreFoundation's CFNumberIsFloatType is Apple-only,
+            // so detect integer-ness via Swift cast order: JSONSerialization
+            // stores parsed `12` as a NSNumber that bridges to Int64, while
+            // `12.5` (or any fractional) bridges only to Double.
+            if let i = value as? Int64 {
+                return String(i)
             }
-            return n.stringValue
+            return String(format: "%g", n.doubleValue)
         }
         if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
            let s = String(data: data, encoding: .utf8) {
