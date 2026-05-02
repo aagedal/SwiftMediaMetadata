@@ -170,7 +170,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil {
@@ -215,7 +215,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
@@ -297,6 +297,7 @@ public struct VideoMetadata: Sendable {
         case .arriraw: return "ARRIRAW (MXF)"
         case .r3d: return "RED RAW"
         case .nikonRaw: return "Nikon RAW"
+        case .xocn: return "Sony X-OCN (MXF)"
         }
     }
 
@@ -332,7 +333,7 @@ public struct VideoMetadata: Sendable {
         switch format {
         case .mp4, .mov, .m4v:
             return try MP4Writer.write(self, to: original)
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn:
             throw MetadataError.writeNotSupported("Writing is not supported for \(format.rawValue.uppercased()) containers")
         }
     }

@@ -379,6 +379,21 @@ public struct MXFReader: Sendable {
             metadata.bitRate = Int(Double(containerBytes) * 8.0 / dur)
         }
 
+        // Format promotion: any MXF clip whose picture essence is Sony X-OCN
+        // (codec UL matched in `codecNameForUL`) or whose NRT XML labels the
+        // clip with an X-OCN videoCodec gets promoted from `.mxf` to
+        // `.xocn`. Mirrors how MP4Parser promotes Nikon NR3D MP4 to
+        // `.nikonRaw` so downstream filtering can target Sony cinema RAW
+        // without inspecting codec strings.
+        let codecIsXocn = metadata.videoStreams.contains(where: { $0.codec == "xocn" })
+        let labelIsXocn: Bool = {
+            guard let label = metadata.camera?.videoCodecLabel else { return false }
+            return label.uppercased().contains("X-OCN")
+        }()
+        if codecIsXocn || labelIsXocn {
+            metadata.format = .xocn
+        }
+
         return metadata
     }
 
@@ -922,6 +937,28 @@ public struct MXFReader: Sendable {
            ul[s + 12] == 0x02, ul[s + 13] == 0x01,
            ul[s + 14] == 0x01, ul[s + 15] == 0x03 {
             return ("arriraw", "ARRIRAW")
+        }
+
+        // Sony X-OCN: vendor-private essence-coding UL in the Sony cinema-RAW
+        // sub-registry. The full UL observed on F55/VENICE-family clips is
+        //   060e2b34.0401.0106.0e06.0401.0206.06xx
+        // where byte 15 is the codec-class variant
+        // (LT=0x01 — confirmed; ST/XT inferred from the NRT `videoCodec`
+        // attribute and Sony's published codec ladder).
+        if ul[s + 0] == 0x06, ul[s + 1] == 0x0E, ul[s + 2] == 0x2B, ul[s + 3] == 0x34,
+           ul[s + 4] == 0x04, ul[s + 5] == 0x01,
+           ul[s + 8] == 0x0E, ul[s + 9] == 0x06,
+           ul[s + 10] == 0x04, ul[s + 11] == 0x01,
+           ul[s + 12] == 0x02 {
+            let variant = ul[s + 15]
+            let longName: String
+            switch variant {
+            case 0x01: longName = "Sony X-OCN LT"
+            case 0x02: longName = "Sony X-OCN ST"
+            case 0x03: longName = "Sony X-OCN XT"
+            default:   longName = "Sony X-OCN"
+            }
+            return ("xocn", longName)
         }
 
         // Video registry (SMPTE 335 / RP 224 / RP 2008).

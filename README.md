@@ -22,6 +22,7 @@ A native Swift library for reading and writing image and video metadata — Exif
 | RED RAW (.R3D) | Yes | — | Clip-header metadata from RED's own length-prefixed `RED2`/`RED1` atom: resolution (from `rdi`), audio sample rate (from `rda`), original capture frame rate, plus the TLV slate — camera brain + sensor, body serial, lens model, firmware, ISO, color temperature (Kelvin), crop area (`WxH+X+Y`), record/playback timecodes, reel + take, video format ("8K 16:9"), quality preset, storage media + serial + format date/time, original camera filename, focus distance. Tag IDs match ExifTool's `Image::ExifTool::Red` table |
 | Nikon RAW Video (N-RAW) | Yes | — | Detected by `ftyp niko` brand + `NR3D` codec FourCC. Nikon Z8/Z9 ship N-RAW with a `.R3D` extension as part of the post-acquisition "RED RAW" branding, but the bitstream is wholly unrelated to RED's REDCODE — promoted to `format = .nikonRaw` so callers can disambiguate. All standard MP4 metadata (resolution, timecode, audio, color) reads through the QuickTime path |
 | MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
+| Sony X-OCN (.mxf) | Yes | — | MXF wrapper detected via picture-essence UL (`060e2b34.0401.0106.0e06.0401.0206.06xx`) or NRT `videoCodec` label. Promotes `format = .xocn` with codec long-names `Sony X-OCN LT/ST/XT`. Deepens NRT AcquisitionRecord harvest: every `CameraUnitMetadataSet`, `SonyF65CameraMetadataSet`, `CameraPostureMetadataSet`, `LensUnitMetadataSet` `<Item>` is captured into a flat `acquisitionGroups` dictionary, with curated typed fields on `CameraMetadata` for ISO, exposure index, shutter angle/time, ND filter, white balance, capture/look gamma + color, raw black/gray/white code values, monitoring LUT, sensor effective size, camera tilt/roll. ASC CDL Slope/Offset/Power/Saturation from `<ExtendedContents>` parsed into `ascCDL` (identity transforms suppressed). Verified against Sony F55 8.6K 3:2 X-OCN LT clips |
 | Matroska (.mkv) | Yes | — | Stream info (codec, profile, fps, dimensions, bit depth, chroma, chroma location, color, pixel format) decoded from both `Tracks` and `CodecPrivate` (hvcC/av1C/avcC), Segment-level `COMMENT`/`DESCRIPTION` tags, audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
 | WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) + subtitle tracks |
 | AVI (RIFF) | Yes | — | Stream info (codec, fps, dimensions, bit depth) + audio (codec, sample rate, channels), INFO tags |
@@ -158,7 +159,7 @@ no AVFoundation, no external dependencies.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `format` | `VideoFormat` | `.mp4`, `.mov`, `.m4v`, `.mxf`, `.mkv`, `.webm`, `.avi`, `.mpg` |
+| `format` | `VideoFormat` | `.mp4`, `.mov`, `.m4v`, `.mxf`, `.xocn`, `.mkv`, `.webm`, `.avi`, `.mpg`, `.braw`, `.arriraw`, `.r3d`, `.nikonRaw` |
 | `formatLongName` | `String?` | Human-readable container name (`"QuickTime / MOV"`, `"MP4 (MPEG-4 Part 14)"`, `"Matroska"`, `"WebM"`, …) — matches ffprobe `format_long_name` |
 | `fileSize` | `Int64?` | File size in bytes |
 | `duration` | `TimeInterval?` | Total playback duration in seconds |

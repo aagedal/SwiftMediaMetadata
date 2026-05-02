@@ -14,4 +14,5 @@ public enum VideoFormat: String, Sendable, Equatable {
     case arriraw
     case r3d
     case nikonRaw
+    case xocn
 }

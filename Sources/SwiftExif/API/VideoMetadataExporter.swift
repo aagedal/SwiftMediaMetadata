@@ -162,6 +162,72 @@ public struct VideoMetadataExporter: Sendable {
             if let date = cam.creationDate {
                 dict["CreationDateValue"] = ISO8601DateFormatter().string(from: date)
             }
+
+            // X-OCN / cinema-camera fields. NRT AcquisitionRecord items map
+            // 1:1 onto these tag names (PascalCase form of the Sony Item
+            // attribute name), so a downstream consumer can grep for the
+            // same identifier as the camera writes.
+            if let v = cam.videoCodecLabel              { dict["VideoCodecLabel"]              = v }
+            if let v = cam.pixelAspect                  { dict["PixelAspect"]                  = v }
+            if let v = cam.exposureIndex                { dict["ExposureIndexOfPhotoMeter"]    = v }
+            if let v = cam.isoSensitivity               { dict["ISOSensitivity"]               = v }
+            if let v = cam.shutterAngle                 { dict["ShutterAngle"]                 = v }
+            if let v = cam.shutterTimeMs                { dict["ShutterTimeMs"]                = v }
+            if let v = cam.ndFilter                     { dict["NeutralDensityFilterWheelSetting"] = v }
+            if let v = cam.whiteBalanceK                { dict["WhiteBalance"]                 = v }
+            if let v = cam.tintCorrection               { dict["TintCorrection"]               = v }
+            if let v = cam.autoExposureMode             { dict["AutoExposureMode"]             = v }
+            if let v = cam.autoWhiteBalanceMode         { dict["AutoWhiteBalanceMode"]         = v }
+            if let v = cam.imageSensorReadoutMode       { dict["ImageSensorReadoutMode"]       = v }
+            if let v = cam.imageSensorEffectiveWidth    { dict["ImageSensorEffectiveWidth"]    = v }
+            if let v = cam.imageSensorEffectiveHeight   { dict["ImageSensorEffectiveHeight"]   = v }
+            if let v = cam.gammaForCDL                  { dict["GammaForCDL"]                  = v }
+            if let v = cam.cameraMasterGainDb           { dict["CameraMasterGainAdjustmentDb"] = v }
+            if let v = cam.electricalExtenderMagnification { dict["ElectricalExtenderMagnification"] = v }
+            if let v = cam.cameraAttributes             { dict["CameraAttributes"]             = v }
+
+            if let v = cam.gammaForLook                 { dict["GammaForLook"]                 = v }
+            if let v = cam.colorForLook                 { dict["ColorForLook"]                 = v }
+            if let v = cam.monitoringBaseCurve          { dict["MonitoringBaseCurve"]          = v }
+            if let v = cam.monitoringCharacteristics    { dict["MonitoringCharacteristics"]    = v }
+            if let v = cam.monitoringColorPrimaries     { dict["MonitoringColorPrimaries"]     = v }
+            if let v = cam.monitoringCodingEquations    { dict["MonitoringCodingEquations"]    = v }
+            if let v = cam.monitoringDescriptions       { dict["MonitoringDescriptions"]       = v }
+            if let v = cam.preCDLTransform              { dict["PreCDLTransform"]              = v }
+            if let v = cam.postCDLTransform             { dict["PostCDLTransform"]             = v }
+            if let v = cam.lookProcessBaked             { dict["LookProcessBaked"]             = v }
+            if let v = cam.rawBlackCodeValue            { dict["RawBlackCodeValue"]            = v }
+            if let v = cam.rawGrayCodeValue             { dict["RawGrayCodeValue"]             = v }
+            if let v = cam.rawWhiteCodeValue            { dict["RawWhiteCodeValue"]            = v }
+            if let v = cam.effectiveMarkerCoverage      { dict["EffectiveMarkerCoverage"]      = v }
+            if let v = cam.effectiveMarkerAspectRatio   { dict["EffectiveMarkerAspectRatio"]   = v }
+            if let v = cam.activeAreaAspectRatio        { dict["ActiveAreaAspectRatio"]        = v }
+            if let v = cam.imageOrientation             { dict["ImageOrientation"]             = v }
+            if let v = cam.cameraProcessDiscriminationCode { dict["CameraProcessDiscriminationCode"] = v }
+
+            if let v = cam.cameraTiltAngle              { dict["CameraTiltAngle"]              = v }
+            if let v = cam.cameraRollAngle              { dict["CameraRollAngle"]              = v }
+
+            if let v = cam.irisFNumber                  { dict["IrisFNumber"]                  = v }
+            if let v = cam.irisTNumber                  { dict["IrisTNumber"]                  = v }
+            if let v = cam.focusPositionMeters          { dict["FocusPositionFromImagePlane"]  = v }
+            if let v = cam.lensZoom35mmEquivalentMm     { dict["LensZoom35mmStillCameraEquivalent"] = v }
+            if let v = cam.lensZoomActualFocalLengthMm  { dict["LensZoomActualFocalLength"]    = v }
+            if let v = cam.lensAttributes               { dict["LensAttributes"]               = v }
+            if let v = cam.videoFrameAspectRatio        { dict["VideoFrameAspectRatio"]        = v }
+
+            if let cdl = cam.ascCDL {
+                dict["ASCCDL"] = [
+                    "Slope":      cdl.slope,
+                    "Offset":     cdl.offset,
+                    "Power":      cdl.power,
+                    "Saturation": cdl.saturation,
+                ]
+            }
+
+            if !cam.acquisitionGroups.isEmpty {
+                dict["AcquisitionRecord"] = cam.acquisitionGroups
+            }
         }
 
         if let labeling = metadata.mcaAudioLabeling, !labeling.isEmpty {

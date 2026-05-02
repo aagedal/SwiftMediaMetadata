@@ -10,6 +10,81 @@ the CLI; the library target follows the same numbering.
 
 ### Added
 
+- **Sony X-OCN RAW metadata** — read clip-level metadata from Sony VENICE /
+  VENICE 2 / BURANO / F55 / F65 cinema cameras shooting X-OCN to MXF
+  (OP-1a). X-OCN files are valid MXF containers, so the existing MXF
+  reader already handled the picture/sound essence, timecode, MCA audio
+  labelling, and C2PA — this release deepens the Sony NRT (RDD-18)
+  AcquisitionRecord harvest and adds a dedicated `format = .xocn`
+  promotion. Surfaces:
+  - `format = .xocn`, `formatLongName = "Sony X-OCN (MXF)"`, promoted
+    from `.mxf` when the picture-essence UL matches the Sony cinema-RAW
+    sub-registry (`060e2b34.0401.0106.0e06.0401.0206.06xx`) **or** the
+    NRT `<VideoFrame videoCodec="…X-OCN…">` label is present.
+  - `videoCodec = "xocn"` plus a per-stream `codecName` of
+    `"Sony X-OCN LT"` / `"Sony X-OCN ST"` / `"Sony X-OCN XT"` resolved
+    from byte 15 of the picture-essence UL (LT confirmed against F55
+    samples; ST/XT inferred from the NRT label and Sony's published
+    codec ladder).
+  - `camera.videoCodecLabel` — raw NRT codec string
+    (e.g. `"F55_X-OCN_LT_8.6K_3:2"`).
+  - `camera.pixelAspect` — from `<VideoLayout pixelAspect="…">`.
+  - **CameraUnitMetadataSet** typed fields:
+    `exposureIndex`, `isoSensitivity`, `shutterAngle` (deg),
+    `shutterTimeMs`, `ndFilter`, `whiteBalanceK`, `tintCorrection`,
+    `autoExposureMode`, `autoWhiteBalanceMode`,
+    `imageSensorReadoutMode`, `imageSensorEffectiveWidth/Height` (µm),
+    `gammaForCDL`, `cameraMasterGainDb`,
+    `electricalExtenderMagnification`, `cameraAttributes`.
+  - **SonyF65CameraMetadataSet** typed fields (also written by F55 /
+    VENICE / BURANO):
+    `gammaForLook`, `colorForLook`, `monitoringBaseCurve`,
+    `monitoringCharacteristics`, `monitoringColorPrimaries`,
+    `monitoringCodingEquations`, `monitoringDescriptions`,
+    `preCDLTransform`, `postCDLTransform`, `lookProcessBaked`,
+    `rawBlackCodeValue`, `rawGrayCodeValue`, `rawWhiteCodeValue`,
+    `effectiveMarkerCoverage`, `effectiveMarkerAspectRatio`,
+    `activeAreaAspectRatio`, `imageOrientation`,
+    `cameraProcessDiscriminationCode`.
+  - **CameraPostureMetadataSet**: `cameraTiltAngle`, `cameraRollAngle`
+    (signed degrees).
+  - **ASC CDL** — `<ExtendedContents><cdl:ColorCorrectionCollection>`
+    Slope/Offset/Power/Saturation parsed into a structured
+    `ASCCDLValues`. Identity transforms (Sony's default when no on-set
+    grade was applied) are suppressed so the field doesn't pollute every
+    clip.
+  - **Lens** typed fields (LensUnitMetadataSet — VENICE / BURANO / FX9
+    with a smart lens populate these): `irisFNumber`, `irisTNumber`,
+    `focusPositionMeters`, `lensZoom35mmEquivalentMm`,
+    `lensZoomActualFocalLengthMm`, `lensAttributes` (Sony-private lens
+    ID code; `"Unknown"` placeholder filtered out).
+  - `videoFrameAspectRatio` from `<VideoLayout aspectRatio="…">`.
+  - **Body identification fallback** for Sony cinema NRT v2.00 schema —
+    VENICE / VENICE 2 / BURANO bodies omit the `<Device>` element and
+    carry the body identity in `CameraUnitMetadataSet.CameraAttributes`
+    (`"<MPC-CODE> <SERIAL> Version<X.YY>"`). When `<Device>` is absent,
+    the leading MPC code is decoded into a friendly model name and
+    `deviceManufacturer` / `deviceModelName` / `deviceSerialNumber` are
+    back-filled. Mapping confirmed against on-set NRT samples:
+    `MPC-3628` → VENICE, `MPC-3633` → VENICE 2, `MPC-2610` → BURANO.
+    Explicit `<Device>` (FX9 / Alpha series) always wins.
+  - **Catch-all** `acquisitionGroups: [String: [String: String]]` —
+    every NRT `<Item>` keyed by its parent `<Group>`, so unknown future
+    Sony items still surface even before they're hand-typed.
+  - JSON / table exporters emit the typed fields under their NRT-native
+    PascalCase names (e.g. `ExposureIndexOfPhotoMeter`,
+    `RawWhiteCodeValue`, `GammaForLook`) plus a nested `ASCCDL` block
+    and an `AcquisitionRecord` dictionary.
+
+  Verified against Sony F55 X-OCN LT 8.6K 3:2 samples (24p, 4-channel
+  PCM 24-bit 48 kHz, anamorphic 1.5:1) — the picture descriptor reads
+  the same 8640×5760 / 13014×5784 display geometry ExifTool reports,
+  and every NRT acquisition group decodes to typed fields plus a
+  faithful catch-all. Implementation reuses the existing
+  [`MXFReader`](Sources/SwiftExif/Video/MXFReader.swift) and
+  [`NRTXMLParser`](Sources/SwiftExif/Video/NRTXMLParser.swift) — no new
+  reader file.
+
 - **RED RAW (.R3D) container metadata** — read clip-level metadata from
   RED KOMODO-X / V-RAPTOR / DSMC2 R3D files. Parses RED's own
   length-prefixed `RED2` (and `RED1`) clip-header atom, decodes the

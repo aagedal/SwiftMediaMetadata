@@ -123,6 +123,193 @@ final class VideoContainerTests: XCTestCase {
         XCTAssertTrue(cam.isEmpty)
     }
 
+    /// Sony X-OCN clips (F55/F65/VENICE/BURANO) embed a much richer NRT XML
+    /// document than the FX9 sample above — multiple AcquisitionRecord
+    /// groups, ASC CDL, VideoFrame@videoCodec. This test mirrors the shape
+    /// of the F55 clips at `/Users/traag222/Movies/TestVideo/Sony RAW/Scene9`
+    /// to lock in our depth of harvest.
+    func testParseSonyXOCNNRTXML() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta:ver.2.00">
+          <Device manufacturer="Sony" modelName="MPC-3628" serialNo="0003077"/>
+          <CreationDate value="2022-06-22T19:16:01Z"/>
+          <VideoFormat>
+            <VideoFrame captureFps="24p" formatFps="24p" videoCodec="F55_X-OCN_LT_8.6K_3:2"/>
+            <VideoLayout numOfVerticalLine="5760" pixel="8640" pixelAspect="1.5:1"/>
+          </VideoFormat>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="ExposureIndexOfPhotoMeter" value="3200"/>
+              <Item name="ISOSensitivity" value="3200"/>
+              <Item name="ShutterSpeed_Angle" value="173.00deg"/>
+              <Item name="ShutterSpeed_Time" value="20ms"/>
+              <Item name="NeutralDensityFilterWheelSetting" value="32"/>
+              <Item name="WhiteBalance" value="8000"/>
+              <Item name="TintCorrection" value="0"/>
+              <Item name="CaptureGammaEquation" value="scene-linear"/>
+              <Item name="GammaForCDL" value="rec709"/>
+            </Group>
+            <Group name="SonyF65CameraMetadataSet">
+              <Item name="GammaForLook" value="s-log3-cine"/>
+              <Item name="ColorForLook" value="s-gamut3-cine"/>
+              <Item name="PreCDLTransform" value="LUT:SL3SG3Ctos709.cube"/>
+              <Item name="LookProcessBaked" value="false"/>
+              <Item name="RawBlackCodeValue" value="512"/>
+              <Item name="RawGrayCodeValue" value="1504"/>
+              <Item name="RawWhiteCodeValue" value="5472"/>
+            </Group>
+            <Group name="CameraPostureMetadataSet">
+              <Item name="CameraTiltAngle" value="-2.3deg"/>
+              <Item name="CameraRollAngle" value="0.7deg"/>
+            </Group>
+          </AcquisitionRecord>
+          <ExtendedContents>
+            <cdl:ColorCorrectionCollection xmlns:cdl="urn:ASC:CDL:v1.01">
+              <cdl:ColorCorrection id=" ">
+                <cdl:SOPNode>
+                  <cdl:Slope>1.1000 1.0500 0.9500</cdl:Slope>
+                  <cdl:Offset>0.0100 0.0000 -0.0050</cdl:Offset>
+                  <cdl:Power>0.9800 1.0000 1.0200</cdl:Power>
+                </cdl:SOPNode>
+                <cdl:SatNode>
+                  <cdl:Saturation>1.1000</cdl:Saturation>
+                </cdl:SatNode>
+              </cdl:ColorCorrection>
+            </cdl:ColorCorrectionCollection>
+          </ExtendedContents>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+
+        // VideoFrame@videoCodec + VideoLayout
+        XCTAssertEqual(cam.videoCodecLabel, "F55_X-OCN_LT_8.6K_3:2")
+        XCTAssertEqual(cam.pixelAspect, "1.5:1")
+
+        // CameraUnitMetadataSet
+        XCTAssertEqual(cam.exposureIndex, 3200)
+        XCTAssertEqual(cam.isoSensitivity, 3200)
+        XCTAssertEqual(cam.shutterAngle, 173.0)
+        XCTAssertEqual(cam.shutterTimeMs, 20.0)
+        XCTAssertEqual(cam.ndFilter, "32")
+        XCTAssertEqual(cam.whiteBalanceK, 8000)
+        XCTAssertEqual(cam.tintCorrection, 0)
+        XCTAssertEqual(cam.captureGammaEquation, "scene-linear")
+        XCTAssertEqual(cam.gammaForCDL, "rec709")
+
+        // SonyF65CameraMetadataSet
+        XCTAssertEqual(cam.gammaForLook, "s-log3-cine")
+        XCTAssertEqual(cam.colorForLook, "s-gamut3-cine")
+        XCTAssertEqual(cam.preCDLTransform, "LUT:SL3SG3Ctos709.cube")
+        XCTAssertEqual(cam.lookProcessBaked, false)
+        XCTAssertEqual(cam.rawBlackCodeValue, 512)
+        XCTAssertEqual(cam.rawGrayCodeValue, 1504)
+        XCTAssertEqual(cam.rawWhiteCodeValue, 5472)
+
+        // CameraPostureMetadataSet
+        XCTAssertEqual(cam.cameraTiltAngle, -2.3)
+        XCTAssertEqual(cam.cameraRollAngle, 0.7)
+
+        // Catch-all dictionary
+        XCTAssertEqual(
+            cam.acquisitionGroups["SonyF65CameraMetadataSet"]?["PreCDLTransform"],
+            "LUT:SL3SG3Ctos709.cube"
+        )
+        XCTAssertEqual(
+            cam.acquisitionGroups["CameraPostureMetadataSet"]?["CameraTiltAngle"],
+            "-2.3deg"
+        )
+
+        // ASC CDL — non-identity, so it surfaces.
+        let cdl = try XCTUnwrap(cam.ascCDL)
+        XCTAssertEqual(cdl.slope, [1.1, 1.05, 0.95])
+        XCTAssertEqual(cdl.offset, [0.01, 0.0, -0.005])
+        XCTAssertEqual(cdl.power, [0.98, 1.0, 1.02])
+        XCTAssertEqual(cdl.saturation, 1.1)
+        XCTAssertFalse(cdl.isIdentity)
+    }
+
+    /// VENICE / VENICE 2 / BURANO bodies omit the `<Device>` element from
+    /// their NRT v2.00 XML and instead encode the body identity in the
+    /// `CameraAttributes` Item under `CameraUnitMetadataSet`. We back-fill
+    /// `deviceManufacturer` / `deviceModelName` / `deviceSerialNumber`
+    /// from that string when no `<Device>` is present.
+    func testCameraAttributesBackfillsCinemaBody() throws {
+        let burano = """
+        <NonRealTimeMeta>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="CameraAttributes" value="MPC-2610 0000048 Version1.00"/>
+            </Group>
+          </AcquisitionRecord>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(burano.utf8))
+        XCTAssertEqual(cam.deviceManufacturer, "Sony")
+        XCTAssertEqual(cam.deviceModelName, "BURANO")
+        XCTAssertEqual(cam.deviceSerialNumber, "0000048")
+        XCTAssertEqual(cam.cameraAttributes, "MPC-2610 0000048 Version1.00")
+    }
+
+    func testExplicitDeviceWinsOverCameraAttributes() throws {
+        // FX9-style XML carries both <Device> and CameraAttributes; the
+        // explicit Device must take precedence.
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="PXW-FX9" serialNo="explicit-1"/>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="CameraAttributes" value="MPC-3628 0003077 Version1.03"/>
+            </Group>
+          </AcquisitionRecord>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertEqual(cam.deviceModelName, "PXW-FX9")
+        XCTAssertEqual(cam.deviceSerialNumber, "explicit-1")
+    }
+
+    func testUnknownMPCCodeLeavesModelUnset() throws {
+        let xml = """
+        <NonRealTimeMeta>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="CameraAttributes" value="MPC-9999 abc Version0.00"/>
+            </Group>
+          </AcquisitionRecord>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertNil(cam.deviceModelName, "Unknown MPC code must not back-fill modelName")
+        XCTAssertNil(cam.deviceManufacturer, "Unknown MPC code must not back-fill manufacturer")
+        // Serial number is still derivable (second token), regardless of
+        // whether we recognise the model code.
+        XCTAssertEqual(cam.deviceSerialNumber, "abc")
+    }
+
+    /// Identity ASC CDL (Sony's default when no on-set grade is applied)
+    /// must be suppressed so the field doesn't pollute every X-OCN clip.
+    func testIdentityASCCDLSuppressed() throws {
+        let xml = """
+        <NonRealTimeMeta>
+          <ExtendedContents>
+            <cdl:ColorCorrectionCollection xmlns:cdl="urn:ASC:CDL:v1.01">
+              <cdl:ColorCorrection>
+                <cdl:SOPNode>
+                  <cdl:Slope>1.0000 1.0000 1.0000</cdl:Slope>
+                  <cdl:Offset>0.0000 0.0000 0.0000</cdl:Offset>
+                  <cdl:Power>1.0000 1.0000 1.0000</cdl:Power>
+                </cdl:SOPNode>
+                <cdl:SatNode><cdl:Saturation>1.0000</cdl:Saturation></cdl:SatNode>
+              </cdl:ColorCorrection>
+            </cdl:ColorCorrectionCollection>
+          </ExtendedContents>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertNil(cam.ascCDL, "Identity ASC CDL must be suppressed")
+    }
+
     // MARK: - Embedded NRT in MP4
 
     func testEmbeddedNRTInMP4UUIDBox() throws {
