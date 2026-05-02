@@ -59,6 +59,58 @@ public struct ISOBMFFBoxReader: Sendable {
         return try parseBoxes(from: &reader, limit: data.count)
     }
 
+    /// Parse top-level boxes from a full file buffer, but skip `mdat` payloads
+    /// without copying them. Returns each box with its original `type` and a
+    /// payload `Data` that is empty for `mdat` (since callers typically only
+    /// want metadata and the `mdat` payload can be gigabytes of media data).
+    ///
+    /// Used by the CR3 image pipeline and the CRM video reader, both of which
+    /// walk the moov tree but never need the bulk media buffer.
+    public static func parseTopLevelBoxesSkippingMdat(_ data: Data) throws -> [ISOBMFFBox] {
+        var reader = BinaryReader(data: data)
+        var boxes: [ISOBMFFBox] = []
+
+        while !reader.isAtEnd && reader.remainingCount >= 8 {
+            let boxStart = reader.offset
+            let size32 = try reader.readUInt32BigEndian()
+            let typeBytes = try reader.readBytes(4)
+            guard let type = String(data: typeBytes, encoding: .isoLatin1) else { break }
+
+            let payloadSize: Int
+            let headerSize: Int
+            if size32 == 1 {
+                let size64 = try reader.readUInt64BigEndian()
+                guard size64 >= 16, size64 <= UInt64(Int.max) else { break }
+                payloadSize = Int(size64) - 16
+                headerSize = 16
+            } else if size32 == 0 {
+                payloadSize = data.count - reader.offset
+                headerSize = 8
+            } else {
+                guard size32 >= 8 else { break }
+                payloadSize = Int(size32) - 8
+                headerSize = 8
+            }
+
+            guard payloadSize >= 0 && reader.offset + payloadSize <= data.count else { break }
+
+            if type == "mdat" {
+                boxes.append(ISOBMFFBox(type: "mdat", data: Data()))
+                try reader.seek(to: reader.offset + payloadSize)
+            } else {
+                let payload = try reader.readBytes(payloadSize)
+                boxes.append(ISOBMFFBox(type: type, data: payload))
+            }
+
+            let expectedEnd = boxStart + headerSize + payloadSize
+            if expectedEnd > reader.offset {
+                try reader.seek(to: min(expectedEnd, data.count))
+            }
+        }
+
+        return boxes
+    }
+
     /// Parse boxes from a BinaryReader up to the given byte limit.
     public static func parseBoxes(from reader: inout BinaryReader, limit: Int) throws -> [ISOBMFFBox] {
         var boxes: [ISOBMFFBox] = []

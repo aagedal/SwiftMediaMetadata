@@ -49,10 +49,10 @@ public struct CR3Writer: Sendable {
             case "uuid":
                 // Check if this is the XMP UUID box
                 let payload = try originalReader.readBytes(payloadSize)
-                if payload.count >= 16 && Data(payload.prefix(16)) == CR3UUID.xmpUUID && xmp != nil {
+                if payload.count >= 16 && Data(payload.prefix(16)) == CanonUUID.xmpUUID && xmp != nil {
                     // Replace XMP
                     let xmpXML = XMPWriter.generateXML(xmp!)
-                    var xmpPayload = Data(CR3UUID.xmpUUID)
+                    var xmpPayload = Data(CanonUUID.xmpUUID)
                     xmpPayload.append(Data(xmpXML.utf8))
                     ISOBMFFBoxWriter.writeBox(&writer, box: ISOBMFFBox(type: "uuid", data: xmpPayload))
                 } else {
@@ -85,10 +85,10 @@ public struct CR3Writer: Sendable {
 
         // If XMP didn't exist before but now does, append new XMP uuid box
         if let xmp, !file.boxes.contains(where: { box in
-            box.type == "uuid" && box.data.count >= 16 && Data(box.data.prefix(16)) == CR3UUID.xmpUUID
+            box.type == "uuid" && box.data.count >= 16 && Data(box.data.prefix(16)) == CanonUUID.xmpUUID
         }) {
             let xmpXML = XMPWriter.generateXML(xmp)
-            var xmpPayload = Data(CR3UUID.xmpUUID)
+            var xmpPayload = Data(CanonUUID.xmpUUID)
             xmpPayload.append(Data(xmpXML.utf8))
             ISOBMFFBoxWriter.writeBox(&writer, box: ISOBMFFBox(type: "uuid", data: xmpPayload))
         }
@@ -106,10 +106,10 @@ public struct CR3Writer: Sendable {
         for child in children {
             if child.type == "uuid" && child.data.count >= 16 {
                 let uuid = child.data.prefix(16)
-                if uuid == CR3UUID.canonMetadata, let exif {
+                if uuid == CanonUUID.canonMetadata, let exif {
                     // Rebuild Canon metadata container with updated CMT boxes
                     let updatedPayload = try rebuildCanonMetadata(Data(child.data.dropFirst(16)), exif: exif)
-                    var uuidPayload = Data(CR3UUID.canonMetadata)
+                    var uuidPayload = Data(CanonUUID.canonMetadata)
                     uuidPayload.append(updatedPayload)
                     ISOBMFFBoxWriter.writeBox(&outputWriter, box: ISOBMFFBox(type: "uuid", data: uuidPayload))
                 } else {

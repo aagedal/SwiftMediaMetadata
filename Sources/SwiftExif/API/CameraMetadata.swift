@@ -141,6 +141,13 @@ public struct CameraMetadata: Sendable, Equatable {
     /// surface even before we hand-type them.
     public var acquisitionGroups: [String: [String: String]]
 
+    /// Canon `CanonColorData` white-balance multipliers, in `[R, G1, G2, B]`
+    /// order. Populated from CTMD record types 7/8/9 in Cinema RAW Light
+    /// (.CRM/.CRL) clips. Deriving correlated color temperature from these
+    /// requires a Canon-model-specific inversion table, which is out of scope
+    /// here — consumers can compute Kelvin if they have the table.
+    public var whiteBalanceCoefficients: [Double]?
+
     public init(
         deviceManufacturer: String? = nil,
         deviceModelName: String? = nil,
@@ -200,7 +207,8 @@ public struct CameraMetadata: Sendable, Equatable {
         lensAttributes: String? = nil,
         videoFrameAspectRatio: String? = nil,
         ascCDL: ASCCDLValues? = nil,
-        acquisitionGroups: [String: [String: String]] = [:]
+        acquisitionGroups: [String: [String: String]] = [:],
+        whiteBalanceCoefficients: [Double]? = nil
     ) {
         self.deviceManufacturer = deviceManufacturer
         self.deviceModelName = deviceModelName
@@ -261,6 +269,7 @@ public struct CameraMetadata: Sendable, Equatable {
         self.videoFrameAspectRatio = videoFrameAspectRatio
         self.ascCDL = ascCDL
         self.acquisitionGroups = acquisitionGroups
+        self.whiteBalanceCoefficients = whiteBalanceCoefficients
     }
 
     /// True when no interesting field was populated.
@@ -294,5 +303,6 @@ public struct CameraMetadata: Sendable, Equatable {
             && lensZoom35mmEquivalentMm == nil && lensZoomActualFocalLengthMm == nil
             && lensAttributes == nil && videoFrameAspectRatio == nil
             && ascCDL == nil && acquisitionGroups.isEmpty
+            && whiteBalanceCoefficients == nil
     }
 }

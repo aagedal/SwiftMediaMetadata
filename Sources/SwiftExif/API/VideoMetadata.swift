@@ -102,6 +102,17 @@ public struct VideoMetadata: Sendable {
     /// PAT entries plus their PMT-described elementary PIDs and any service
     /// name / provider learned from the DVB SDT. Empty for non-TS containers.
     public var mpegPrograms: [MPEGProgram] = []
+    /// Embedded JPEG thumbnail (small — typically 160×120). Populated for
+    /// Canon Cinema RAW Light (CRM/CRL) clips from the THMB box; future
+    /// formats with embedded thumbnails can populate this too.
+    public var embeddedThumbnailJPEG: Data?
+    /// Embedded JPEG preview image (larger — typically 1620×1080). Populated
+    /// for Canon Cinema RAW Light (CRM/CRL) clips from the PRVW box.
+    public var embeddedPreviewJPEG: Data?
+    /// Per-frame timed metadata, when the container carries a per-frame
+    /// metadata stream. Currently populated for Canon Cinema RAW Light from
+    /// the CTMD track; one entry per CTMD sample. Empty for other formats.
+    public var cameraTimeline: [CRMReader.CTMDFrame]
     public var warnings: [String]
 
     /// The original file data (needed for writing back).
@@ -117,6 +128,7 @@ public struct VideoMetadata: Sendable {
         self.streamOrder = []
         self.timecodes = []
         self.chapters = []
+        self.cameraTimeline = []
     }
 
     // MARK: - Reading
@@ -169,6 +181,23 @@ public struct VideoMetadata: Sendable {
             metadata.format = .nikonRaw
             metadata.formatLongName = defaultFormatLongName(.nikonRaw)
         }
+        // Canon Cinema RAW Light (.CRM master + .CRL proxy). Both share an
+        // ISOBMFF container with `ftyp` brand `crx ` and a Canon metadata
+        // UUID inside `moov` (identical to CR3 still images, distinguished
+        // by the CNCV "CanonCRM" prefix). MP4Parser tags them .mp4 first;
+        // we promote based on the brand probe and run the CRM reader to
+        // harvest CMT1-4 + per-frame CTMD records.
+        if (metadata.format == .mp4 || metadata.format == .mov),
+           CRMReader.isCanonCinemaRAW(data) {
+            // .CRL is the lower-bitrate proxy companion to .CRM; the
+            // container layout is identical, only the extension and the
+            // long-name distinguish them.
+            metadata.format = (url.pathExtension.lowercased() == "crl") ? .crl : .crm
+            metadata.formatLongName = defaultFormatLongName(metadata.format)
+            if let result = try? CRMReader.read(data) {
+                CRMReader.merge(result, into: &metadata)
+            }
+        }
         // Retain the source data only for formats we can write back. For
         // read-only formats (MKV, WebM, MXF, AVI, MPEG) holding a reference
         // to a multi-GB Data serves no purpose and prevents the OS from
@@ -176,7 +205,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil {
@@ -216,12 +245,23 @@ public struct VideoMetadata: Sendable {
             metadata.format = .nikonRaw
             metadata.formatLongName = defaultFormatLongName(.nikonRaw)
         }
+        // Canon Cinema RAW Light — same promotion as the URL entry point but
+        // without an extension to distinguish master vs proxy, so we always
+        // tag .crm here.
+        if (metadata.format == .mp4 || metadata.format == .mov),
+           CRMReader.isCanonCinemaRAW(data) {
+            metadata.format = .crm
+            metadata.formatLongName = defaultFormatLongName(.crm)
+            if let result = try? CRMReader.read(data) {
+                CRMReader.merge(result, into: &metadata)
+            }
+        }
         // Only retain the source Data for writable formats — same rationale
         // as `read(from:url)`.
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
@@ -304,6 +344,8 @@ public struct VideoMetadata: Sendable {
         case .r3d: return "RED RAW"
         case .nikonRaw: return "Nikon RAW"
         case .xocn: return "Sony X-OCN (MXF)"
+        case .crm: return "Canon Cinema RAW Light"
+        case .crl: return "Canon Cinema RAW Light Proxy"
         }
     }
 
@@ -339,7 +381,7 @@ public struct VideoMetadata: Sendable {
         switch format {
         case .mp4, .mov, .m4v:
             return try MP4Writer.write(self, to: original)
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl:
             throw MetadataError.writeNotSupported("Writing is not supported for \(format.rawValue.uppercased()) containers")
         }
     }

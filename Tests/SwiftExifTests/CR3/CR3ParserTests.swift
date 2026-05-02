@@ -39,7 +39,7 @@ final class CR3ParserTests: XCTestCase {
         </x:xmpmeta>
         <?xpacket end='w'?>
         """
-        var xmpPayload = Data(CR3UUID.xmpUUID)
+        var xmpPayload = Data(CanonUUID.xmpUUID)
         xmpPayload.append(Data(xmpXML.utf8))
         writeSyntheticBox(&writer, type: "uuid", data: xmpPayload)
 
@@ -75,7 +75,7 @@ final class CR3ParserTests: XCTestCase {
         }
 
         // Wrap in uuid box with Canon metadata UUID
-        var uuidPayload = Data(CR3UUID.canonMetadata)
+        var uuidPayload = Data(CanonUUID.canonMetadata)
         uuidPayload.append(metaWriter.data)
         writeSyntheticBox(&moovWriter, type: "uuid", data: uuidPayload)
 

@@ -343,6 +343,11 @@ public struct FormatDetector: Sendable {
             return .mov
         case "M4V ", "M4VH", "M4VP":
             return .m4v
+        case "crx ":
+            // Canon Cinema RAW Light (.CRM master + .CRL proxy) and CR3 still
+            // images share this brand. The brand alone can't tell them apart;
+            // VideoMetadata.read disambiguates via CNCV string + extension.
+            return .crm
         default:
             return nil
         }
@@ -361,6 +366,8 @@ public struct FormatDetector: Sendable {
         case "mpg", "mpeg", "vob", "ts", "m2ts", "mts": return .mpg
         case "braw": return .braw
         case "r3d":  return .r3d
+        case "crm":  return .crm
+        case "crl":  return .crl
         default:     return nil
         }
     }

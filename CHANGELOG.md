@@ -10,6 +10,38 @@ the CLI; the library target follows the same numbering.
 
 ### Added
 
+- **Canon Cinema RAW Light (.CRM / .CRL)** — read clip-level metadata from
+  Canon C200 / C300 III / C500 II / C70 / R5C cinema cameras. CRM is
+  ISOBMFF with `ftyp crx ` and shares the Canon-metadata UUID
+  (`85c0b687-820f-11e0-8111-f4ce462b6a48`) with CR3 still images, so the
+  in-`moov` `CMT1..CMT4` TIFF IFDs are read via a shared `CanonUUIDExtractor`
+  hoisted out of `CR3Parser`. The new `CRMReader` adds a CTMD trak walker
+  for per-frame timed metadata. Surfaces:
+  - `format = .crm` / `.crl` (master vs proxy) with long-names
+    `"Canon Cinema RAW Light"` / `"Canon Cinema RAW Light Proxy"`,
+    promoted from `.mp4` based on the `crx ` ftyp brand combined with a
+    CNCV `"CanonCRM"` prefix probe (so CR3 still images written with the
+    same UUID layout don't get mis-tagged as video).
+  - `camera.deviceManufacturer`, `deviceModelName`, `deviceSerialNumber`,
+    `lensModelName`, `creationDate`, `irisFNumber`, `shutterTimeMs`,
+    `isoSensitivity`, `lensZoomActualFocalLengthMm` — populated from
+    CMT1/CMT2/CMT3 with first-frame CTMD values overriding when present.
+  - `camera.whiteBalanceCoefficients` — Canon `CanonColorData` R/G1/G2/B
+    multipliers from CTMD record types 0x0007/0x0008/0x0009 (the
+    embedded TIFF block under tag 0x4001).
+  - `videoMetadata.cameraTimeline: [CRMReader.CTMDFrame]` — full
+    per-frame metadata stream: timestamp (record type 0x0001, with
+    hundredths-of-a-second when the camera writes them), focal length
+    (0x0004), F-number / shutter / ISO (0x0005), and white-balance
+    coefficients (0x0007/8/9). One entry per CTMD sample.
+  - `videoMetadata.embeddedThumbnailJPEG` / `embeddedPreviewJPEG` —
+    Canon's THMB (≈160×120) and PRVW (≈1620×1080) JPEGs from the
+    Canon-metadata and preview UUID containers.
+  - `FormatDetector.detectVideo` recognises ftyp `crx ` (returns `.crm`);
+    `detectVideoFromExtension` routes both `.crm` and `.crl`.
+  - Read-only — no CRM/CRL writer in this release.
+  Verified against EOS C70 sample clips. Refactor: `CR3UUID` → shared
+  `CanonUUID`; CR3-image-pipeline behaviour unchanged.
 - **Sony X-OCN RAW metadata** — read clip-level metadata from Sony VENICE /
   VENICE 2 / BURANO / F55 / F65 cinema cameras shooting X-OCN to MXF
   (OP-1a). X-OCN files are valid MXF containers, so the existing MXF
