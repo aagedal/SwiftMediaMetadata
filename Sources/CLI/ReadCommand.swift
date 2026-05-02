@@ -404,7 +404,14 @@ struct ReadCommand: ParsableCommand {
             return pcmShortName(bitDepth: bitDepth, endian: .big, signed: true)
         case "A_PCM/FLOAT/IEEE":
             return (bitDepth ?? 32) == 64 ? "pcm_f64le" : "pcm_f32le"
-        default: return nil
+        default:
+            // MXF audio descriptors store the ffprobe-style short name
+            // directly in `stream.codec` (e.g. "pcm_s16le") since MXF lacks
+            // a stable FourCC equivalent for AES-3 PCM. Pass it through so
+            // the per-stream JSON gets a CodecShort field that matches the
+            // ffprobe `codec_name` for the same input.
+            if codec.hasPrefix("pcm_") { return codec }
+            return nil
         }
     }
 
