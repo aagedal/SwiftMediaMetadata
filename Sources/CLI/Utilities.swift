@@ -72,6 +72,7 @@ let supportedVideoExtensions: Set<String> = [
     "mpg", "mpeg", "vob",
     "ts", "m2ts", "mts",
     "braw",
+    "r3d",
 ]
 
 let supportedAudioExtensions: Set<String> = [

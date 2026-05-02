@@ -6,6 +6,47 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [Unreleased]
+
+### Added
+
+- **RED RAW (.R3D) container metadata** — read clip-level metadata from
+  RED KOMODO-X / V-RAPTOR / DSMC2 R3D files. Parses RED's own
+  length-prefixed `RED2` (and `RED1`) clip-header atom, decodes the
+  built-in image / audio / TLV records, and surfaces:
+  - `format = .r3d`, `formatLongName = "RED RAW"`
+  - `videoWidth` / `videoHeight` (from the `rdi` sub-atom, e.g.
+    5760×3240 for KOMODO-X 6K, 7680×4320 for V-RAPTOR 8K)
+  - `audioSampleRate` + an audio stream (from the `rda` sub-atom)
+  - `frameRate` / `camera.captureFps` (from the `OriginalFrameRate`
+    float32 TLV — 23.976/25/29.97/etc.)
+  - `camera.deviceManufacturer = "RED"`, `camera.deviceModelName`
+    (Brain), `camera.deviceSerialNumber`, `camera.lensModelName`,
+    `camera.creationDate` (combined from DateCreated + TimeCreated)
+  - Two `Timecode` entries tagged `.redR3D` (RecordTimecode +
+    PlaybackTimecode), plus a third when ReelTimecode is present
+  - 19 `red_*` slate fields in `camera.userMetaNames` /
+    `userMetaContents`: reel number, take, firmware, color
+    temperature, ISO, crop area, sensor, video format, quality,
+    storage type / serial / model, original filename, focus
+    distance, etc. — names track ExifTool's `Image::ExifTool::Red`
+    tag table.
+
+  CLI: `swift-exif read clip.R3D` (also surfaces in `--format json` and
+  via `swift-exif copy` / `--fields camera.*`).
+
+- **Nikon RAW Video (N-RAW) detection** — Nikon Z8 / Z9 (post-RED-
+  acquisition) write a Nikon-specific MP4 with `ftyp niko` and codec
+  FourCC `NR3D`, often labelled "RED RAW" in Nikon's marketing. The
+  bitstream is N-RAW (Nikon's existing RAW codec), wholly unrelated
+  to RED's REDCODE / R3D format. SwiftExif now promotes these from
+  generic `.mp4` to a new `.nikonRaw` format with
+  `formatLongName = "Nikon RAW"`, so callers can tell Nikon's RAW
+  files apart from real RED clips even when both share the `.R3D`
+  extension. Detection is codec-based (`NR3D` in any video stream's
+  sample entry); the rest of the metadata (resolution, timecode,
+  audio, color) flows through the standard MP4 path unchanged.
+
 ## [1.6.0] — 2026-05-02
 
 ### Added

@@ -141,6 +141,28 @@ public struct VideoMetadata: Sendable {
             metadata.format = .braw
             metadata.formatLongName = defaultFormatLongName(.braw)
         }
+        // ARRIRAW arrives wrapped in MXF and shares the .mxf extension with
+        // generic broadcast MXF, so the path-extension trick used for BRAW
+        // doesn't apply. Promote based on a codec sniff: MXFReader maps the
+        // SMPTE-registered ARRIRAW picture coding UL to "arriraw", so we
+        // upgrade the container format whenever any video stream carries it.
+        if metadata.format == .mxf,
+           metadata.videoStreams.contains(where: { $0.codec == "arriraw" }) {
+            metadata.format = .arriraw
+            metadata.formatLongName = defaultFormatLongName(.arriraw)
+        }
+        // Nikon RAW Video — Nikon Z8/Z9 (post-RED-acquisition) write a
+        // Nikon-specific MP4 with `ftyp niko` and the `NR3D` video codec
+        // FourCC, often labelled "RED RAW" in Nikon's marketing. The
+        // bitstream is N-RAW (Nikon's existing RAW codec), wholly
+        // unrelated to RED's REDCODE / R3D format. Detect by codec —
+        // the file usually carries a `.R3D` extension that collides
+        // with real RED clips.
+        if (metadata.format == .mp4 || metadata.format == .mov || metadata.format == .m4v),
+           metadata.videoStreams.contains(where: { $0.codec == "NR3D" }) {
+            metadata.format = .nikonRaw
+            metadata.formatLongName = defaultFormatLongName(.nikonRaw)
+        }
         // Retain the source data only for formats we can write back. For
         // read-only formats (MKV, WebM, MXF, AVI, MPEG) holding a reference
         // to a multi-GB Data serves no purpose and prevents the OS from
@@ -148,7 +170,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil {
@@ -180,12 +202,20 @@ public struct VideoMetadata: Sendable {
     /// Read video metadata from data.
     public static func read(from data: Data) throws -> VideoMetadata {
         var metadata = try parseContainer(data)
+        // Same NR3D codec promotion as `read(from: url)` — needed for the
+        // data-only entry point so callers loading bytes get the right
+        // format tag without having to re-inspect codec themselves.
+        if (metadata.format == .mp4 || metadata.format == .mov || metadata.format == .m4v),
+           metadata.videoStreams.contains(where: { $0.codec == "NR3D" }) {
+            metadata.format = .nikonRaw
+            metadata.formatLongName = defaultFormatLongName(.nikonRaw)
+        }
         // Only retain the source Data for writable formats — same rationale
         // as `read(from:url)`.
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
@@ -264,6 +294,9 @@ public struct VideoMetadata: Sendable {
         case .avi: return "AVI (Audio Video Interleave)"
         case .mpg: return "MPEG-PS / MPEG-TS"
         case .braw: return "Blackmagic RAW"
+        case .arriraw: return "ARRIRAW (MXF)"
+        case .r3d: return "RED RAW"
+        case .nikonRaw: return "Nikon RAW"
         }
     }
 
@@ -279,6 +312,9 @@ public struct VideoMetadata: Sendable {
         }
         if MPEGReader.isMPEG(data) {
             return try MPEGReader.parse(data)
+        }
+        if R3DReader.isR3D(data) {
+            return try R3DReader.parse(data)
         }
         return try MP4Parser.parse(data)
     }
@@ -296,7 +332,7 @@ public struct VideoMetadata: Sendable {
         switch format {
         case .mp4, .mov, .m4v:
             return try MP4Writer.write(self, to: original)
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw:
             throw MetadataError.writeNotSupported("Writing is not supported for \(format.rawValue.uppercased()) containers")
         }
     }

@@ -21,6 +21,10 @@ public enum TimecodeSource: String, Sendable, Equatable {
     case mxfFilePackage
     /// Sony NonRealTimeMeta XML (`<LtcChangeTable>` / Duration@frameCount base).
     case sonyNRT
+    /// RED R3D TLV record carried in the `RED2` clip-header atom — the camera
+    /// stamps both a record timecode (start of capture) and a playback /
+    /// edge-code timecode in the slate.
+    case redR3D
 }
 
 /// A single decoded timecode value with its source. Shape is `HH:MM:SS:FF`

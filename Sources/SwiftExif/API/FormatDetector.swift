@@ -320,6 +320,13 @@ public struct FormatDetector: Sendable {
             return .mpg
         }
 
+        // RED RAW (.R3D): "RED2" or "RED1" magic at offset 4. Checked before
+        // the ISOBMFF brand probe — R3D uses a similar 32-bit-size + 4cc
+        // outer atom but is not an ISOBMFF file (no `ftyp`).
+        if R3DReader.isR3D(data) {
+            return .r3d
+        }
+
         let bytes = [UInt8](data.prefix(12))
 
         // ISOBMFF: check for ftyp box at offset 4
@@ -353,6 +360,7 @@ public struct FormatDetector: Sendable {
         case "avi":  return .avi
         case "mpg", "mpeg", "vob", "ts", "m2ts", "mts": return .mpg
         case "braw": return .braw
+        case "r3d":  return .r3d
         default:     return nil
         }
     }

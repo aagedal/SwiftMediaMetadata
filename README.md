@@ -19,6 +19,8 @@ A native Swift library for reading and writing image and video metadata — Exif
 | PSD (Photoshop) | Yes | Yes | Exif, IPTC, XMP, ICC |
 | MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, profile, fps, field order, bit depth, chroma subsampling, pixel format, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language, QuickTime `tmcd` timecode |
 | Blackmagic RAW (.braw) | Yes | — | Container metadata via QuickTime layout (no `ftyp`, tail-placed `moov`): resolution, project frame rate, audio, timecode, plus the `moov.meta` slate — camera make/model, firmware, viewing gamma/gamut, color science, compression ratio, shutter type, sensor capture FPS (off-speed), production slate (clip number / scene / take / reel / camera / environment / day-night), sensor area, crop / safe-area rectangles, LUT used, post-3DLUT mode, frameguide aspect ratio, gamut compression. Per-frame interpretation attributes (white point, tint, absolute ISO) live in proprietary `bfdn`/`ctrn` boxes and remain unparsed |
+| RED RAW (.R3D) | Yes | — | Clip-header metadata from RED's own length-prefixed `RED2`/`RED1` atom: resolution (from `rdi`), audio sample rate (from `rda`), original capture frame rate, plus the TLV slate — camera brain + sensor, body serial, lens model, firmware, ISO, color temperature (Kelvin), crop area (`WxH+X+Y`), record/playback timecodes, reel + take, video format ("8K 16:9"), quality preset, storage media + serial + format date/time, original camera filename, focus distance. Tag IDs match ExifTool's `Image::ExifTool::Red` table |
+| Nikon RAW Video (N-RAW) | Yes | — | Detected by `ftyp niko` brand + `NR3D` codec FourCC. Nikon Z8/Z9 ship N-RAW with a `.R3D` extension as part of the post-acquisition "RED RAW" branding, but the bitstream is wholly unrelated to RED's REDCODE — promoted to `format = .nikonRaw` so callers can disambiguate. All standard MP4 metadata (resolution, timecode, audio, color) reads through the QuickTime path |
 | MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
 | Matroska (.mkv) | Yes | — | Stream info (codec, profile, fps, dimensions, bit depth, chroma, chroma location, color, pixel format) decoded from both `Tracks` and `CodecPrivate` (hvcC/av1C/avcC), Segment-level `COMMENT`/`DESCRIPTION` tags, audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
 | WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) + subtitle tracks |
@@ -392,6 +394,28 @@ Source coverage:
   Numeric columns; opens directly in Excel / pandas / matplotlib /
   gnuplot. Public Swift API: `BRAWFrameReader.readAttributes(from:)`
   and `BRAWFrameReader.readMotionSamples(from:stream:)`.
+- **RED RAW (`.R3D`)**: not ISOBMFF — RED uses its own length-prefixed
+  container with a fixed 1202-byte `RED2` (or `RED1`, on older firmware)
+  clip-header atom carrying every metadata field. The header packs three
+  fixed-layout sub-atoms (`rdi` for image dimensions, `rda` for audio
+  sample rate, two `rdx` markers) followed by a stream of TLV records.
+  Each TLV is `[1-byte length][2-byte tag = class<<8 | id][value]`
+  where the tag IDs match ExifTool's `Image::ExifTool::Red` table —
+  `0x1006` SerialNumber, `0x101a` ReelNumber, `0x101b` Take, `0x1023`
+  DateCreated, `0x1024` TimeCreated, `0x1025` FirmwareVersion,
+  `0x1029` ReelTimecode, `0x102a` StorageType, `0x1056`
+  OriginalFileName, `0x1070` LensModel, `0x1086` VideoFormat
+  ("8K 16:9"), `0x10a0` Brain, `0x10a1` Sensor, `0x10be` Quality,
+  `0x200d` ColorTemperature (float32 BE Kelvin), `0x2066`
+  OriginalFrameRate (float32), `0x4037` CropArea (4× uint16
+  origin/dims), `0x403b` ISO (uint16), `0x606c` FocusDistance
+  (uint16 mm). Two non-ExifTool timecode strings (`0x10ad`,
+  `0x10ae`) surface as additional `Timecode` entries tagged
+  `.redR3D`. Records exceeding 64 bytes are skipped as a sanity
+  cap (largest real TLV is the 28-byte original-filename string).
+  `camera.deviceManufacturer` is set unconditionally to `"RED"`
+  since the format doesn't include it as a TLV. Tested on KOMODO-X
+  (RD4.15 firmware) and V-RAPTOR [X] (RD4.15) clips.
 - **MXF (SMPTE 377-1)**: picture and sound essence descriptors parsed from
   header metadata — `StoredWidth`/`StoredHeight`, `DisplayWidth`/`DisplayHeight`,
   `FrameLayout` (scan type), `ComponentDepth`,
