@@ -8,6 +8,40 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-05-13
+
+### Fixed
+
+- **XMP read failing on packets with trailing NUL padding** — Sony out-of-
+  camera JPEGs, Capture One exports, and several other writers pad the XMP
+  packet with NUL bytes (and sometimes other non-XML garbage) past the
+  closing `<?xpacket end="..."?>` PI so the packet can be edited in place.
+  NSXMLParser rejected the extra content as "extra content at end of
+  document" and SwiftExif surfaced it as `MetadataError.invalidXMP`, which
+  in turn appeared to callers as the unhelpful
+  `"The operation couldn't be completed. (SwiftExif.MetadataError error 4.)"`
+  via Foundation's default NSError-bridge description. `XMPReader.readFromXML`
+  now trims everything past the closing `?>` of the `<?xpacket end=...?>` PI
+  before handing data to the parser, and falls back to stripping trailing
+  NULs when no xpacket PI is present (covers bare XMP in TIFF tag 0x02BC,
+  PNG iTXt, JPEG XL `xml` boxes, AVIF). Regression tests in
+  [`Tests/SwiftExifTests/XMP/XMPReaderTests.swift`](Tests/SwiftExifTests/XMP/XMPReaderTests.swift).
+
+### Changed
+
+- **`MetadataError` now conforms to `LocalizedError`** — `errorDescription`
+  surfaces the same `.description` string the type already produces, so
+  errors bridged to `NSError` no longer render as
+  `"(SwiftExif.MetadataError error N.)"`. Additive on both Darwin and
+  swift-corelibs-foundation. ([`Sources/SwiftExif/API/MetadataError.swift`](Sources/SwiftExif/API/MetadataError.swift))
+
+### Removed
+
+- **`MetadataError.segmentNotFound(UInt16)`** — case was declared but never
+  thrown anywhere in the codebase. Source-breaking for any downstream code
+  matching `MetadataError` exhaustively. If you need an equivalent error,
+  use `MetadataError.unexpectedEndOfData` or a format-specific case.
+
 ### Added
 
 - **Canon Cinema RAW Light (.CRM / .CRL)** — read clip-level metadata from
