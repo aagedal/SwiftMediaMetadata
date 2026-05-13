@@ -509,7 +509,7 @@ enum MPEGBitstream {
         _ = br.readUE() + 8 // bit_depth_chroma
         f.bitDepth = Int(bitDepthLuma)
 
-        _ = br.readUE() // log2_max_pic_order_cnt_lsb_minus4
+        let log2MaxPicOrderCntLsbMinus4 = br.readUE()
 
         let subLayerOrderingPresent = br.readBool()
         let firstLayer = subLayerOrderingPresent ? 0 : maxSubLayersMinus1
@@ -542,31 +542,61 @@ enum MPEGBitstream {
             _ = br.readBool() // pcm_loop_filter_disabled_flag
         }
 
+        // short_term_ref_pic_sets(). To reach the VUI block we have to step
+        // past every set in the SPS array — each one is either a direct
+        // (num_negative_pics + num_positive_pics) encoding or an inter-RPS
+        // prediction referencing the previous set (Blu-ray HEVC encoders use
+        // the latter for the tail of the list). Inter-RPS prediction needs
+        // NumDeltaPocs[stRpsIdx - 1] to know how many `used_by_curr_pic_flag`
+        // / `use_delta_flag` pairs to consume, so we track each set's
+        // negative/positive delta-poc count as we go.
         let numShortTermRefPicSets = br.readUE()
+        var numDeltaPocs: [Int] = []
+        numDeltaPocs.reserveCapacity(Int(min(numShortTermRefPicSets, 64)))
         for i in 0..<min(numShortTermRefPicSets, 64) {
-            // Approximate skip: short_term_ref_pic_set syntax is recursive
-            // and uses ue(v)s and flags. A full skip is overkill — we only
-            // need VUI for SAR + frame rate, which sits well after this
-            // block. Bail out if we run out of bitstream.
-            if i > 0, br.readBool() { // inter_ref_pic_set_prediction_flag
-                if i == numShortTermRefPicSets - 1 { _ = br.readUE() } // delta_idx_minus1
-                _ = br.readBool() // delta_rps_sign
-                _ = br.readUE()   // abs_delta_rps_minus1
-                // Skipping the use_delta_flag loop is unsafe — bail out.
-                return f
-            }
-            let numNeg = br.readUE()
-            let numPos = br.readUE()
-            for _ in 0..<min(Int(numNeg + numPos), 64) {
-                _ = br.readUE() // delta_poc_s0_minus1 / s1_minus1
-                _ = br.readBool() // used_by_curr_pic_flag
+            let interPredFlag = i > 0 ? br.readBool() : false
+            if interPredFlag {
+                // In SPS context stRpsIdx is always < num_short_term_ref_pic_sets,
+                // so delta_idx_minus1 is never coded — RefRpsIdx = i - 1.
+                _ = br.readBool()                    // delta_rps_sign
+                _ = br.readUE()                      // abs_delta_rps_minus1
+                let refDelta = numDeltaPocs.last ?? 0
+                var newCount = 0
+                for _ in 0...refDelta {              // j = 0 … NumDeltaPocs[RefRpsIdx]
+                    let used = br.readBool()         // used_by_curr_pic_flag[j]
+                    var useDelta = used              // inferred to 1 when used == 1
+                    if !used {
+                        useDelta = br.readBool()     // use_delta_flag[j]
+                    }
+                    if used || useDelta { newCount += 1 }
+                }
+                // Spec equations 7-71..7-78 also fold in the delta_rps entry,
+                // which adds at most one more pic, and a sign-based filter
+                // can drop entries that flip side. For the purpose of reading
+                // the NEXT inter-RPS set's bit count, treating `newCount` as
+                // NumDeltaPocs is the right upper bound — any subsequent
+                // chained inter-RPS set reads at most this many flag pairs.
+                numDeltaPocs.append(newCount)
+            } else {
+                let numNeg = br.readUE()
+                let numPos = br.readUE()
+                let total = Int(numNeg + numPos)
+                for _ in 0..<min(total, 64) {
+                    _ = br.readUE()                  // delta_poc_s0_minus1 / s1_minus1
+                    _ = br.readBool()                // used_by_curr_pic_flag
+                }
+                numDeltaPocs.append(total)
             }
         }
-        if br.readBool() { // long_term_ref_pics_present_flag
+        if br.readBool() {                           // long_term_ref_pics_present_flag
             let numLong = br.readUE()
+            // lt_ref_pic_poc_lsb_sps is `log2_max_pic_order_cnt_lsb_minus4 + 4`
+            // bits wide — the previous hardcoded `read(4)` desynced any SPS
+            // with log2_max > 0 (typical Blu-ray values are 4 → 8-bit POC LSB).
+            let ltPocBits = Int(log2MaxPicOrderCntLsbMinus4) + 4
             for _ in 0..<min(numLong, 32) {
-                _ = br.read(4) // log2_max_pic_order_cnt_lsb_minus4 wide → bail-shape
-                _ = br.readBool()
+                _ = br.read(ltPocBits)               // lt_ref_pic_poc_lsb_sps[i]
+                _ = br.readBool()                    // used_by_curr_pic_lt_sps_flag[i]
             }
         }
         _ = br.readBool() // sps_temporal_mvp_enabled_flag
@@ -670,21 +700,30 @@ enum MPEGBitstream {
     }
 
     private static func skipHEVCScalingListData(_ br: inout BitReader) {
+        // Spec 7.3.4 scaling_list_data():
+        //   for (sizeId = 0; sizeId < 4; sizeId++)
+        //     for (matrixId = 0; matrixId < 6; matrixId += (sizeId == 3) ? 3 : 1)
+        //
+        // The upper bound is always 6; the *step* of 3 for sizeId=3 makes the
+        // inner loop visit matrixId ∈ {0, 3} (Intra-Y and Inter-Y, the only two
+        // 32×32 matrices defined). Earlier code used `matrixCount = 2` for
+        // sizeId=3 which dropped matrix [3][3] entirely — desyncing the bit
+        // cursor by roughly 450 bits for any SPS that signals coefficients for
+        // the 32×32 Inter-Y matrix (Blu-ray HEVC remuxes routinely do).
         for sizeId in 0..<4 {
-            let matrixCount = (sizeId == 3) ? 2 : 6
-            var i = 0
-            while i < matrixCount {
-                if !br.readBool() {
-                    _ = br.readUE() // scaling_list_pred_matrix_id_delta
+            var matrixId = 0
+            while matrixId < 6 {
+                if !br.readBool() {                       // scaling_list_pred_mode_flag
+                    _ = br.readUE()                       // scaling_list_pred_matrix_id_delta
                 } else {
                     var coefNum = min(64, 1 << (4 + (sizeId << 1)))
-                    if sizeId > 1 { _ = br.readSE() } // scaling_list_dc_coef_minus8
+                    if sizeId > 1 { _ = br.readSE() }     // scaling_list_dc_coef_minus8
                     while coefNum > 0 {
-                        _ = br.readSE() // scaling_list_delta_coef
+                        _ = br.readSE()                   // scaling_list_delta_coef
                         coefNum -= 1
                     }
                 }
-                i += (sizeId == 3) ? 3 : 1
+                matrixId += (sizeId == 3) ? 3 : 1
             }
         }
     }

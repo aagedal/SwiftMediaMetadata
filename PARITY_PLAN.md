@@ -221,6 +221,51 @@ All four HEIC stills issues land together. Test file:
 
 ---
 
+## Phase 6 — HDR follow-ups (deferred from 1.8.0)
+
+The 1.8.0 release added Matroska container HDR + HEVC parameter-set NAL
+array extraction. Two further pieces that fit the same code path were
+considered and parked:
+
+### 6.1 — Sibling HDR SEIs (payload types 147 + 148)
+
+- **What**: decode `content colour volume` (SEI 147) and `ambient
+  viewing environment` (SEI 148) alongside the existing mdcv (137) and
+  clli (144) handlers in `MPEGBitstream.decodeSEIPayload`.
+- **Why**: Sony / Panasonic broadcast HDR mezzanines write 147; some
+  HLG content writes 148. ffprobe surfaces both as `side_data_type`.
+- **Where**: extend
+  [`MPEGBitstream.SEIData`](Sources/SwiftExif/Video/MPEGBitstream.swift)
+  with optional fields, add decoders next to `decodeMDCVPayload` /
+  `decodeCLLIPayload`, plumb to `HDRMetadata` (likely needs new
+  sub-structs on
+  [`VideoStream.hdr`](Sources/SwiftExif/API/VideoStream.swift) similar
+  to `HDRContentLightLevel`).
+- **Effort**: low (~80 LOC + tests). Payloads are byte-aligned —
+  the existing SEI test pattern in
+  [`Phase22FeatureTests.swift`](Tests/SwiftExifTests/Video/Phase22FeatureTests.swift)
+  applies directly.
+
+### 6.2 — HEIC HDR boxes (`mdcv` / `clli` in HEIF still images)
+
+- **What**: parse the ISOBMFF `mdcv` / `clli` boxes when they appear
+  inside a HEIF visual sample entry (recent iPhone Pro HDR HEIC).
+- **Why**: SwiftExif already reads these for video sample entries
+  ([`MP4VisualSampleEntry.parseMDCVBox`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift),
+  `parseCLLIBox`). For HEIF stills the same atoms live under the
+  `iprp` / `ipco` property tree — a separate code path that doesn't
+  reuse the visual-sample-entry parser today.
+- **Where**:
+  [`Sources/SwiftExif/HEIF/HEIFParser.swift`](Sources/SwiftExif/HEIF/HEIFParser.swift)
+  — handle `mdcv` / `clli` in `ipco`, surface on `ImageMetadata`
+  (needs new fields — possibly mirror `HDRMetadata` on the still side
+  or expose as flat EXIF-style keys).
+- **Effort**: medium. The parser side is ~30 LOC reusing the existing
+  decoders; the API surface decision (new struct vs. flat keys vs.
+  share `HDRMetadata` across video + still) is the real cost.
+
+---
+
 ## Suggested PR sequencing
 
 1. **PR 1**: Phase 1 — HEIC parity (~50–80 LOC). Cheapest, biggest

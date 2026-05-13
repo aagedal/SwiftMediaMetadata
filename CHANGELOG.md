@@ -61,6 +61,39 @@ the CLI; the library target follows the same numbering.
   populated, so the `Tracks` element wins on conflict.
   ([`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
 
+### Fixed
+
+- **HEVC SPS `scaling_list_data` skip was off-by-one for `sizeId == 3`** — the
+  inner loop used `matrixCount = 2` instead of iterating `matrixId < 6` with
+  step 3, so the 32×32 Inter-Y matrix `[3][3]` was silently dropped. On
+  encoders that ship full 32×32 coefficients (every Blu-ray HDR HEVC remux,
+  any MakeMKV output), the bit cursor landed ~450 bits short and
+  `vui_parameters_present_flag` read as garbage — VUI color signalling
+  (`color_primaries`, `transfer_characteristics`, `matrix_coefficients`,
+  `chroma_location`) silently dropped to nil. The fix iterates per spec
+  §7.3.4. Locked in by a real-world HDR10 SPS regression fixture in
+  [`Tests/SwiftExifTests/Video/MPEGReaderTests.swift`](Tests/SwiftExifTests/Video/MPEGReaderTests.swift)
+  asserting BT.2020 / SMPTE 2084 / BT.2020-NCL / topleft chroma — matching
+  what ffprobe reports for the same file.
+  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift))
+
+- **HEVC SPS `short_term_ref_pic_set()` bailed out on
+  `inter_ref_pic_set_prediction_flag = 1`** — the loop used `return f` to abort
+  rather than skip past the inter-RPS bits, dropping VUI for every SPS that
+  uses inter-RPS prediction (common in Blu-ray HEVC tail-of-list sets). The
+  replacement tracks `NumDeltaPocs[stRpsIdx]` for each parsed set and reads
+  the correct number of `used_by_curr_pic_flag` / `use_delta_flag` pairs per
+  spec §7.4.8.
+  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift))
+
+- **HEVC SPS long-term reference pic POC LSB read used a hardcoded 4-bit
+  width** — `lt_ref_pic_poc_lsb_sps[i]` is `log2_max_pic_order_cnt_lsb_minus4
+  + 4` bits wide (typically 8 for Blu-ray). Any SPS with
+  `long_term_ref_pics_present_flag = 1` and `log2_max > 0` would desync the
+  cursor before reaching VUI. Fix: save `log2_max_pic_order_cnt_lsb_minus4`
+  earlier in the SPS and use it for the long-term POC LSB read.
+  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift))
+
 ## [1.7.0] — 2026-05-13
 
 ### Fixed
