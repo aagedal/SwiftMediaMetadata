@@ -8,6 +8,8 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-05-13
+
 ### Added
 
 - **Content colour volume (SEI 147) and ambient viewing environment (SEI 148)** —
@@ -32,10 +34,6 @@ the CLI; the library target follows the same numbering.
   keys in the flat image exporter.
   ([`Sources/SwiftExif/Binary/ISOBMFFMetadata.swift`](Sources/SwiftExif/Binary/ISOBMFFMetadata.swift),
   [`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
-
-## [1.8.0] — 2026-05-13
-
-### Added
 
 - **Matroska HDR static metadata** — `MaxCLL` (0x55BC), `MaxFALL` (0x55BD), and
   the `MasteringMetadata` (0x55D0) element group inside the `Colour` master are
