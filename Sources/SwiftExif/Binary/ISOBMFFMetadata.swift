@@ -73,6 +73,44 @@ public struct ISOBMFFMetadata: Sendable {
         return nil
     }
 
+    /// Extract HDR static metadata (SMPTE ST 2086 mastering display volume +
+    /// CTA-861.3 content light level) from `mdcv` and `clli` boxes inside the
+    /// HEIF / AVIF `meta → iprp → ipco` property hierarchy. Modern iPhone Pro
+    /// HDR HEIC stills and AOM's HDR AVIF reference encoder both write these
+    /// alongside the `colr` property — they describe the still's HDR grading
+    /// the same way video files do, just attached to an item property instead
+    /// of a video sample entry. Reuses the MP4 box parsers so the byte layout
+    /// stays in one place.
+    public static func extractHDRMetadata(from boxes: [ISOBMFFBox]) -> HDRMetadata? {
+        guard let metaBox = boxes.first(where: { $0.type == "meta" }),
+              let metaChildren = try? parseMetaChildren(metaBox.data),
+              let iprpBox = metaChildren.first(where: { $0.type == "iprp" }),
+              let iprpChildren = try? ISOBMFFBoxReader.parseBoxes(from: iprpBox.data),
+              let ipcoBox = iprpChildren.first(where: { $0.type == "ipco" }),
+              let properties = try? ISOBMFFBoxReader.parseBoxes(from: ipcoBox.data) else {
+            return nil
+        }
+        var hdr = HDRMetadata()
+        var found = false
+        for prop in properties {
+            switch prop.type {
+            case "mdcv":
+                if let md = MP4Parser.parseMDCVBox(prop.data) {
+                    hdr.masteringDisplay = md
+                    found = true
+                }
+            case "clli":
+                if let cll = MP4Parser.parseCLLIBox(prop.data) {
+                    hdr.contentLightLevel = cll
+                    found = true
+                }
+            default:
+                break
+            }
+        }
+        return found ? hdr : nil
+    }
+
     private static func parseColrBox(_ box: ISOBMFFBox) -> ICCProfile? {
         guard box.data.count > 4 else { return nil }
         let colorType = String(data: box.data.prefix(4), encoding: .ascii) ?? ""

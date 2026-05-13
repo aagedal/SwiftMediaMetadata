@@ -40,6 +40,77 @@ final class SEIParsingTests: XCTestCase {
         XCTAssertEqual(sei.contentLightLevel?.maxFALL, 400)
     }
 
+    /// SEI payload type 147 — content_colour_volume (H.265 D.2.41).
+    /// Layout: 1 flag byte (cancel | persistence | primaries_present |
+    /// min_lum_present | max_lum_present | avg_lum_present | 2 reserved),
+    /// then optional 6×i32 primaries (G,B,R) and optional 3×u32 luminances.
+    func testCCVPayloadDecodes_AllFieldsPresent() throws {
+        var payload = Data()
+        // flags byte: cancel=0, persistence=1, primaries=1, min=1, max=1, avg=1, rsv=00
+        // Bit layout (MSB first): 0 1 1 1 1 1 0 0  → 0x7C
+        payload.append(0x7C)
+        // 6 × i32 primaries — DCI-P3 D65 grading values, G/B/R order.
+        appendI32BE(&payload, 13250)   // greenX = 0.265
+        appendI32BE(&payload, 34500)   // greenY = 0.690
+        appendI32BE(&payload, 7500)    // blueX  = 0.150
+        appendI32BE(&payload, 3000)    // blueY  = 0.060
+        appendI32BE(&payload, 34000)   // redX   = 0.680
+        appendI32BE(&payload, 16000)   // redY   = 0.320
+        // min/max/avg luminance in 0.0001 cd/m².
+        appendU32BE(&payload, 50)            // 0.005 nits
+        appendU32BE(&payload, 10_000_000)    // 1000 nits
+        appendU32BE(&payload, 1_500_000)     // 150 nits
+
+        let sei = parseSinglePayload(type: 147, body: payload, forHEVC: true)
+        let ccv = try XCTUnwrap(sei.contentColourVolume)
+        XCTAssertEqual(ccv.redX ?? 0, 0.680, accuracy: 1e-3)
+        XCTAssertEqual(ccv.greenY ?? 0, 0.690, accuracy: 1e-3)
+        XCTAssertEqual(ccv.blueX ?? 0, 0.150, accuracy: 1e-3)
+        XCTAssertEqual(ccv.minLuminance ?? -1, 0.005, accuracy: 1e-4)
+        XCTAssertEqual(ccv.maxLuminance ?? -1, 1000.0, accuracy: 0.5)
+        XCTAssertEqual(ccv.avgLuminance ?? -1, 150.0, accuracy: 0.5)
+    }
+
+    /// CCV with `ccv_cancel_flag = 1` instructs decoders to drop any previous
+    /// CCV. We surface that as nil so an upstream container-level CCV isn't
+    /// overwritten with an empty record.
+    func testCCVPayloadCancelFlagReturnsNil() {
+        let sei = parseSinglePayload(type: 147, body: Data([0x80]), forHEVC: true)
+        XCTAssertNil(sei.contentColourVolume)
+    }
+
+    /// CCV with only the avg-luminance flag set — primaries / min / max stay
+    /// nil so callers can tell "not advertised" from "advertised as zero."
+    func testCCVPayloadAvgLuminanceOnly() throws {
+        var payload = Data()
+        // flags: 0 1 0 0 0 1 0 0 → 0x44
+        payload.append(0x44)
+        appendU32BE(&payload, 2_000_000)  // 200 nits avg
+
+        let sei = parseSinglePayload(type: 147, body: payload, forHEVC: true)
+        let ccv = try XCTUnwrap(sei.contentColourVolume)
+        XCTAssertNil(ccv.redX)
+        XCTAssertNil(ccv.minLuminance)
+        XCTAssertNil(ccv.maxLuminance)
+        XCTAssertEqual(ccv.avgLuminance ?? -1, 200.0, accuracy: 0.5)
+    }
+
+    /// SEI payload type 148 — ambient_viewing_environment (H.265 D.2.44).
+    /// Layout (8 bytes): u32 illuminance (0.0001 lux), u16 light_x, u16 light_y
+    /// (both 0.00002 CIE 1931 xy units).
+    func testAVEPayloadDecodes() throws {
+        var payload = Data()
+        appendU32BE(&payload, 3_140_000)  // 314 lux (BT.2100 reference)
+        appendU16BE(&payload, 15635)      // D65 white x = 0.3127
+        appendU16BE(&payload, 16450)      // D65 white y = 0.3290
+
+        let sei = parseSinglePayload(type: 148, body: payload, forHEVC: true)
+        let ave = try XCTUnwrap(sei.ambientViewingEnvironment)
+        XCTAssertEqual(ave.ambientIlluminance, 314.0, accuracy: 0.5)
+        XCTAssertEqual(ave.ambientLightX, 0.3127, accuracy: 1e-4)
+        XCTAssertEqual(ave.ambientLightY, 0.3290, accuracy: 1e-4)
+    }
+
     func testATSCClosedCaptionsDetected() {
         // user_data_registered_itu_t_t35 with country=0xB5, provider=0x0031,
         // user_id='GA94', type_code=0x03 → A/53 closed captions.
@@ -196,6 +267,10 @@ final class SEIParsingTests: XCTestCase {
         data.append(UInt8((v >> 16) & 0xFF))
         data.append(UInt8((v >> 8) & 0xFF))
         data.append(UInt8(v & 0xFF))
+    }
+
+    private func appendI32BE(_ data: inout Data, _ v: Int32) {
+        appendU32BE(&data, UInt32(bitPattern: v))
     }
 }
 

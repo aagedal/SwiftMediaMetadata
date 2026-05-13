@@ -17,10 +17,17 @@ public struct ImageMetadata: Sendable {
     /// noise profile). Populated only for files marked with DNGVersion (0xC612).
     public var dng: DNGMetadata?
 
+    /// HDR static metadata for HDR HEIC / AVIF stills (mastering display
+    /// colour volume + content light level), shared with `VideoStream.hdr`
+    /// so HDR consumers see one shape across video and still containers.
+    /// Populated from `mdcv` / `clli` properties under the HEIF / AVIF
+    /// `meta → iprp → ipco` hierarchy.
+    public var hdr: HDRMetadata?
+
     /// Non-fatal issues encountered during parsing (e.g. corrupted C2PA data).
     public var warnings: [String]
 
-    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, iccProfile: ICCProfile? = nil, mpf: MPFData? = nil, dng: DNGMetadata? = nil, warnings: [String] = []) {
+    public init(container: ImageContainer = .jpeg(JPEGFile()), format: ImageFormat = .jpeg, iptc: IPTCData = IPTCData(), exif: ExifData? = nil, xmp: XMPData? = nil, c2pa: C2PAData? = nil, iccProfile: ICCProfile? = nil, mpf: MPFData? = nil, dng: DNGMetadata? = nil, hdr: HDRMetadata? = nil, warnings: [String] = []) {
         self.container = container
         self.format = format
         self.iptc = iptc
@@ -30,6 +37,7 @@ public struct ImageMetadata: Sendable {
         self.iccProfile = iccProfile
         self.mpf = mpf
         self.dng = dng
+        self.hdr = hdr
         self.warnings = warnings
     }
 
@@ -1438,8 +1446,9 @@ public struct ImageMetadata: Sendable {
         }
 
         let iccProfile = ISOBMFFMetadata.extractICCProfile(from: avifFile.boxes)
+        let hdr = ISOBMFFMetadata.extractHDRMetadata(from: avifFile.boxes)
 
-        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
+        return ImageMetadata(container: .avif(avifFile), format: .avif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, hdr: hdr, warnings: warnings)
     }
 
     private static func readHEIF(from data: Data) throws -> ImageMetadata {
@@ -1460,8 +1469,9 @@ public struct ImageMetadata: Sendable {
         }
 
         let iccProfile = ISOBMFFMetadata.extractICCProfile(from: heifFile.boxes)
+        let hdr = ISOBMFFMetadata.extractHDRMetadata(from: heifFile.boxes)
 
-        return ImageMetadata(container: .heif(heifFile), format: .heif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, warnings: warnings)
+        return ImageMetadata(container: .heif(heifFile), format: .heif, iptc: IPTCData(), exif: exif, xmp: xmp, c2pa: c2pa, iccProfile: iccProfile, hdr: hdr, warnings: warnings)
     }
 
     private static func readCR3(from data: Data) throws -> ImageMetadata {

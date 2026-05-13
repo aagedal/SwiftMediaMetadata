@@ -461,13 +461,22 @@ extension MP4Parser {
 
         if !seiRBSPs.isEmpty {
             let sei = MPEGBitstream.parseSEIMessages(seiRBSPs, forHEVC: true)
-            if sei.masteringDisplay != nil || sei.contentLightLevel != nil {
+            if sei.masteringDisplay != nil
+                || sei.contentLightLevel != nil
+                || sei.contentColourVolume != nil
+                || sei.ambientViewingEnvironment != nil {
                 if stream.hdr == nil { stream.hdr = HDRMetadata() }
                 if let md = sei.masteringDisplay, stream.hdr?.masteringDisplay == nil {
                     stream.hdr?.masteringDisplay = md
                 }
                 if let cll = sei.contentLightLevel, stream.hdr?.contentLightLevel == nil {
                     stream.hdr?.contentLightLevel = cll
+                }
+                if let ccv = sei.contentColourVolume, stream.hdr?.contentColourVolume == nil {
+                    stream.hdr?.contentColourVolume = ccv
+                }
+                if let ave = sei.ambientViewingEnvironment, stream.hdr?.ambientViewingEnvironment == nil {
+                    stream.hdr?.ambientViewingEnvironment = ave
                 }
             }
         }

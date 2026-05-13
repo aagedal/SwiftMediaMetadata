@@ -243,27 +243,39 @@ public struct VideoStream: Sendable, Equatable {
 /// HDR side-data attached to a video stream.
 ///
 /// Carries any combination of SMPTE ST 2086 mastering display color volume,
-/// CTA-861.3 content light level, and Dolby Vision configuration records
-/// found in container-level boxes (`mdcv`, `clli`, `dvcC`/`dvvC`). Each field
-/// is optional because containers can declare any subset.
+/// CTA-861.3 content light level, ITU-T H.273 content colour volume,
+/// ambient viewing environment, and Dolby Vision configuration records found
+/// in container-level boxes (`mdcv`, `clli`, `dvcC`/`dvvC`) or in-bitstream
+/// SEI messages (HEVC payload types 137 / 144 / 147 / 148). Each field is
+/// optional because containers / encoders can declare any subset.
 public struct HDRMetadata: Sendable, Equatable {
     public var masteringDisplay: HDRMasteringDisplay?
     public var contentLightLevel: HDRContentLightLevel?
+    public var contentColourVolume: HDRContentColourVolume?
+    public var ambientViewingEnvironment: HDRAmbientViewingEnvironment?
     public var dolbyVision: HDRDolbyVisionConfig?
 
     public init(
         masteringDisplay: HDRMasteringDisplay? = nil,
         contentLightLevel: HDRContentLightLevel? = nil,
+        contentColourVolume: HDRContentColourVolume? = nil,
+        ambientViewingEnvironment: HDRAmbientViewingEnvironment? = nil,
         dolbyVision: HDRDolbyVisionConfig? = nil
     ) {
         self.masteringDisplay = masteringDisplay
         self.contentLightLevel = contentLightLevel
+        self.contentColourVolume = contentColourVolume
+        self.ambientViewingEnvironment = ambientViewingEnvironment
         self.dolbyVision = dolbyVision
     }
 
     /// True when at least one HDR signal is present.
     public var isPresent: Bool {
-        masteringDisplay != nil || contentLightLevel != nil || dolbyVision != nil
+        masteringDisplay != nil
+            || contentLightLevel != nil
+            || contentColourVolume != nil
+            || ambientViewingEnvironment != nil
+            || dolbyVision != nil
     }
 }
 
@@ -305,6 +317,63 @@ public struct HDRContentLightLevel: Sendable, Equatable {
     public init(maxCLL: Int, maxFALL: Int) {
         self.maxCLL = maxCLL
         self.maxFALL = maxFALL
+    }
+}
+
+/// ITU-T H.273 / H.265 D.2.41 — content colour volume (`cclv` box in ISOBMFF,
+/// SEI payload type 147 in HEVC). Describes the actual chromaticity and
+/// luminance bounds the content reaches, distinct from the *display* the
+/// content was mastered on. Any subset of the three flag groups can be
+/// signalled (primaries / min-luminance / max-luminance / avg-luminance);
+/// fields that weren't signalled stay nil rather than defaulting to zero so
+/// callers can tell "not advertised" from "advertised as zero."
+public struct HDRContentColourVolume: Sendable, Equatable {
+    /// CIE 1931 xy chromaticities for the content's R / G / B primaries.
+    public var redX: Double?
+    public var redY: Double?
+    public var greenX: Double?
+    public var greenY: Double?
+    public var blueX: Double?
+    public var blueY: Double?
+    /// cd/m². Minimum luminance the content reaches.
+    public var minLuminance: Double?
+    /// cd/m². Maximum luminance the content reaches.
+    public var maxLuminance: Double?
+    /// cd/m². Average luminance across the entire content.
+    public var avgLuminance: Double?
+
+    public init(
+        redX: Double? = nil, redY: Double? = nil,
+        greenX: Double? = nil, greenY: Double? = nil,
+        blueX: Double? = nil, blueY: Double? = nil,
+        minLuminance: Double? = nil,
+        maxLuminance: Double? = nil,
+        avgLuminance: Double? = nil
+    ) {
+        self.redX = redX; self.redY = redY
+        self.greenX = greenX; self.greenY = greenY
+        self.blueX = blueX; self.blueY = blueY
+        self.minLuminance = minLuminance
+        self.maxLuminance = maxLuminance
+        self.avgLuminance = avgLuminance
+    }
+}
+
+/// ITU-T H.273 / H.265 D.2.44 — ambient viewing environment (SEI payload
+/// type 148). Encoder-provided hint about the room the content was intended
+/// to be viewed in: a target illuminance plus the white-point chromaticity
+/// of the ambient light. Useful for HDR tone-mapping decisions.
+public struct HDRAmbientViewingEnvironment: Sendable, Equatable {
+    /// Target ambient illuminance in lux.
+    public var ambientIlluminance: Double
+    /// CIE 1931 xy chromaticity of the ambient light.
+    public var ambientLightX: Double
+    public var ambientLightY: Double
+
+    public init(ambientIlluminance: Double, ambientLightX: Double, ambientLightY: Double) {
+        self.ambientIlluminance = ambientIlluminance
+        self.ambientLightX = ambientLightX
+        self.ambientLightY = ambientLightY
     }
 }
 

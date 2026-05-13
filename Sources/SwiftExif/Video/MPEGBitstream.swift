@@ -1122,6 +1122,10 @@ enum MPEGBitstream {
         var masteringDisplay: HDRMasteringDisplay?
         /// CTA-861.3 content light level (SEI payload type 144).
         var contentLightLevel: HDRContentLightLevel?
+        /// H.265 D.2.41 content colour volume (SEI payload type 147).
+        var contentColourVolume: HDRContentColourVolume?
+        /// H.265 D.2.44 ambient viewing environment (SEI payload type 148).
+        var ambientViewingEnvironment: HDRAmbientViewingEnvironment?
         /// True if the stream carries CTA-708 / CEA-608 closed captions in
         /// SEI user_data_registered_itu_t_t35 (payload type 4) with the
         /// ATSC A/53 wrapper (provider 0x0031, user_identifier 'GA94', cc_data type 0x03).
@@ -1193,6 +1197,12 @@ enum MPEGBitstream {
         case 144:
             // content_light_level_info.
             sei.contentLightLevel = decodeCLLIPayload(payload) ?? sei.contentLightLevel
+        case 147:
+            // content_colour_volume (H.265 D.2.41).
+            sei.contentColourVolume = decodeCCVPayload(payload) ?? sei.contentColourVolume
+        case 148:
+            // ambient_viewing_environment (H.265 D.2.44).
+            sei.ambientViewingEnvironment = decodeAVEPayload(payload) ?? sei.ambientViewingEnvironment
         case 136 where forHEVC:
             // time_code (HEVC only).
             if let tc = decodeTimeCodePayload(payload) {
@@ -1280,6 +1290,84 @@ enum MPEGBitstream {
         guard let maxCLL = try? reader.readUInt16BigEndian(),
               let maxFALL = try? reader.readUInt16BigEndian() else { return nil }
         return HDRContentLightLevel(maxCLL: Int(maxCLL), maxFALL: Int(maxFALL))
+    }
+
+    /// SEI payload type 147 — content_colour_volume (H.265 D.2.41). Layout:
+    ///   bit 0:    ccv_cancel_flag
+    ///   bits 1..2: persistence_flag, primaries_present_flag
+    ///   bits 3..5: min/max/avg luminance_present_flag
+    ///   bits 6..7: reserved
+    ///   (byte-aligned)
+    ///   if primaries_present: 3 × (i32 ccv_primaries_x, i32 ccv_primaries_y) in
+    ///     0.00002 CIE 1931 xy units, G/B/R order matching mdcv (H.265 D.2.27).
+    ///   if min_lum_present: u32 ccv_min_luminance_value in 0.0001 cd/m²
+    ///   if max_lum_present: u32 ccv_max_luminance_value in 0.0001 cd/m²
+    ///   if avg_lum_present: u32 ccv_avg_luminance_value in 0.0001 cd/m²
+    ///
+    /// ccv_cancel_flag = 1 tells decoders to drop any prior CCV — we treat it
+    /// as a no-op (nil) so an upstream value isn't overwritten.
+    private static func decodeCCVPayload(_ payload: Data) -> HDRContentColourVolume? {
+        guard payload.count >= 1 else { return nil }
+        let flags = payload[payload.startIndex]
+        let cancel = (flags & 0x80) != 0
+        if cancel { return nil }
+        let primariesPresent = (flags & 0x20) != 0
+        let minLumPresent    = (flags & 0x10) != 0
+        let maxLumPresent    = (flags & 0x08) != 0
+        let avgLumPresent    = (flags & 0x04) != 0
+
+        // Sub-data after the 1 byte of flags is byte-aligned per spec.
+        let body = payload.subdata(in: payload.startIndex + 1 ..< payload.endIndex)
+        var reader = BinaryReader(data: body)
+        let chromaScale = 0.00002
+        let lumaScale = 0.0001
+
+        var ccv = HDRContentColourVolume()
+        if primariesPresent {
+            // G, B, R order per mdcv convention. ccv_primaries_* is i32 in the
+            // spec — reinterpret the u32 bit pattern via Int32(bitPattern:).
+            guard let gx = try? reader.readUInt32BigEndian(),
+                  let gy = try? reader.readUInt32BigEndian(),
+                  let bx = try? reader.readUInt32BigEndian(),
+                  let by = try? reader.readUInt32BigEndian(),
+                  let rx = try? reader.readUInt32BigEndian(),
+                  let ry = try? reader.readUInt32BigEndian() else { return nil }
+            ccv.greenX = Double(Int32(bitPattern: gx)) * chromaScale
+            ccv.greenY = Double(Int32(bitPattern: gy)) * chromaScale
+            ccv.blueX  = Double(Int32(bitPattern: bx)) * chromaScale
+            ccv.blueY  = Double(Int32(bitPattern: by)) * chromaScale
+            ccv.redX   = Double(Int32(bitPattern: rx)) * chromaScale
+            ccv.redY   = Double(Int32(bitPattern: ry)) * chromaScale
+        }
+        if minLumPresent {
+            guard let v = try? reader.readUInt32BigEndian() else { return nil }
+            ccv.minLuminance = Double(v) * lumaScale
+        }
+        if maxLumPresent {
+            guard let v = try? reader.readUInt32BigEndian() else { return nil }
+            ccv.maxLuminance = Double(v) * lumaScale
+        }
+        if avgLumPresent {
+            guard let v = try? reader.readUInt32BigEndian() else { return nil }
+            ccv.avgLuminance = Double(v) * lumaScale
+        }
+        return ccv
+    }
+
+    /// SEI payload type 148 — ambient_viewing_environment (H.265 D.2.44). Layout
+    /// (8 bytes): ambient_illuminance u32 (0.0001 lux), ambient_light_x u16,
+    /// ambient_light_y u16 (both 0.00002 CIE 1931 xy units).
+    private static func decodeAVEPayload(_ payload: Data) -> HDRAmbientViewingEnvironment? {
+        guard payload.count >= 8 else { return nil }
+        var reader = BinaryReader(data: payload)
+        guard let illum = try? reader.readUInt32BigEndian(),
+              let ax = try? reader.readUInt16BigEndian(),
+              let ay = try? reader.readUInt16BigEndian() else { return nil }
+        return HDRAmbientViewingEnvironment(
+            ambientIlluminance: Double(illum) * 0.0001,
+            ambientLightX: Double(ax) * 0.00002,
+            ambientLightY: Double(ay) * 0.00002
+        )
     }
 
     /// SEI payload type 136 (HEVC) — time_code. Decode the first clock timestamp

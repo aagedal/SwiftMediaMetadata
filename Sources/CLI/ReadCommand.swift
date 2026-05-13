@@ -254,6 +254,24 @@ struct ReadCommand: ParsableCommand {
                     d["MaxCLL"]  = String(cll.maxCLL)
                     d["MaxFALL"] = String(cll.maxFALL)
                 }
+                if let ccv = hdr.contentColourVolume {
+                    if let rx = ccv.redX, let ry = ccv.redY {
+                        d["ContentColourVolumePrimariesR"] = String(format: "%.4f,%.4f", rx, ry)
+                    }
+                    if let gx = ccv.greenX, let gy = ccv.greenY {
+                        d["ContentColourVolumePrimariesG"] = String(format: "%.4f,%.4f", gx, gy)
+                    }
+                    if let bx = ccv.blueX, let by = ccv.blueY {
+                        d["ContentColourVolumePrimariesB"] = String(format: "%.4f,%.4f", bx, by)
+                    }
+                    if let minL = ccv.minLuminance { d["ContentColourVolumeMinLuminance"] = String(format: "%.4f cd/m^2", minL) }
+                    if let maxL = ccv.maxLuminance { d["ContentColourVolumeMaxLuminance"] = String(format: "%.1f cd/m^2", maxL) }
+                    if let avgL = ccv.avgLuminance { d["ContentColourVolumeAvgLuminance"] = String(format: "%.1f cd/m^2", avgL) }
+                }
+                if let ave = hdr.ambientViewingEnvironment {
+                    d["AmbientViewingEnvironmentIlluminance"] = String(format: "%.4f lux", ave.ambientIlluminance)
+                    d["AmbientViewingEnvironmentLight"] = String(format: "%.4f,%.4f", ave.ambientLightX, ave.ambientLightY)
+                }
                 if let dv = hdr.dolbyVision {
                     d["DolbyVisionProfile"] = String(dv.profile)
                     d["DolbyVisionLevel"]   = String(dv.level)

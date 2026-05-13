@@ -232,6 +232,21 @@ public struct MetadataExporter: Sendable {
             if icc.hasMeasurement { dict["ICCProfile:Measurement"] = true }
         }
 
+        // HDR static metadata from HEIF / AVIF `mdcv` / `clli` properties.
+        if let hdr = metadata.hdr {
+            if let md = hdr.masteringDisplay {
+                dict["HDR:MasteringDisplayPrimariesR"] = String(format: "%.4f,%.4f", md.redX, md.redY)
+                dict["HDR:MasteringDisplayPrimariesG"] = String(format: "%.4f,%.4f", md.greenX, md.greenY)
+                dict["HDR:MasteringDisplayPrimariesB"] = String(format: "%.4f,%.4f", md.blueX, md.blueY)
+                dict["HDR:MasteringDisplayWhitePoint"] = String(format: "%.4f,%.4f", md.whitePointX, md.whitePointY)
+                dict["HDR:MasteringDisplayLuminance"]  = String(format: "%.1f-%.4f cd/m^2", md.maxLuminance, md.minLuminance)
+            }
+            if let cll = hdr.contentLightLevel {
+                dict["HDR:MaxCLL"]  = cll.maxCLL
+                dict["HDR:MaxFALL"] = cll.maxFALL
+            }
+        }
+
         // DNG private tags (Adobe DNG specification 1.7).
         if let dng = metadata.dng {
             if let v = dng.dngVersion { dict["DNG:DNGVersion"] = v }

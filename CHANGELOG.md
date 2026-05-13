@@ -8,6 +8,31 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+### Added
+
+- **Content colour volume (SEI 147) and ambient viewing environment (SEI 148)** —
+  HEVC SEI payload types 147 and 148 are now decoded into two new
+  `VideoStream.hdr` sub-structs (`HDRContentColourVolume`,
+  `HDRAmbientViewingEnvironment`). CCV describes the actual chromaticity /
+  luminance bounds the *content* reaches (distinct from the *display* the
+  content was mastered on, which is what `mdcv` records); AVE encodes the
+  target viewing-room illuminance + white-point chromaticity. Both surface as
+  `ContentColourVolume*` / `AmbientViewingEnvironment*` keys on the default
+  flat exporter output and on the per-stream report.
+  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift),
+  [`Sources/SwiftExif/API/VideoStream.swift`](Sources/SwiftExif/API/VideoStream.swift))
+
+- **HDR static metadata on HEIF / AVIF stills** — `mdcv` and `clli` properties
+  inside the `meta → iprp → ipco` hierarchy (iPhone Pro HDR HEIC, AOM HDR AVIF
+  reference encoder) are now parsed via a new
+  `ISOBMFFMetadata.extractHDRMetadata` that reuses the existing
+  `MP4Parser.parseMDCVBox` / `parseCLLIBox` decoders. Exposed as
+  `ImageMetadata.hdr` (typed as the same shared `HDRMetadata` used by the
+  video side) and as `HDR:MasteringDisplay*` / `HDR:MaxCLL` / `HDR:MaxFALL`
+  keys in the flat image exporter.
+  ([`Sources/SwiftExif/Binary/ISOBMFFMetadata.swift`](Sources/SwiftExif/Binary/ISOBMFFMetadata.swift),
+  [`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
+
 ## [1.8.0] — 2026-05-13
 
 ### Added
