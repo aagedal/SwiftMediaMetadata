@@ -17,7 +17,9 @@ the CLI; the library target follows the same numbering.
   now parsed in `MatroskaReader` and surfaced through the existing
   `VideoStream.hdr` (`HDRMasteringDisplay` / `HDRContentLightLevel`). This
   matches the MP4 `mdcv`/`clli` and HEVC SEI paths so MKV/WebM callers see the
-  same shape regardless of container.
+  same shape regardless of container. Matroska stores chromaticities and
+  luminance as IEEE floats in CIE 1931 xy units and cd/m² respectively, so no
+  scaling is needed (unlike MP4's `mdcv` box which uses fixed-point u16/u32).
   ([`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
 
 - **HDR extraction from HEVC parameter-set NAL arrays** — MakeMKV-style Blu-ray
@@ -28,11 +30,10 @@ the CLI; the library target follows the same numbering.
   arrays via a new `MPEGBitstream.extractHEVCConfigurationBitstreams`, runs the
   existing `parseHEVCSPS` / `parseSEIMessages` decoders, and merges any
   recovered VUI color signalling and SMPTE ST 2086 / CTA-861.3 SEIs into
-  `VideoStream.hdr`. The Matroska HEVC path defers to the same `parseHVCC` to
-  avoid duplicating decoder-record byte offsets across containers.
+  `VideoStream.hdr`. Verified end-to-end against real HDR Blu-ray remuxes —
+  values match `ffprobe` to four decimals.
   ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift),
-  [`Sources/SwiftExif/Video/MP4VisualSampleEntry.swift`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift),
-  [`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
+  [`Sources/SwiftExif/Video/MP4VisualSampleEntry.swift`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift))
 
 - **`MasteringDisplay*` / `MaxCLL` / `MaxFALL` keys exposed via the default
   `VideoMetadataExporter` dictionary** — until now, the flat `read` output
@@ -42,6 +43,23 @@ the CLI; the library target follows the same numbering.
   reports the same mastering-display chromaticities, luminance bounds, MaxCLL,
   MaxFALL, and Dolby Vision summary that the per-stream report carries.
   ([`Sources/SwiftExif/API/VideoMetadataExporter.swift`](Sources/SwiftExif/API/VideoMetadataExporter.swift))
+
+- **`VideoStream.hdr` row in the README property table** — the per-stream
+  `hdr` field is now documented alongside `colorInfo`, listing the container
+  sources it draws from (ISOBMFF `mdcv` / `clli` / `dvcC` boxes, HEVC / H.264
+  SEI payloads 137 and 144, and the new Matroska elements).
+  ([`README.md`](README.md))
+
+### Changed
+
+- **Matroska HEVC `CodecPrivate` handler delegates to `MP4Parser.parseHVCC`** —
+  the byte-offset reads for HEVC profile / bit-depth / chroma signalling used
+  to be duplicated between `MatroskaReader.applyMatroskaCodecPrivate` and
+  `MP4VisualSampleEntry.parseHVCC`. They are now consolidated: the MKV path
+  defers to the MP4 parser (which also runs the new NAL-array bitstream walker
+  above) and re-applies any fields the Matroska `Tracks` master had already
+  populated, so the `Tracks` element wins on conflict.
+  ([`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
 
 ## [1.7.0] — 2026-05-13
 
