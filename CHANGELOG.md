@@ -8,6 +8,8 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-05-13
+
 ### Added
 
 - **Matroska HDR static metadata** — `MaxCLL` (0x55BC), `MaxFALL` (0x55BD), and
