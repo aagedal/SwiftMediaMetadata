@@ -1,11 +1,10 @@
 import Foundation
 
-public enum MetadataError: Error, Sendable, CustomStringConvertible {
+public enum MetadataError: LocalizedError, Sendable, CustomStringConvertible {
     case notAJPEG
     case unexpectedEndOfData
     case invalidSegmentLength
     case invalidMarker(UInt8)
-    case segmentNotFound(UInt16)
     case invalidPhotoshopHeader
     case invalid8BIMBlock
     case invalidIPTCData(String)
@@ -55,8 +54,6 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid JPEG segment length"
         case .invalidMarker(let byte):
             return "Invalid JPEG marker: 0x\(String(byte, radix: 16, uppercase: true))"
-        case .segmentNotFound(let marker):
-            return "Segment not found: 0x\(String(marker, radix: 16, uppercase: true))"
         case .invalidPhotoshopHeader:
             return "Invalid Photoshop 3.0 header in APP13"
         case .invalid8BIMBlock:
@@ -135,4 +132,6 @@ public enum MetadataError: Error, Sendable, CustomStringConvertible {
             return "Invalid AIFF file: \(detail)"
         }
     }
+
+    public var errorDescription: String? { description }
 }

@@ -53,7 +53,8 @@ let package = Package(
         .testTarget(
             name: "SwiftExifTests",
             dependencies: ["SwiftExif"],
-            path: "Tests/SwiftExifTests"
+            path: "Tests/SwiftExifTests",
+            resources: [.copy("Fixtures/Resources")]
         ),
         // Black-box CLI tests — spawn the built `swift-exif` binary as a subprocess.
         // Gated behind SWIFT_EXIF_RUN_CLI_TESTS=1 so `swift test` skips them by

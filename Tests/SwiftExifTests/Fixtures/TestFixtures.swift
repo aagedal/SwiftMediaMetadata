@@ -88,6 +88,49 @@ enum TestFixtures {
         return writer.data
     }
 
+    /// Generate a "bare" JPEG with no APP markers at all: SOI + DQT + SOF0 + DHT + SOS + entropy + EOI.
+    /// Mirrors the structurally-valid minimal layout encoders like libjpeg can emit when
+    /// every metadata pipeline is disabled. Used to assert the parser/reader tolerate
+    /// JPEGs with zero metadata segments.
+    static func bareJPEG() -> Data {
+        var writer = BinaryWriter(capacity: 128)
+
+        // SOI
+        writer.writeUInt16BigEndian(JPEGMarker.soi.rawValue)
+
+        // DQT (minimal quantization table)
+        var dqtData = Data([0x00])
+        dqtData.append(contentsOf: [UInt8](repeating: 1, count: 64))
+        writer.writeUInt16BigEndian(JPEGMarker.dqt.rawValue)
+        writer.writeUInt16BigEndian(UInt16(dqtData.count + 2))
+        writer.writeBytes(dqtData)
+
+        // SOF0 (1x1 grayscale)
+        let sofData = Data([0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00])
+        writer.writeUInt16BigEndian(JPEGMarker.sof0.rawValue)
+        writer.writeUInt16BigEndian(UInt16(sofData.count + 2))
+        writer.writeBytes(sofData)
+
+        // DHT
+        var dhtData = Data([0x00])
+        dhtData.append(contentsOf: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] as [UInt8])
+        dhtData.append(0x00)
+        writer.writeUInt16BigEndian(JPEGMarker.dht.rawValue)
+        writer.writeUInt16BigEndian(UInt16(dhtData.count + 2))
+        writer.writeBytes(dhtData)
+
+        // SOS
+        let sosHeader = Data([0x01, 0x01, 0x00, 0x00, 0x3F, 0x00])
+        writer.writeUInt16BigEndian(JPEGMarker.sos.rawValue)
+        writer.writeUInt16BigEndian(UInt16(sosHeader.count + 2))
+        writer.writeBytes(sosHeader)
+
+        // Entropy + EOI
+        writer.writeBytes([0x7F, 0xFF, 0xD9])
+
+        return writer.data
+    }
+
     // MARK: - JPEG with IPTC
 
     /// Generate a JPEG with a pre-built APP13 containing IPTC data.

@@ -28,12 +28,35 @@ public struct XMPReader: Sendable {
     /// Parse XMP from raw XML data (no JPEG identifier prefix).
     /// Used for TIFF XMP tag (0x02BC), PNG iTXt, JPEG XL xml box, AVIF XMP.
     public static func readFromXML(_ data: Data) throws -> XMPData {
-        guard let xmlString = String(data: data, encoding: .utf8) else {
+        let trimmed = trimXMPPacketPadding(data)
+        guard let xmlString = String(data: trimmed, encoding: .utf8) else {
             throw MetadataError.invalidXMP("Failed to decode XMP as UTF-8")
         }
 
         let parser = XMPXMLParser(xmlString: xmlString)
         return try parser.parse()
+    }
+
+    /// Strip the trailing padding that XMP writers append after the closing
+    /// `<?xpacket end="..."?>` processing instruction. Adobe's XMP spec lets
+    /// writers pad packets so they can be edited in place; some writers leave
+    /// NUL bytes or non-XML whitespace bytes past the PI, which NSXMLParser
+    /// rejects as "extra content at end of document". When no xpacket PI is
+    /// present, fall back to trimming trailing NULs.
+    static func trimXMPPacketPadding(_ data: Data) -> Data {
+        let endMarker = Data("<?xpacket end=".utf8)
+        if let endRange = data.range(of: endMarker) {
+            let piClose = Data("?>".utf8)
+            if let closeRange = data.range(of: piClose, in: endRange.upperBound..<data.endIndex) {
+                return data.subdata(in: data.startIndex..<closeRange.upperBound)
+            }
+        }
+        // No xpacket end PI — strip trailing NUL bytes (whitespace is legal in the epilog).
+        var end = data.endIndex
+        while end > data.startIndex, data[end - 1] == 0x00 {
+            end -= 1
+        }
+        return data.subdata(in: data.startIndex..<end)
     }
 }
 

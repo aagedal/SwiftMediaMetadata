@@ -98,6 +98,73 @@ final class XMPReaderTests: XCTestCase {
         XCTAssertThrowsError(try XMPReader.read(from: data))
     }
 
+    /// XMP packets in real files (Sony JPEG out of camera, Capture One exports,
+    /// some Lightroom writers) frequently end with `<?xpacket end="w"?>` followed
+    /// by a NUL byte or non-whitespace garbage as padding. NSXMLParser rejects
+    /// extra content past the root element, so the reader must trim it first.
+    func testParsesXMPWithTrailingNullAfterXPacketEnd() throws {
+        let xml = """
+        <?xpacket begin="\u{FEFF}" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+         <rdf:Description rdf:about="" photoshop:Headline="Sony out-of-camera"/>
+        </rdf:RDF>
+        </x:xmpmeta>
+        <?xpacket end="w"?>
+        """
+        // Producer pads with trailing NUL (and a stray space) after the closing PI.
+        var payload = Data(JPEGSegment.xmpIdentifier)
+        payload.append(Data(xml.utf8))
+        payload.append(contentsOf: [0x20, 0x00, 0x00])
+
+        let xmp = try XMPReader.read(from: payload)
+        XCTAssertEqual(xmp.headline, "Sony out-of-camera")
+    }
+
+    /// Some XMP packets carry whitespace + NUL padding *between* the closing
+    /// `</x:xmpmeta>` and `<?xpacket end="..."?>` (Adobe's in-place-edit padding
+    /// region). The trimmer must not chop into that — it should only drop
+    /// bytes past the closing `?>` of the xpacket end PI.
+    func testParsesXMPWithPaddingBeforeXPacketEnd() throws {
+        let padding = String(repeating: " ", count: 200)
+        let xml = """
+        <?xpacket begin="\u{FEFF}" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+         <rdf:Description rdf:about="" photoshop:Headline="With padding"/>
+        </rdf:RDF>
+        </x:xmpmeta>\(padding)
+        <?xpacket end="w"?>
+        """
+        var payload = Data(JPEGSegment.xmpIdentifier)
+        payload.append(Data(xml.utf8))
+        payload.append(0x00)
+
+        let xmp = try XMPReader.read(from: payload)
+        XCTAssertEqual(xmp.headline, "With padding")
+    }
+
+    /// XMP packets without the optional `<?xpacket ...?>` wrapper (rare, but
+    /// permitted by the spec for embedded XMP in things like JPEG XL `xml` boxes)
+    /// must still parse when the producer trailed a NUL byte.
+    func testParsesBareXMPWithTrailingNull() throws {
+        let xml = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+         <rdf:Description rdf:about="" photoshop:Headline="Bare"/>
+        </rdf:RDF>
+        </x:xmpmeta>
+        """
+        var data = Data(xml.utf8)
+        data.append(contentsOf: [0x00, 0x00, 0x00])
+
+        let xmp = try XMPReader.readFromXML(data)
+        XCTAssertEqual(xmp.headline, "Bare")
+    }
+
     /// Frame-stack depth cap: a packet with deeply nested struct fields should
     /// abort cleanly with an `invalidXMP` error instead of unbounded growth or
     /// stack overflow.
