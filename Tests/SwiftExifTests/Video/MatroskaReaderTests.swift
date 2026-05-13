@@ -113,6 +113,66 @@ final class MatroskaReaderTests: XCTestCase {
         XCTAssertEqual(m.chapters[1].title, "Visible B")
     }
 
+    /// Matroska HDR static metadata — `MaxCLL` (0x55BC), `MaxFALL` (0x55BD), and
+    /// the `MasteringMetadata` (0x55D0) group inside a video track's `Colour`
+    /// element. Synthesised inline so we don't need an HDR mux pipeline. Values
+    /// correspond to BT.2020 / SMPTE ST 2086: BT.2020 primaries, D65 white
+    /// point, 1000 cd/m² peak, 0.005 cd/m² floor, MaxCLL 1000, MaxFALL 400.
+    func testMKVColourHDRMasteringAndCLL() throws {
+        let blob = buildMatroskaWithHDRTrack(
+            primaries: 9, transfer: 16, matrix: 9,
+            maxCLL: 1000, maxFALL: 400,
+            redX: 0.708, redY: 0.292,
+            greenX: 0.170, greenY: 0.797,
+            blueX: 0.131, blueY: 0.046,
+            whiteX: 0.3127, whiteY: 0.3290,
+            maxLuminance: 1000.0, minLuminance: 0.005
+        )
+        let m = try VideoMetadata.read(from: blob)
+        let v = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(v.colorInfo?.primaries, 9)
+        XCTAssertEqual(v.colorInfo?.transfer, 16)
+        XCTAssertEqual(v.colorInfo?.matrix, 9)
+
+        let cll = try XCTUnwrap(v.hdr?.contentLightLevel)
+        XCTAssertEqual(cll.maxCLL, 1000)
+        XCTAssertEqual(cll.maxFALL, 400)
+
+        let md = try XCTUnwrap(v.hdr?.masteringDisplay)
+        XCTAssertEqual(md.redX, 0.708, accuracy: 1e-5)
+        XCTAssertEqual(md.redY, 0.292, accuracy: 1e-5)
+        XCTAssertEqual(md.greenX, 0.170, accuracy: 1e-5)
+        XCTAssertEqual(md.greenY, 0.797, accuracy: 1e-5)
+        XCTAssertEqual(md.blueX, 0.131, accuracy: 1e-5)
+        XCTAssertEqual(md.blueY, 0.046, accuracy: 1e-5)
+        XCTAssertEqual(md.whitePointX, 0.3127, accuracy: 1e-5)
+        XCTAssertEqual(md.whitePointY, 0.3290, accuracy: 1e-5)
+        XCTAssertEqual(md.maxLuminance, 1000.0, accuracy: 1e-3)
+        XCTAssertEqual(md.minLuminance, 0.005, accuracy: 1e-5)
+    }
+
+    /// SDR sanity: a video track whose `Colour` element advertises only
+    /// BT.709 primaries / transfer / matrix and no HDR siblings must not
+    /// fabricate an `HDRMetadata` record — `stream.hdr` stays nil. Mirrors the
+    /// equivalent guard in MP4 (`testStreamWithoutHDRBoxesHasNilHDR`).
+    func testMKVColourSDRLeavesHDRNil() throws {
+        let blob = buildMatroskaWithHDRTrack(
+            primaries: 1, transfer: 1, matrix: 1,
+            maxCLL: nil, maxFALL: nil,
+            redX: nil, redY: nil,
+            greenX: nil, greenY: nil,
+            blueX: nil, blueY: nil,
+            whiteX: nil, whiteY: nil,
+            maxLuminance: nil, minLuminance: nil
+        )
+        let m = try VideoMetadata.read(from: blob)
+        let v = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(v.colorInfo?.primaries, 1)
+        XCTAssertEqual(v.colorInfo?.transfer, 1)
+        XCTAssertEqual(v.colorInfo?.matrix, 1)
+        XCTAssertNil(v.hdr, "SDR streams must not synthesise an empty HDRMetadata record")
+    }
+
     // MARK: - Fixtures
 
     private func generateMKVWithTitles(videoTitle: String, audioTitle: String) throws -> URL {
@@ -218,6 +278,90 @@ final class MatroskaReaderTests: XCTestCase {
 
         let segment = ebmlElement(id: [0x18, 0x53, 0x80, 0x67], payload: chapters)          // Segment
         return ebmlHeader + segment
+    }
+
+    /// Build a minimal Matroska blob with a single video TrackEntry whose
+    /// `Colour` master carries the supplied color signalling and HDR static
+    /// metadata. Any field passed as nil is omitted from the EBML tree — used
+    /// by the SDR-vs-HDR tests above to exercise both populated and absent
+    /// `MasteringMetadata` / `MaxCLL` / `MaxFALL`.
+    private func buildMatroskaWithHDRTrack(
+        primaries: UInt64, transfer: UInt64, matrix: UInt64,
+        maxCLL: UInt64?, maxFALL: UInt64?,
+        redX: Double?, redY: Double?,
+        greenX: Double?, greenY: Double?,
+        blueX: Double?, blueY: Double?,
+        whiteX: Double?, whiteY: Double?,
+        maxLuminance: Double?, minLuminance: Double?
+    ) -> Data {
+        // EBML header
+        var ebmlPayload = Data()
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x86], payload: encodeUInt(1)))          // EBMLVersion
+        ebmlPayload.append(ebmlElement(id: [0x42, 0xF7], payload: encodeUInt(1)))          // EBMLReadVersion
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x82], payload: Data("matroska".utf8))) // DocType
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x87], payload: encodeUInt(4)))          // DocTypeVersion
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x85], payload: encodeUInt(2)))          // DocTypeReadVersion
+        let ebmlHeader = ebmlElement(id: [0x1A, 0x45, 0xDF, 0xA3], payload: ebmlPayload)
+
+        // Colour master
+        var colour = Data()
+        colour.append(ebmlElement(id: [0x55, 0xBB], payload: encodeUInt(primaries))) // Primaries
+        colour.append(ebmlElement(id: [0x55, 0xBA], payload: encodeUInt(transfer)))  // TransferCharacteristics
+        colour.append(ebmlElement(id: [0x55, 0xB1], payload: encodeUInt(matrix)))    // MatrixCoefficients
+        if let v = maxCLL  { colour.append(ebmlElement(id: [0x55, 0xBC], payload: encodeUInt(v))) }
+        if let v = maxFALL { colour.append(ebmlElement(id: [0x55, 0xBD], payload: encodeUInt(v))) }
+
+        // MasteringMetadata only if at least one chromaticity/luminance field
+        // is set — matches how real muxers emit it.
+        let mdFields: [(id: [UInt8], value: Double?)] = [
+            ([0x55, 0xD1], redX), ([0x55, 0xD2], redY),
+            ([0x55, 0xD3], greenX), ([0x55, 0xD4], greenY),
+            ([0x55, 0xD5], blueX), ([0x55, 0xD6], blueY),
+            ([0x55, 0xD7], whiteX), ([0x55, 0xD8], whiteY),
+            ([0x55, 0xD9], maxLuminance), ([0x55, 0xDA], minLuminance),
+        ]
+        if mdFields.contains(where: { $0.value != nil }) {
+            var md = Data()
+            for f in mdFields {
+                if let v = f.value {
+                    md.append(ebmlElement(id: f.id, payload: encodeFloat32BE(v)))
+                }
+            }
+            colour.append(ebmlElement(id: [0x55, 0xD0], payload: md)) // MasteringMetadata
+        }
+
+        // Video > Colour
+        let videoBlock = ebmlElement(id: [0xE0], payload:
+            ebmlElement(id: [0xB0], payload: encodeUInt(1920)) +    // PixelWidth (any sensible value)
+            ebmlElement(id: [0xBA], payload: encodeUInt(1080)) +    // PixelHeight
+            ebmlElement(id: [0x55, 0xB0], payload: colour)          // Colour master
+        )
+
+        // TrackEntry > {TrackNumber, TrackUID, TrackType=1(video), CodecID, Video}
+        var trackEntry = Data()
+        trackEntry.append(ebmlElement(id: [0xD7], payload: encodeUInt(1)))                        // TrackNumber
+        trackEntry.append(ebmlElement(id: [0x73, 0xC5], payload: encodeUInt(0xCAFEBABE)))         // TrackUID
+        trackEntry.append(ebmlElement(id: [0x83], payload: encodeUInt(1)))                        // TrackType = video
+        trackEntry.append(ebmlElement(id: [0x86], payload: Data("V_MPEGH/ISO/HEVC".utf8)))        // CodecID
+        trackEntry.append(videoBlock)
+
+        let tracks = ebmlElement(id: [0x16, 0x54, 0xAE, 0x6B], payload:
+            ebmlElement(id: [0xAE], payload: trackEntry)            // TrackEntry
+        )
+        let segment = ebmlElement(id: [0x18, 0x53, 0x80, 0x67], payload: tracks)
+        return ebmlHeader + segment
+    }
+
+    /// IEEE 754 single-precision, big-endian — matches the 4-byte branch in
+    /// `MatroskaReader.readFloatPayload`.
+    private func encodeFloat32BE(_ value: Double) -> Data {
+        let bits = Float(value).bitPattern
+        return Data([
+            UInt8((bits >> 24) & 0xFF),
+            UInt8((bits >> 16) & 0xFF),
+            UInt8((bits >> 8) & 0xFF),
+            UInt8(bits & 0xFF),
+        ])
     }
 
     /// Encode an unsigned integer as the shortest big-endian byte sequence

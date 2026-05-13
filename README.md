@@ -203,6 +203,7 @@ plus convenience accessors that mirror the first video stream at the top level
 | `frameCount` | Container-advertised frame count (ISOBMFF `stsz`, AVI `dwLength`, Matroska `NUMBER_OF_FRAMES` tag) |
 | `fieldOrder` | `.progressive`, `.topFieldFirst`, `.bottomFieldFirst`, `.mixed`, `.unknown` |
 | `colorInfo` | `VideoColorInfo?` — primaries / transfer / matrix / range (H.273 codes) with readable `label` |
+| `hdr` | `HDRMetadata?` — SMPTE ST 2086 mastering display (R/G/B/W xy + max/min luminance), CTA-861.3 MaxCLL / MaxFALL, Dolby Vision config. Read from ISOBMFF `mdcv` / `clli` / `dvcC` / `dvvC` boxes, H.264 / H.265 SEI (payload types 137 and 144), and the Matroska `MasteringMetadata` (0x55D0) / `MaxCLL` (0x55BC) / `MaxFALL` (0x55BD) elements |
 | `bitRate` | Per-stream bits/second (ISOBMFF `btrt`) |
 | `timecode` | Per-stream timecode (when the track carries one) |
 | `isAttachedPic` | `true` when the track is a cover-art / attached-picture track |

@@ -425,6 +425,52 @@ extension MP4Parser {
             chromaFormatIDC: chromaFormatIDC,
             bitDepth: bitDepthLuma
         )
+        applyHEVCBitstreamFromConfigRecord(data, into: &stream)
+    }
+
+    /// Walk the NAL arrays inside an HEVCDecoderConfigurationRecord and harvest
+    /// what container-level boxes don't always advertise: SPS-VUI color
+    /// signalling (primaries / transfer / matrix / range) plus prefix-SEI HDR
+    /// static metadata (mastering display volume 137, content light level 144).
+    /// Real-world Blu-ray HDR10 muxes — particularly MakeMKV output — rely on
+    /// these instead of the parallel `Colour` / `mdcv` / `clli` container
+    /// elements, so without this step the HDR metadata is silently lost on
+    /// MKV (and any MP4 that doesn't also carry `mdcv` / `clli`).
+    static func applyHEVCBitstreamFromConfigRecord(
+        _ data: Data,
+        into stream: inout VideoStream
+    ) {
+        let (spsRBSP, seiRBSPs) = MPEGBitstream.extractHEVCConfigurationBitstreams(data)
+
+        if let sps = spsRBSP, let fields = MPEGBitstream.parseHEVCSPS(sps) {
+            if let color = fields.color {
+                // Only fill gaps — container-level `colr` boxes (when present)
+                // remain the source of truth because they reflect post-encode
+                // overrides muxers occasionally apply.
+                var merged = stream.colorInfo ?? VideoColorInfo()
+                if merged.primaries == nil { merged.primaries = color.primaries }
+                if merged.transfer == nil  { merged.transfer  = color.transfer }
+                if merged.matrix == nil    { merged.matrix    = color.matrix }
+                if merged.fullRange == nil { merged.fullRange = color.fullRange }
+                stream.colorInfo = merged
+            }
+            if stream.chromaLocation == nil, let cl = fields.chromaLocation {
+                stream.chromaLocation = cl
+            }
+        }
+
+        if !seiRBSPs.isEmpty {
+            let sei = MPEGBitstream.parseSEIMessages(seiRBSPs, forHEVC: true)
+            if sei.masteringDisplay != nil || sei.contentLightLevel != nil {
+                if stream.hdr == nil { stream.hdr = HDRMetadata() }
+                if let md = sei.masteringDisplay, stream.hdr?.masteringDisplay == nil {
+                    stream.hdr?.masteringDisplay = md
+                }
+                if let cll = sei.contentLightLevel, stream.hdr?.contentLightLevel == nil {
+                    stream.hdr?.contentLightLevel = cll
+                }
+            }
+        }
     }
 
     /// Map H.264 / AVC profile_idc (ISO/IEC 14496-10 Annex A.2) to the

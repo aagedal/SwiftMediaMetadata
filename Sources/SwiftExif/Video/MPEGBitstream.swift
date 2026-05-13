@@ -143,6 +143,57 @@ enum MPEGBitstream {
         return out
     }
 
+    /// Walk the parameter-set NAL arrays inside an HEVCDecoderConfigurationRecord
+    /// (ISOBMFF `hvcC` box / Matroska `V_MPEGH/ISO/HEVC` `CodecPrivate`). Starting
+    /// at byte 22 — `numOfArrays` — each array is { type byte, num NALUs (u16 BE),
+    /// (NALU length u16 BE + NALU bytes) × N }. The NAL_unit_type lives in the low
+    /// 6 bits of the array's type byte. Returns the first SPS RBSP (NAL type 33,
+    /// header stripped, emulation-prevention bytes removed) and every prefix /
+    /// suffix SEI RBSP (NAL types 39 / 40, same treatment) — the same format the
+    /// MPEG-TS pipeline already feeds to `parseHEVCSPS` and `parseSEIMessages`.
+    /// Out-of-bounds reads or malformed sizes terminate the walk silently.
+    static func extractHEVCConfigurationBitstreams(
+        _ data: Data
+    ) -> (sps: Data?, seiRBSPs: [Data]) {
+        // Fixed header before the NAL arrays is 23 bytes (configurationVersion …
+        // numOfArrays). Anything shorter cannot describe a single array.
+        guard data.count > 22 else { return (nil, []) }
+        let base = data.startIndex
+        let numArrays = Int(data[base + 22])
+        var offset = 23
+        var sps: Data?
+        var seis: [Data] = []
+
+        for _ in 0..<numArrays {
+            guard offset + 3 <= data.count else { break }
+            let nalType = Int(data[base + offset] & 0x3F)
+            let numNalus = (Int(data[base + offset + 1]) << 8) | Int(data[base + offset + 2])
+            offset += 3
+
+            for _ in 0..<numNalus {
+                guard offset + 2 <= data.count else { return (sps, seis) }
+                let len = (Int(data[base + offset]) << 8) | Int(data[base + offset + 1])
+                offset += 2
+                guard offset + len <= data.count, len >= 2 else { return (sps, seis) }
+                // The first 2 bytes of every HEVC NALU are the NAL header; the
+                // RBSP-with-emulation-prevention payload follows. Both consumers
+                // here (parseHEVCSPS / parseSEIMessages) take RBSPs that start
+                // *after* the NAL header.
+                let payloadStart = offset + 2
+                let payloadEnd = offset + len
+                let raw = data.subdata(in: base + payloadStart ..< base + payloadEnd)
+                let rbsp = stripEmulationPrevention(raw)
+                switch nalType {
+                case 33 where sps == nil: sps = rbsp     // SPS (first one wins)
+                case 39, 40:              seis.append(rbsp) // prefix / suffix SEI
+                default: break
+                }
+                offset += len
+            }
+        }
+        return (sps, seis)
+    }
+
     // MARK: - H.264 SPS
 
     struct H264SPSFields {

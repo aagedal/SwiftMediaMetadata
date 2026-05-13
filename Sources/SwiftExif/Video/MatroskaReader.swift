@@ -920,31 +920,20 @@ public struct MatroskaReader: Sendable {
     ) {
         switch id {
         case "V_MPEGH/ISO/HEVC":
-            // Same bytes as MP4 hvcC.
-            guard data.count >= 23 else { return }
-            let s = data.startIndex
-            let profileIDC = Int(data[s + 1] & 0x1F)
-            let chromaFormatIDC = Int(data[s + 16] & 0x03)
-            let bitDepth = Int(data[s + 17] & 0x07) + 8
-            if stream.profile == nil {
-                stream.profile = hevcProfileLabel(
-                    profileIDC: profileIDC,
-                    chromaFormatIDC: chromaFormatIDC,
-                    bitDepth: bitDepth
-                )
-            }
-            if stream.bitDepth == nil {
-                stream.bitDepth = bitDepth
-            }
-            if stream.chromaSubsampling == nil {
-                switch chromaFormatIDC {
-                case 0: stream.chromaSubsampling = "4:0:0"
-                case 1: stream.chromaSubsampling = "4:2:0"
-                case 2: stream.chromaSubsampling = "4:2:2"
-                case 3: stream.chromaSubsampling = "4:4:4"
-                default: break
-                }
-            }
+            // The bytes are an HEVCDecoderConfigurationRecord, identical to the
+            // payload of an MP4 `hvcC` box. Defer to the MP4 parser so the NAL
+            // arrays (SPS VUI for color signalling; prefix SEI for MaxCLL /
+            // MaxFALL / mastering display) get walked the same way for both
+            // containers. Snapshot fields the MKV `Tracks` already populated so
+            // the hvcC fallback can't overwrite them — `Tracks` data is more
+            // authoritative when both sources disagree.
+            let previousProfile = stream.profile
+            let previousBitDepth = stream.bitDepth
+            let previousChroma = stream.chromaSubsampling
+            MP4Parser.parseHVCC(data, into: &stream)
+            if let p = previousProfile { stream.profile = p }
+            if let bd = previousBitDepth { stream.bitDepth = bd }
+            if let cs = previousChroma { stream.chromaSubsampling = cs }
 
         case "V_MPEG4/ISO/AVC":
             // Same bytes as MP4 avcC — profile lives at byte 1.
@@ -1439,14 +1428,22 @@ public struct MatroskaReader: Sendable {
                 var info = stream.colorInfo ?? VideoColorInfo()
                 var chroma: (x: UInt64, y: UInt64)?
                 var siting: (h: UInt64?, v: UInt64?) = (nil, nil)
+                var md: HDRMasteringDisplay?
+                var cll: HDRContentLightLevel?
                 parseMatroskaColour(data, from: vStart, end: vStart + vSize,
-                                    info: &info, chroma: &chroma, siting: &siting)
+                                    info: &info, chroma: &chroma, siting: &siting,
+                                    masteringDisplay: &md, contentLightLevel: &cll)
                 stream.colorInfo = info
                 if let ch = chroma {
                     stream.chromaSubsampling = chromaLabelFor(x: ch.x, y: ch.y)
                 }
                 if let loc = chromaLocationLabel(horz: siting.h, vert: siting.v) {
                     stream.chromaLocation = loc
+                }
+                if md != nil || cll != nil {
+                    if stream.hdr == nil { stream.hdr = HDRMetadata() }
+                    if let md  { stream.hdr?.masteringDisplay = md }
+                    if let cll { stream.hdr?.contentLightLevel = cll }
                 }
             case 0x2383E3: // FrameRate (deprecated float fps; keep only if nothing better)
                 if stream.frameRate == nil,
@@ -1469,7 +1466,9 @@ public struct MatroskaReader: Sendable {
         end: Int,
         info: inout VideoColorInfo,
         chroma: inout (x: UInt64, y: UInt64)?,
-        siting: inout (h: UInt64?, v: UInt64?)
+        siting: inout (h: UInt64?, v: UInt64?),
+        masteringDisplay: inout HDRMasteringDisplay?,
+        contentLightLevel: inout HDRContentLightLevel?
     ) {
         var reader = BinaryReader(data: data)
         (try? reader.seek(to: start)) ?? ()
@@ -1518,11 +1517,79 @@ public struct MatroskaReader: Sendable {
                 if let v = readUIntPayload(data, offset: vStart, size: vSize) {
                     siting.v = v
                 }
+            case 0x55BC: // MaxCLL — CTA-861.3 peak frame brightness (cd/m^2)
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    var c = contentLightLevel ?? HDRContentLightLevel(maxCLL: 0, maxFALL: 0)
+                    c.maxCLL = Int(v)
+                    contentLightLevel = c
+                }
+            case 0x55BD: // MaxFALL — CTA-861.3 peak frame-average brightness (cd/m^2)
+                if let v = readUIntPayload(data, offset: vStart, size: vSize) {
+                    var c = contentLightLevel ?? HDRContentLightLevel(maxCLL: 0, maxFALL: 0)
+                    c.maxFALL = Int(v)
+                    contentLightLevel = c
+                }
+            case 0x55D0: // MasteringMetadata (SMPTE ST 2086, master element)
+                parseMatroskaMasteringMetadata(data, from: vStart, end: vStart + vSize,
+                                               masteringDisplay: &masteringDisplay)
             default:
                 break
             }
             if (try? reader.seek(to: vStart + vSize)) == nil { return }
         }
+    }
+
+    /// Matroska `MasteringMetadata` (0x55D0) master element. Holds SMPTE ST 2086
+    /// mastering-display chromaticities and luminance bounds. Unlike MP4's
+    /// `mdcv` box (uint16 × 0.00002 / uint32 × 0.0001), Matroska stores these
+    /// as IEEE floats already in CIE 1931 xy units and cd/m^2 — no scaling.
+    /// Any subset of children may be present; missing fields default to 0
+    /// (mirrors how `parseMDCVBox` decodes an all-zero record).
+    private static func parseMatroskaMasteringMetadata(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        masteringDisplay: inout HDRMasteringDisplay?
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        var md = masteringDisplay ?? HDRMasteringDisplay(
+            redX: 0, redY: 0,
+            greenX: 0, greenY: 0,
+            blueX: 0, blueY: 0,
+            whitePointX: 0, whitePointY: 0,
+            maxLuminance: 0, minLuminance: 0
+        )
+        var sawAny = masteringDisplay != nil
+
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let vStart = reader.offset
+            let vSize = Int(size)
+
+            if let v = readFloatPayload(data, offset: vStart, size: vSize) {
+                switch id {
+                case 0x55D1: md.redX = v;         sawAny = true
+                case 0x55D2: md.redY = v;         sawAny = true
+                case 0x55D3: md.greenX = v;       sawAny = true
+                case 0x55D4: md.greenY = v;       sawAny = true
+                case 0x55D5: md.blueX = v;        sawAny = true
+                case 0x55D6: md.blueY = v;        sawAny = true
+                case 0x55D7: md.whitePointX = v;  sawAny = true
+                case 0x55D8: md.whitePointY = v;  sawAny = true
+                case 0x55D9: md.maxLuminance = v; sawAny = true
+                case 0x55DA: md.minLuminance = v; sawAny = true
+                default: break
+                }
+            }
+
+            if (try? reader.seek(to: vStart + vSize)) == nil { break }
+        }
+
+        if sawAny { masteringDisplay = md }
     }
 
     /// Matroska ChromaSitingHorz/Vert values map to ffprobe chroma_location.

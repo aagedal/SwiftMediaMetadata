@@ -8,6 +8,39 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+### Added
+
+- **Matroska HDR static metadata** — `MaxCLL` (0x55BC), `MaxFALL` (0x55BD), and
+  the `MasteringMetadata` (0x55D0) element group inside the `Colour` master are
+  now parsed in `MatroskaReader` and surfaced through the existing
+  `VideoStream.hdr` (`HDRMasteringDisplay` / `HDRContentLightLevel`). This
+  matches the MP4 `mdcv`/`clli` and HEVC SEI paths so MKV/WebM callers see the
+  same shape regardless of container.
+  ([`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
+
+- **HDR extraction from HEVC parameter-set NAL arrays** — MakeMKV-style Blu-ray
+  HDR10 remuxes carry MaxCLL / MaxFALL and the mastering-display volume in
+  *prefix-SEI* NAL units inside the `HEVCDecoderConfigurationRecord` (the
+  ISOBMFF `hvcC` box / Matroska `V_MPEGH/ISO/HEVC` `CodecPrivate`) rather than
+  as parallel `mdcv` / `clli` container boxes. `parseHVCC` now walks those
+  arrays via a new `MPEGBitstream.extractHEVCConfigurationBitstreams`, runs the
+  existing `parseHEVCSPS` / `parseSEIMessages` decoders, and merges any
+  recovered VUI color signalling and SMPTE ST 2086 / CTA-861.3 SEIs into
+  `VideoStream.hdr`. The Matroska HEVC path defers to the same `parseHVCC` to
+  avoid duplicating decoder-record byte offsets across containers.
+  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift),
+  [`Sources/SwiftExif/Video/MP4VisualSampleEntry.swift`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift),
+  [`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
+
+- **`MasteringDisplay*` / `MaxCLL` / `MaxFALL` keys exposed via the default
+  `VideoMetadataExporter` dictionary** — until now, the flat `read` output
+  only included `ColorPrimaries` / `TransferCharacteristics` etc. and
+  consumers had to opt into `--streams` (or read `VideoStream.hdr` from the
+  Swift API) to see the HDR side data. The top-level video dictionary now
+  reports the same mastering-display chromaticities, luminance bounds, MaxCLL,
+  MaxFALL, and Dolby Vision summary that the per-stream report carries.
+  ([`Sources/SwiftExif/API/VideoMetadataExporter.swift`](Sources/SwiftExif/API/VideoMetadataExporter.swift))
+
 ## [1.7.0] — 2026-05-13
 
 ### Fixed

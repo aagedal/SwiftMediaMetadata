@@ -76,6 +76,25 @@ public struct VideoMetadataExporter: Sendable {
             if let full = color.fullRange { dict["ColorRange"] = full ? "pc" : "tv" }
             if let label = color.label { dict["ColorSpace"] = label }
         }
+        if let hdr = metadata.videoStreams.first?.hdr {
+            if let md = hdr.masteringDisplay {
+                dict["MasteringDisplayPrimariesR"] = String(format: "%.4f,%.4f", md.redX, md.redY)
+                dict["MasteringDisplayPrimariesG"] = String(format: "%.4f,%.4f", md.greenX, md.greenY)
+                dict["MasteringDisplayPrimariesB"] = String(format: "%.4f,%.4f", md.blueX, md.blueY)
+                dict["MasteringDisplayWhitePoint"] = String(format: "%.4f,%.4f", md.whitePointX, md.whitePointY)
+                dict["MasteringDisplayLuminance"]  = String(format: "%.1f-%.4f cd/m^2", md.maxLuminance, md.minLuminance)
+            }
+            if let cll = hdr.contentLightLevel {
+                dict["MaxCLL"]  = cll.maxCLL
+                dict["MaxFALL"] = cll.maxFALL
+            }
+            if let dv = hdr.dolbyVision {
+                dict["DolbyVisionProfile"] = dv.profile
+                dict["DolbyVisionLevel"]   = dv.level
+                dict["DolbyVisionVersion"] = "\(dv.versionMajor).\(dv.versionMinor)"
+                dict["DolbyVisionBLCompatibility"] = dv.blSignalCompatibilityID
+            }
+        }
         if !metadata.videoStreams.isEmpty {
             dict["VideoStreamCount"] = metadata.videoStreams.count
             let titles = metadata.videoStreams.compactMap(\.title)

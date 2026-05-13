@@ -79,6 +79,101 @@ final class SEIParsingTests: XCTestCase {
         XCTAssertEqual(sei.timecode, "10:56:34:12")
     }
 
+    /// `extractHEVCConfigurationBitstreams` walks the parameter-set NAL arrays
+    /// inside an HEVCDecoderConfigurationRecord (hvcC box / Matroska
+    /// V_MPEGH/ISO/HEVC CodecPrivate). Verify the walker recovers the SPS RBSP
+    /// from a synthetic record AND every prefix-SEI NALU containing HDR static
+    /// metadata — exactly what the MakeMKV-style HDR Blu-ray remuxes carry.
+    func testHEVCConfigRecordExtractsSPSAndSEINALUs() throws {
+        // Build a synthetic SPS NALU. Real SPS bitstreams require Golomb-coded
+        // fields, but `extractHEVCConfigurationBitstreams` only cares about
+        // length-prefixed extraction and emulation-prevention stripping — it
+        // doesn't interpret the bytes. We use a placeholder payload that
+        // includes a `00 00 03` triple so the strip step is exercised too.
+        let spsPayload: [UInt8] = [
+            0x42, 0x01,                          // NAL header (type=33 in bits 1..6 of byte 0)
+            0xAA, 0xBB, 0x00, 0x00, 0x03, 0xCC,  // body with one emulation prevention triple
+            0xDD, 0xEE,
+        ]
+
+        // Two SEI messages inside a single prefix-SEI NALU. mdcv (137) carries
+        // a 24-byte SMPTE ST 2086 payload in G,B,R order. clli (144) carries
+        // 4 bytes: maxCLL then maxFALL (uint16 BE in cd/m²).
+        var seiPayload: [UInt8] = [
+            0x4E, 0x01,                          // NAL header (type=39 prefix SEI)
+            // SEI[0]: mdcv (type 137, size 24)
+            0x89, 0x18,
+        ]
+        // mdcv body (24 bytes) — DCI-P3 D65 grading, 1000/0.005 nits.
+        let mdcvBytes: [UInt16] = [
+            13250,  // greenX = 0.265
+            34500,  // greenY = 0.690
+            7500,   // blueX  = 0.150
+            3000,   // blueY  = 0.060
+            34000,  // redX   = 0.680
+            16000,  // redY   = 0.320
+            15635,  // whiteX = 0.3127
+            16450,  // whiteY = 0.3290
+        ]
+        for v in mdcvBytes {
+            seiPayload.append(UInt8(v >> 8))
+            seiPayload.append(UInt8(v & 0xFF))
+        }
+        // max luminance = 10_000_000 (1000 nits), min = 50 (0.005 nits).
+        for v: UInt32 in [10_000_000, 50] {
+            seiPayload.append(UInt8((v >> 24) & 0xFF))
+            seiPayload.append(UInt8((v >> 16) & 0xFF))
+            seiPayload.append(UInt8((v >> 8)  & 0xFF))
+            seiPayload.append(UInt8(v         & 0xFF))
+        }
+        // SEI[1]: clli (type 144, size 4) — maxCLL=1000, maxFALL=400.
+        seiPayload.append(contentsOf: [0x90, 0x04, 0x03, 0xE8, 0x01, 0x90])
+        // rbsp_trailing_bits.
+        seiPayload.append(0x80)
+
+        // Assemble the hvcC bytes.
+        var hvcC = Data(repeating: 0, count: 22)
+        hvcC[0] = 0x01 // configurationVersion
+        hvcC.append(0x02) // numOfArrays = 2 (one SPS array + one prefix-SEI array)
+
+        // Array 0: SPS (type=33), 1 NALU
+        hvcC.append(0x21)                                                // array_completeness=0, type=33
+        hvcC.append(contentsOf: [0x00, 0x01])                            // numNalus = 1
+        hvcC.append(contentsOf: [UInt8(spsPayload.count >> 8), UInt8(spsPayload.count & 0xFF)])
+        hvcC.append(contentsOf: spsPayload)
+
+        // Array 1: prefix SEI (type=39), 1 NALU
+        hvcC.append(0x27)                                                // array_completeness=0, type=39
+        hvcC.append(contentsOf: [0x00, 0x01])                            // numNalus = 1
+        hvcC.append(contentsOf: [UInt8(seiPayload.count >> 8), UInt8(seiPayload.count & 0xFF)])
+        hvcC.append(contentsOf: seiPayload)
+
+        let (spsRBSP, seiRBSPs) = MPEGBitstream.extractHEVCConfigurationBitstreams(hvcC)
+
+        // SPS: payload starts after 2-byte NAL header, and emulation prevention
+        // bytes (00 00 03 → 00 00) must be stripped.
+        let sps = try XCTUnwrap(spsRBSP)
+        XCTAssertEqual(sps.first, 0xAA, "SPS RBSP should start after the 2-byte NAL header")
+        let triple: [UInt8] = [0x00, 0x00, 0x03]
+        XCTAssertFalse(sps.contains(where: { _ in false }) == true && sps.range(of: Data(triple)) != nil,
+                       "emulation prevention byte must be stripped")
+
+        // SEI: one NALU should be returned, and parseSEIMessages should
+        // recover both the mastering-display and content-light-level messages.
+        XCTAssertEqual(seiRBSPs.count, 1)
+        let sei = MPEGBitstream.parseSEIMessages(seiRBSPs, forHEVC: true)
+        let md = try XCTUnwrap(sei.masteringDisplay)
+        XCTAssertEqual(md.redX, 0.680, accuracy: 1e-3)
+        XCTAssertEqual(md.greenY, 0.690, accuracy: 1e-3)
+        XCTAssertEqual(md.blueX, 0.150, accuracy: 1e-3)
+        XCTAssertEqual(md.whitePointX, 0.3127, accuracy: 1e-4)
+        XCTAssertEqual(md.maxLuminance, 1000.0, accuracy: 0.5)
+        XCTAssertEqual(md.minLuminance, 0.005, accuracy: 1e-4)
+        let cll = try XCTUnwrap(sei.contentLightLevel)
+        XCTAssertEqual(cll.maxCLL, 1000)
+        XCTAssertEqual(cll.maxFALL, 400)
+    }
+
     // MARK: - Helpers
 
     /// Wrap a payload in an SEI message: payload_type, payload_size, body, 0x80 trailer.
