@@ -8,6 +8,83 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-05-15
+
+### Changed
+
+- **`FileHasher.hash(url:)` now streams the file in 1 MB chunks** instead of
+  loading the whole file into memory via `Data(contentsOf:)`. Peak RSS for
+  computing `File:MD5` + `File:SHA256` is now one chunk plus hasher state,
+  independent of file size — previously a 60 GB video peaked at 60 GB
+  resident (and doubled on the Linux PureCrypto path, which copied the
+  buffer again via `[UInt8](data)`). On Apple the streaming path uses
+  CryptoKit's incremental `Insecure.MD5()` / `SHA256()`; on non-Apple, new
+  `PureMD5.Streaming` / `PureSHA256.Streaming` value types handle 64-byte
+  block buffering and pad/length finalize. The one-shot `hash(_:Data)`
+  entry points are now thin wrappers over the same streaming types, so the
+  in-memory path also stops doing the extra `[UInt8](data)` copy.
+  `MetadataExporter.buildDictionary` calls `FileHasher.hash(url:)` directly
+  instead of pre-loading `Data(contentsOf:)`, removing the full-file
+  allocation at the API boundary too. Covered by new block-boundary,
+  streaming-parity, and end-to-end `hash(url:)` tests.
+  ([`Sources/SwiftExif/Binary/FileHasher.swift`](Sources/SwiftExif/Binary/FileHasher.swift),
+  [`Sources/SwiftExif/Binary/PureCrypto.swift`](Sources/SwiftExif/Binary/PureCrypto.swift),
+  [`Sources/SwiftExif/API/MetadataExporter.swift`](Sources/SwiftExif/API/MetadataExporter.swift))
+
+- **`ISO8601DateFormatter` instances hoisted out of hot paths.** Three call
+  sites previously allocated a fresh formatter on every invocation —
+  `VideoMetadataExporter.buildDictionary` (three per call), `GPXParser`'s
+  per-trackpoint `parseISO8601`, and `NRTXMLParser`'s per-track
+  `parseISO8601`. Each construction reconfigures locale and timezone
+  tables, which dominated batch video export and GPX parsing runtime. The
+  formatters are now `nonisolated(unsafe) static let` —
+  `ISO8601DateFormatter` is documented thread-safe for read-only
+  `string(from:)` / `date(from:)` but doesn't formally conform to
+  `Sendable`, so the opt-out annotation is needed under strict concurrency.
+  ([`Sources/SwiftExif/API/VideoMetadataExporter.swift`](Sources/SwiftExif/API/VideoMetadataExporter.swift),
+  [`Sources/SwiftExif/GPX/GPXParser.swift`](Sources/SwiftExif/GPX/GPXParser.swift),
+  [`Sources/SwiftExif/Video/NRTXMLParser.swift`](Sources/SwiftExif/Video/NRTXMLParser.swift))
+
+- **`ImageMetadata.read`, `BRAWFrameReader`, `RTMDReader`,
+  `AudioMetadata.read`, and `C2PAData.read(from: URL)` now memory-map
+  the source file** with `.alwaysMapped` instead of allocating the whole
+  file into RSS via `Data(contentsOf:)`. Each of these readers scatter-
+  reads small payloads at offsets pulled from sample tables / chunk
+  headers (slate boxes for BRAW, RTMD packets for MXF/XAVC, ID3/MP4
+  tag chunks for audio, JUMBF superboxes for C2PA), so mapping is
+  strictly cheaper than copying — peak RSS for a 60 GB BRAW slate read
+  drops from 60 GB to a few KB of resolved pages. `.alwaysMapped` (not
+  `.mappedIfSafe`) — the latter silently declines to map external
+  drives and falls back to a full copy, defeating the win exactly on
+  the volumes (USB-C SSDs, NAS, card readers) where it matters most.
+  Mirrors the established pattern already in
+  [`VideoMetadata.loadContainerData`](Sources/SwiftExif/API/VideoMetadata.swift).
+  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift),
+  [`Sources/SwiftExif/API/AudioMetadata.swift`](Sources/SwiftExif/API/AudioMetadata.swift),
+  [`Sources/SwiftExif/C2PA/C2PAData.swift`](Sources/SwiftExif/C2PA/C2PAData.swift),
+  [`Sources/SwiftExif/Video/BRAWFrameReader.swift`](Sources/SwiftExif/Video/BRAWFrameReader.swift),
+  [`Sources/SwiftExif/Video/RTMDReader.swift`](Sources/SwiftExif/Video/RTMDReader.swift))
+
+- **Recursive ISOBMFF `findBox` no longer descends into non-container
+  box payloads.** `Binary/ISOBMFFMetadata.findBox` previously called
+  `ISOBMFFBoxReader.parseBoxes` on every visited box's payload —
+  including leaves like `Exif`, `mdat`, `iloc`, `ipma`, `ispe`, `colr`,
+  and the `xml ` XMP box, none of which are box-formatted. The descent
+  burned CPU re-parsing opaque bytes on every metadata extraction.
+  Recursion is now gated on a 14-entry allowlist of true ISOBMFF
+  container types (`moov`, `trak`, `mdia`, `minf`, `stbl`, `dinf`,
+  `udta`, `edts`, `mvex`, `moof`, `traf`, `mfra`, `iprp`, `ipco`).
+  `meta` (4-byte FullBox header), `stsd` (version + entry_count
+  prefix), and `uuid` (16-byte UUID prefix) are intentionally excluded
+  — they carry their own header prefix and are handled by dedicated
+  paths (`parseMetaChildren`, `extractExifFromMeta`,
+  `extractXMPFromMeta`, `CR3Parser`). Locked in by two new tests in
+  [`Tests/SwiftExifTests/Binary/ISOBMFFBoxTests.swift`](Tests/SwiftExifTests/Binary/ISOBMFFBoxTests.swift)
+  confirming that legitimate descent into `moov → udta → Exif` still
+  resolves while a fake `Exif` hidden inside `mdat` is correctly
+  ignored.
+  ([`Sources/SwiftExif/Binary/ISOBMFFMetadata.swift`](Sources/SwiftExif/Binary/ISOBMFFMetadata.swift))
+
 ### Fixed
 
 - **MP4/MOV `displayWidth` / `displayHeight` orientation consistency** —
@@ -24,6 +101,53 @@ the CLI; the library target follows the same numbering.
   surface PAR `(81, 256)` instead of `(1, 1)`).
   ([`Sources/SwiftExif/Video/MP4VisualSampleEntry.swift`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift),
   [`Sources/SwiftExif/Video/MP4Parser.swift`](Sources/SwiftExif/Video/MP4Parser.swift))
+
+### Security
+
+- **GPMF recursive container range clamped to actual buffer length.** An
+  attacker-declared `sampleSize × sampleCount` in a container KLV header
+  could exceed the underlying buffer, and the recursive parse passed that
+  unclamped upper bound straight through. The inner loop's
+  `off + 8 <= range.upperBound` guard would then read past `data.endIndex`
+  and trap on `Data` subscript bounds. The recursive walker now clamps the
+  declared range to the buffer length before recursing. Locked in by a new
+  malformed-GPMF regression fixture in
+  [`Tests/SwiftExifTests/Video/Phase25GPMFTests.swift`](Tests/SwiftExifTests/Video/Phase25GPMFTests.swift).
+  ([`Sources/SwiftExif/Video/GPMFReader.swift`](Sources/SwiftExif/Video/GPMFReader.swift))
+
+- **GPMF container recursion capped at 32 levels.** Sibling fix to the
+  range clamp above: each KLV container header is only 8 bytes, so a
+  64 KB blob can declare ~8000 levels of nesting — one recursive call
+  per level on the thread stack, deep enough to SIGSEGV. The recursive
+  walker now threads a `depth` counter and stops descending once it hits
+  `GPMFReader.maxRecursionDepth = 32` (real GoPro telemetry tops out at
+  depth 2–3). Same graceful-degradation posture as the range clamp: the
+  outermost entries are kept, deeper containers surface with empty
+  `children`. Mirrors the existing `XMPReader.maxFrameDepth` convention.
+  New deep-nesting regression fixture in
+  [`Tests/SwiftExifTests/Video/Phase25GPMFTests.swift`](Tests/SwiftExifTests/Video/Phase25GPMFTests.swift).
+  ([`Sources/SwiftExif/Video/GPMFReader.swift`](Sources/SwiftExif/Video/GPMFReader.swift))
+
+- **`DateFormatter` race condition on swift-corelibs-foundation (Linux).**
+  `ImageMetadata` previously held a `private static let exifDateFormatter`
+  shared across all callers of the public `shiftExifDateString` /
+  `shiftDateString` API — reachable concurrently from `TaskGroup`, batch
+  operations, and library clients. `DateFormatter` is documented
+  thread-unsafe and mutates internal state inside both `date(from:)` and
+  `string(from:)`. Apple's Foundation masks the race with internal
+  locking, but swift-corelibs-foundation (used in the Linux-musl build)
+  does not — so concurrent callers on Linux could crash or return
+  corrupted dates. The shared instance is replaced with a per-call
+  `makeExifFormatter()` helper; allocation cost is microseconds, dwarfed
+  by the surrounding I/O. While here, `MetadataRenamer.formatDateField`
+  collapses three `DateFormatter` allocations per token into one by
+  reusing `fmt` for both parse and format; `Locale` and `TimeZone` are
+  hoisted into `static let`s (value types, safe to share), while the
+  `DateFormatter` itself stays per-call to avoid reintroducing the race.
+  A new smoke test fans out `shiftExifDateString` across 10k concurrent
+  iterations with varied inputs to lock in a regression guard.
+  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift),
+  [`Sources/SwiftExif/API/MetadataRenamer.swift`](Sources/SwiftExif/API/MetadataRenamer.swift))
 
 ## [1.8.0] — 2026-05-13
 
@@ -753,6 +877,11 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
+[1.8.1]: https://github.com/aagedal/SwiftExif/compare/1.8.0...1.8.1
+[1.8.0]: https://github.com/aagedal/SwiftExif/compare/1.7.0...1.8.0
+[1.7.0]: https://github.com/aagedal/SwiftExif/compare/1.6.0...1.7.0
+[1.6.0]: https://github.com/aagedal/SwiftExif/compare/1.5.1...1.6.0
+[1.5.1]: https://github.com/aagedal/SwiftExif/compare/1.5.0...1.5.1
 [1.5.0]: https://github.com/aagedal/SwiftExif/compare/1.4.0...1.5.0
 [1.4.0]: https://github.com/aagedal/SwiftExif/compare/1.3.1...1.4.0
 [1.3.1]: https://github.com/aagedal/SwiftExif/compare/1.3.0...1.3.1

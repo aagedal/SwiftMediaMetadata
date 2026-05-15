@@ -70,6 +70,73 @@ Then add it as a dependency to your target:
 .target(name: "YourApp", dependencies: ["SwiftExif"]),
 ```
 
+## Building from source
+
+### macOS (arm64)
+
+The supported release target. Builds with the system Swift toolchain
+(Xcode 16+ / Swift 6.0+):
+
+```sh
+./Scripts/build-release.sh
+```
+
+Output lands at `dist/swift-exif-macos-arm64` — a stripped, single-file
+CLI binary. For a plain development build, `swift build -c release`
+produces the same binary under `.build/release/swift-exif`.
+
+### Linux (static musl, unsupported)
+
+Linux binaries are no longer part of the release pipeline. The recipe
+below is preserved for downstream contributors who need a static-musl
+build. It cross-compiles from macOS using the official swift.org
+toolchain (the macOS-bundled Swift inside Xcode is not compatible with
+the Static Linux SDK).
+
+1. Install the swift.org toolchain via [swiftly](https://swiftlang.github.io/swiftly/):
+
+   ```sh
+   swiftly install 6.3.1
+   source "$HOME/.swiftly/env.sh"
+   ```
+
+2. Install the Static Linux SDK:
+
+   ```sh
+   swift sdk install \
+     https://download.swift.org/swift-6.3.1-release/static-sdk/swift-6.3.1-RELEASE/swift-6.3.1-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz \
+     --checksum fac05271c1f7d060bd203240ce5251d5ca902d30ac899f553765dbb3a88b97ad
+   ```
+
+3. Cross-compile (replace `x86_64` with `aarch64` for ARM64 Linux):
+
+   ```sh
+   SDK_ROOT="$HOME/Library/org.swift.swiftpm/swift-sdks/swift-6.3.1-RELEASE_static-linux-0.1.0.artifactbundle/swift-6.3.1-RELEASE_static-linux-0.1.0/swift-linux-musl/musl-1.2.5.sdk"
+
+   swift build -c release \
+     --swift-sdk x86_64-swift-linux-musl \
+     --static-swift-stdlib \
+     --product swift-exif \
+     -Xswiftc -Onone \
+     -Xlinker "$SDK_ROOT/x86_64/usr/lib/libz.a" \
+     --disable-sandbox
+   ```
+
+   `-Onone` is mandatory: `-O` with whole-module-optimization stalls the
+   swift-6.3.1 musl optimizer indefinitely (frontend pinned at ~100% CPU
+   with no progress). `-Onone` compiles in a few minutes; the binary is
+   larger and slower than the macOS build but functional.
+
+4. Optional shrink — strip debug info and compress with UPX:
+
+   ```sh
+   llvm-strip .build/x86_64-swift-linux-musl/release/swift-exif
+   upx --best --no-progress .build/x86_64-swift-linux-musl/release/swift-exif
+   ```
+
+   UPX reduces the binary from ~70 MB to ~25 MB at the cost of a few
+   hundred milliseconds of one-time decompression at startup.
+
 ## Usage
 
 ### Reading Metadata
