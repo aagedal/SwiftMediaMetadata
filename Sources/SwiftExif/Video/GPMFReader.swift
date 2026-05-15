@@ -121,6 +121,12 @@ public struct GPMFReader: Sendable {
         public init() {}
     }
 
+    /// Hard cap on container nesting depth. Real GoPro telemetry tops out at
+    /// `DEVC → STRM → leaf` (depth 2–3); 32 leaves plenty of headroom while
+    /// keeping a crafted blob from blowing the thread stack via unbounded
+    /// recursion. Mirrors `XMPReader.maxFrameDepth`.
+    static let maxRecursionDepth = 32
+
     /// Parse a raw GPMF buffer (typically the concatenated payload of every
     /// `gpmd`-track sample) into a tree of entries.
     public static func parse(_ data: Data) -> [Entry] {
@@ -138,7 +144,7 @@ public struct GPMFReader: Sendable {
 
     // MARK: - Recursive walker
 
-    private static func parseEntries(in data: Data, range: Range<Int>) -> [Entry] {
+    private static func parseEntries(in data: Data, range: Range<Int>, depth: Int = 0) -> [Entry] {
         var out: [Entry] = []
         var off = range.lowerBound
         while off + 8 <= range.upperBound {
@@ -161,14 +167,19 @@ public struct GPMFReader: Sendable {
             let payload = Data(data[s + payloadStart ..< s + min(payloadStart + payloadBytes, payloadEnd)])
 
             var children: [Entry] = []
-            if case .container = type {
+            // Stop descending once `maxRecursionDepth` levels deep — a crafted
+            // GPMF can chain containers ad infinitum (8 bytes per level), which
+            // would otherwise blow the thread stack. Same graceful-degradation
+            // posture as the range clamp below: keep the entry, drop children.
+            if case .container = type, depth < GPMFReader.maxRecursionDepth {
                 // Clamp recursive range to the actual buffer: an attacker-controlled
                 // sampleSize × sampleCount can declare a payload that extends past
                 // the buffer, and the inner loop's `off + 8 <= range.upperBound`
                 // check would otherwise let reads run off the end of `data`.
                 let childEnd = min(payloadStart + payloadBytes, payloadEnd, data.count)
                 children = parseEntries(in: data,
-                                         range: payloadStart ..< childEnd)
+                                         range: payloadStart ..< childEnd,
+                                         depth: depth + 1)
             }
 
             out.append(Entry(

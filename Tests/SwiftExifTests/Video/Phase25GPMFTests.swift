@@ -169,6 +169,54 @@ final class GPMFReaderTests: XCTestCase {
         _ = GPMFReader.telemetry(from: blob)
     }
 
+    func testDeeplyNestedContainersStopAtRecursionCap() {
+        // Crafted GPMF that nests containers far past the depth cap. Each
+        // wrapper is the minimum 8-byte KLV header whose payload is the next
+        // wrapper, so the file is small but the recursion would be unbounded
+        // without a depth guard. Pre-fix, parsing this overflowed the thread
+        // stack and crashed the process; the cap should let us return a
+        // truncated tree instead.
+        var blob = Data()
+        blob.append(contentsOf: "LEAF".utf8)
+        blob.append(0x63)                       // 'c' = ASCII, non-container leaf
+        blob.append(0x00)                       // sample size = 0
+        blob.append(0x00); blob.append(0x00)    // sample count = 0
+
+        let wraps = GPMFReader.maxRecursionDepth + 50
+        for _ in 0..<wraps {
+            let cnt = UInt16(blob.count)
+            var wrapper = Data()
+            wrapper.append(contentsOf: "DEVC".utf8)
+            wrapper.append(0x00)                // type 0 = container
+            wrapper.append(0x01)                // sample size = 1
+            wrapper.append(UInt8((cnt >> 8) & 0xFF))
+            wrapper.append(UInt8(cnt & 0xFF))   // sample count covers full inner blob
+            wrapper.append(blob)
+            blob = wrapper
+        }
+
+        // Must return without crashing.
+        let entries = GPMFReader.parse(blob)
+        XCTAssertEqual(entries.first?.fourCC, "DEVC")
+
+        // Walk the .children.first chain — the parser should descend exactly
+        // `maxRecursionDepth` times, then leave the deepest container with
+        // empty children even though the file declares another wrapper below.
+        var current = entries.first
+        var depth = 0
+        while let node = current?.children.first {
+            current = node
+            depth += 1
+        }
+        XCTAssertEqual(depth, GPMFReader.maxRecursionDepth,
+                       "Recursion stopped at depth \(depth); expected exactly \(GPMFReader.maxRecursionDepth)")
+        XCTAssertTrue(current?.children.isEmpty ?? true)
+
+        // High-level telemetry path must also stay graceful (it walks the
+        // same tree internally).
+        _ = GPMFReader.telemetry(from: blob)
+    }
+
     func testNestedContainerWithDeclaredSizeBeyondBufferDoesNotCrash() {
         // Same hazard one level deeper: outer container is well-formed but the
         // inner container lies about its declared length, so the second-level
