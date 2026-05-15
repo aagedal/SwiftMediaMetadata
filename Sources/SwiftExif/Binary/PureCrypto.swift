@@ -3,6 +3,10 @@ import Foundation
 /// Pure-Swift SHA-256 and MD5. Used on non-Apple platforms where CryptoKit
 /// is unavailable. Kept in-tree to avoid the swift-crypto / BoringSSL
 /// dependency, which stalls the Linux-musl cross-compile optimizer.
+///
+/// Both algorithms support incremental hashing via their `Streaming` value
+/// type so callers can hash multi-GB files without ever loading the file
+/// into RAM. The one-shot `hash(_:Data)` method is a thin wrapper.
 
 enum PureSHA256 {
     private static let K: [UInt32] = [
@@ -25,71 +29,139 @@ enum PureSHA256 {
     ]
 
     static func hash(_ data: Data) -> [UInt8] {
-        var h: [UInt32] = [
-            0x6a09_e667, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a,
-            0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19,
-        ]
-
-        // Pre-processing: pad to 448 mod 512 bits, append 64-bit length.
-        var msg = [UInt8](data)
-        let bitLen = UInt64(msg.count) * 8
-        msg.append(0x80)
-        while msg.count % 64 != 56 { msg.append(0) }
-        for shift in stride(from: 56, through: 0, by: -8) {
-            msg.append(UInt8((bitLen >> shift) & 0xff))
-        }
-
-        // Process 512-bit blocks.
-        var block = 0
-        while block < msg.count {
-            var w = [UInt32](repeating: 0, count: 64)
-            for i in 0..<16 {
-                let o = block + i * 4
-                w[i] = (UInt32(msg[o]) << 24) | (UInt32(msg[o + 1]) << 16)
-                     | (UInt32(msg[o + 2]) << 8) | UInt32(msg[o + 3])
-            }
-            for i in 16..<64 {
-                let s0 = rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3)
-                let s1 = rotr(w[i-2], 17) ^ rotr(w[i-2], 19) ^ (w[i-2] >> 10)
-                w[i] = w[i-16] &+ s0 &+ w[i-7] &+ s1
-            }
-
-            var a = h[0], b = h[1], c = h[2], d = h[3]
-            var e = h[4], f = h[5], g = h[6], hh = h[7]
-
-            for i in 0..<64 {
-                let S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
-                let ch = (e & f) ^ (~e & g)
-                let t1 = hh &+ S1 &+ ch &+ K[i] &+ w[i]
-                let S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
-                let mj = (a & b) ^ (a & c) ^ (b & c)
-                let t2 = S0 &+ mj
-                hh = g; g = f; f = e
-                e = d &+ t1
-                d = c; c = b; b = a
-                a = t1 &+ t2
-            }
-
-            h[0] &+= a; h[1] &+= b; h[2] &+= c; h[3] &+= d
-            h[4] &+= e; h[5] &+= f; h[6] &+= g; h[7] &+= hh
-
-            block += 64
-        }
-
-        var out = [UInt8]()
-        out.reserveCapacity(32)
-        for v in h {
-            out.append(UInt8((v >> 24) & 0xff))
-            out.append(UInt8((v >> 16) & 0xff))
-            out.append(UInt8((v >> 8) & 0xff))
-            out.append(UInt8(v & 0xff))
-        }
-        return out
+        var s = Streaming()
+        s.update(data: data)
+        return s.finalize()
     }
 
     @inline(__always)
-    private static func rotr(_ x: UInt32, _ n: UInt32) -> UInt32 {
+    fileprivate static func rotr(_ x: UInt32, _ n: UInt32) -> UInt32 {
         (x >> n) | (x << (32 - n))
+    }
+
+    fileprivate static func processBlock(_ h: inout [UInt32], block: UnsafePointer<UInt8>) {
+        var w = [UInt32](repeating: 0, count: 64)
+        for i in 0..<16 {
+            let o = i * 4
+            w[i] = (UInt32(block[o]) << 24) | (UInt32(block[o + 1]) << 16)
+                 | (UInt32(block[o + 2]) << 8) | UInt32(block[o + 3])
+        }
+        for i in 16..<64 {
+            let s0 = rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3)
+            let s1 = rotr(w[i-2], 17) ^ rotr(w[i-2], 19) ^ (w[i-2] >> 10)
+            w[i] = w[i-16] &+ s0 &+ w[i-7] &+ s1
+        }
+
+        var a = h[0], b = h[1], c = h[2], d = h[3]
+        var e = h[4], f = h[5], g = h[6], hh = h[7]
+
+        for i in 0..<64 {
+            let S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
+            let ch = (e & f) ^ (~e & g)
+            let t1 = hh &+ S1 &+ ch &+ K[i] &+ w[i]
+            let S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+            let mj = (a & b) ^ (a & c) ^ (b & c)
+            let t2 = S0 &+ mj
+            hh = g; g = f; f = e
+            e = d &+ t1
+            d = c; c = b; b = a
+            a = t1 &+ t2
+        }
+
+        h[0] &+= a; h[1] &+= b; h[2] &+= c; h[3] &+= d
+        h[4] &+= e; h[5] &+= f; h[6] &+= g; h[7] &+= hh
+    }
+
+    struct Streaming {
+        private var h: [UInt32] = [
+            0x6a09_e667, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a,
+            0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19,
+        ]
+        private var buffer = [UInt8](repeating: 0, count: 64)
+        private var bufferCount = 0
+        private var totalBytes: UInt64 = 0
+
+        init() {}
+
+        mutating func update(data: Data) {
+            guard !data.isEmpty else { return }
+            data.withUnsafeBytes { raw in
+                let bound = raw.bindMemory(to: UInt8.self)
+                update(bytes: bound)
+            }
+        }
+
+        mutating func update(bytes: UnsafeBufferPointer<UInt8>) {
+            guard let base = bytes.baseAddress, !bytes.isEmpty else { return }
+            totalBytes &+= UInt64(bytes.count)
+            var offset = 0
+            let count = bytes.count
+
+            // Top up the partial buffer.
+            if bufferCount > 0 {
+                let need = 64 - bufferCount
+                let take = min(need, count)
+                buffer.withUnsafeMutableBufferPointer { buf in
+                    for i in 0..<take { buf[bufferCount + i] = base[i] }
+                }
+                bufferCount += take
+                offset += take
+                if bufferCount == 64 {
+                    buffer.withUnsafeBufferPointer { buf in
+                        PureSHA256.processBlock(&h, block: buf.baseAddress!)
+                    }
+                    bufferCount = 0
+                }
+            }
+
+            // Whole 64-byte blocks directly from input.
+            while count - offset >= 64 {
+                PureSHA256.processBlock(&h, block: base.advanced(by: offset))
+                offset += 64
+            }
+
+            // Buffer the tail.
+            if offset < count {
+                let remaining = count - offset
+                buffer.withUnsafeMutableBufferPointer { buf in
+                    for i in 0..<remaining { buf[i] = base[offset + i] }
+                }
+                bufferCount = remaining
+            }
+        }
+
+        mutating func finalize() -> [UInt8] {
+            let bitLen = totalBytes &* 8
+            buffer[bufferCount] = 0x80
+            bufferCount += 1
+
+            if bufferCount > 56 {
+                while bufferCount < 64 { buffer[bufferCount] = 0; bufferCount += 1 }
+                buffer.withUnsafeBufferPointer { buf in
+                    PureSHA256.processBlock(&h, block: buf.baseAddress!)
+                }
+                bufferCount = 0
+            }
+            while bufferCount < 56 { buffer[bufferCount] = 0; bufferCount += 1 }
+            // Big-endian 64-bit length.
+            for shift in stride(from: 56, through: 0, by: -8) {
+                buffer[bufferCount] = UInt8((bitLen >> shift) & 0xff)
+                bufferCount += 1
+            }
+            buffer.withUnsafeBufferPointer { buf in
+                PureSHA256.processBlock(&h, block: buf.baseAddress!)
+            }
+
+            var out = [UInt8]()
+            out.reserveCapacity(32)
+            for v in h {
+                out.append(UInt8((v >> 24) & 0xff))
+                out.append(UInt8((v >> 16) & 0xff))
+                out.append(UInt8((v >> 8) & 0xff))
+                out.append(UInt8(v & 0xff))
+            }
+            return out
+        }
     }
 }
 
@@ -120,64 +192,139 @@ enum PureMD5 {
     ]
 
     static func hash(_ data: Data) -> [UInt8] {
-        var msg = [UInt8](data)
-        let bitLen = UInt64(msg.count) * 8
-        msg.append(0x80)
-        while msg.count % 64 != 56 { msg.append(0) }
-        for shift in 0..<8 {
-            msg.append(UInt8((bitLen >> (shift * 8)) & 0xff))
-        }
-
-        var a0: UInt32 = 0x6745_2301
-        var b0: UInt32 = 0xefcd_ab89
-        var c0: UInt32 = 0x98ba_dcfe
-        var d0: UInt32 = 0x1032_5476
-
-        var offset = 0
-        while offset < msg.count {
-            var M = [UInt32](repeating: 0, count: 16)
-            for j in 0..<16 {
-                let o = offset + j * 4
-                M[j] = UInt32(msg[o]) | (UInt32(msg[o + 1]) << 8)
-                     | (UInt32(msg[o + 2]) << 16) | (UInt32(msg[o + 3]) << 24)
-            }
-
-            var A = a0, B = b0, C = c0, D = d0
-
-            for i in 0..<64 {
-                var F: UInt32 = 0
-                var g: Int = 0
-                if i < 16 {
-                    F = (B & C) | (~B & D); g = i
-                } else if i < 32 {
-                    F = (D & B) | (~D & C); g = (5 * i + 1) % 16
-                } else if i < 48 {
-                    F = B ^ C ^ D; g = (3 * i + 5) % 16
-                } else {
-                    F = C ^ (B | ~D); g = (7 * i) % 16
-                }
-                F = F &+ A &+ K[i] &+ M[g]
-                A = D; D = C; C = B
-                B = B &+ rotl(F, UInt32(S[i]))
-            }
-
-            a0 &+= A; b0 &+= B; c0 &+= C; d0 &+= D
-            offset += 64
-        }
-
-        var out = [UInt8]()
-        out.reserveCapacity(16)
-        for v in [a0, b0, c0, d0] {
-            out.append(UInt8(v & 0xff))
-            out.append(UInt8((v >> 8) & 0xff))
-            out.append(UInt8((v >> 16) & 0xff))
-            out.append(UInt8((v >> 24) & 0xff))
-        }
-        return out
+        var s = Streaming()
+        s.update(data: data)
+        return s.finalize()
     }
 
     @inline(__always)
-    private static func rotl(_ x: UInt32, _ n: UInt32) -> UInt32 {
+    fileprivate static func rotl(_ x: UInt32, _ n: UInt32) -> UInt32 {
         (x << n) | (x >> (32 - n))
+    }
+
+    fileprivate static func processBlock(
+        a0: inout UInt32, b0: inout UInt32, c0: inout UInt32, d0: inout UInt32,
+        block: UnsafePointer<UInt8>
+    ) {
+        var M = [UInt32](repeating: 0, count: 16)
+        for j in 0..<16 {
+            let o = j * 4
+            M[j] = UInt32(block[o]) | (UInt32(block[o + 1]) << 8)
+                 | (UInt32(block[o + 2]) << 16) | (UInt32(block[o + 3]) << 24)
+        }
+
+        var A = a0, B = b0, C = c0, D = d0
+
+        for i in 0..<64 {
+            var F: UInt32 = 0
+            var g: Int = 0
+            if i < 16 {
+                F = (B & C) | (~B & D); g = i
+            } else if i < 32 {
+                F = (D & B) | (~D & C); g = (5 * i + 1) % 16
+            } else if i < 48 {
+                F = B ^ C ^ D; g = (3 * i + 5) % 16
+            } else {
+                F = C ^ (B | ~D); g = (7 * i) % 16
+            }
+            F = F &+ A &+ K[i] &+ M[g]
+            A = D; D = C; C = B
+            B = B &+ rotl(F, UInt32(S[i]))
+        }
+
+        a0 &+= A; b0 &+= B; c0 &+= C; d0 &+= D
+    }
+
+    struct Streaming {
+        private var a0: UInt32 = 0x6745_2301
+        private var b0: UInt32 = 0xefcd_ab89
+        private var c0: UInt32 = 0x98ba_dcfe
+        private var d0: UInt32 = 0x1032_5476
+        private var buffer = [UInt8](repeating: 0, count: 64)
+        private var bufferCount = 0
+        private var totalBytes: UInt64 = 0
+
+        init() {}
+
+        mutating func update(data: Data) {
+            guard !data.isEmpty else { return }
+            data.withUnsafeBytes { raw in
+                let bound = raw.bindMemory(to: UInt8.self)
+                update(bytes: bound)
+            }
+        }
+
+        mutating func update(bytes: UnsafeBufferPointer<UInt8>) {
+            guard let base = bytes.baseAddress, !bytes.isEmpty else { return }
+            totalBytes &+= UInt64(bytes.count)
+            var offset = 0
+            let count = bytes.count
+
+            if bufferCount > 0 {
+                let need = 64 - bufferCount
+                let take = min(need, count)
+                buffer.withUnsafeMutableBufferPointer { buf in
+                    for i in 0..<take { buf[bufferCount + i] = base[i] }
+                }
+                bufferCount += take
+                offset += take
+                if bufferCount == 64 {
+                    buffer.withUnsafeBufferPointer { buf in
+                        PureMD5.processBlock(a0: &a0, b0: &b0, c0: &c0, d0: &d0,
+                                              block: buf.baseAddress!)
+                    }
+                    bufferCount = 0
+                }
+            }
+
+            while count - offset >= 64 {
+                PureMD5.processBlock(a0: &a0, b0: &b0, c0: &c0, d0: &d0,
+                                      block: base.advanced(by: offset))
+                offset += 64
+            }
+
+            if offset < count {
+                let remaining = count - offset
+                buffer.withUnsafeMutableBufferPointer { buf in
+                    for i in 0..<remaining { buf[i] = base[offset + i] }
+                }
+                bufferCount = remaining
+            }
+        }
+
+        mutating func finalize() -> [UInt8] {
+            let bitLen = totalBytes &* 8
+            buffer[bufferCount] = 0x80
+            bufferCount += 1
+
+            if bufferCount > 56 {
+                while bufferCount < 64 { buffer[bufferCount] = 0; bufferCount += 1 }
+                buffer.withUnsafeBufferPointer { buf in
+                    PureMD5.processBlock(a0: &a0, b0: &b0, c0: &c0, d0: &d0,
+                                          block: buf.baseAddress!)
+                }
+                bufferCount = 0
+            }
+            while bufferCount < 56 { buffer[bufferCount] = 0; bufferCount += 1 }
+            // Little-endian 64-bit length.
+            for shift in 0..<8 {
+                buffer[bufferCount] = UInt8((bitLen >> (shift * 8)) & 0xff)
+                bufferCount += 1
+            }
+            buffer.withUnsafeBufferPointer { buf in
+                PureMD5.processBlock(a0: &a0, b0: &b0, c0: &c0, d0: &d0,
+                                      block: buf.baseAddress!)
+            }
+
+            var out = [UInt8]()
+            out.reserveCapacity(16)
+            for v in [a0, b0, c0, d0] {
+                out.append(UInt8(v & 0xff))
+                out.append(UInt8((v >> 8) & 0xff))
+                out.append(UInt8((v >> 16) & 0xff))
+                out.append(UInt8((v >> 24) & 0xff))
+            }
+            return out
+        }
     }
 }

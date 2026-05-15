@@ -51,10 +51,39 @@ public struct FileHasher: Sendable {
         )
     }
 
-    /// Compute hashes from a file URL.
+    /// Compute hashes by streaming the file from disk in 1 MB chunks. Peak
+    /// resident memory is one chunk plus the two hasher states — independent
+    /// of file size, so multi-GB videos hash without ever materialising the
+    /// file in RAM.
     public static func hash(url: URL) throws -> FileHashes {
-        let data = try Data(contentsOf: url)
-        return allHashes(data)
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var total: UInt64 = 0
+        #if canImport(CryptoKit)
+        var md5 = Insecure.MD5()
+        var sha = SHA256()
+        #else
+        var md5 = PureMD5.Streaming()
+        var sha = PureSHA256.Streaming()
+        #endif
+
+        let chunkSize = 1 << 20  // 1 MB — see plan for rationale.
+        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
+            md5.update(data: chunk)
+            sha.update(data: chunk)
+            total &+= UInt64(chunk.count)
+        }
+
+        #if canImport(CryptoKit)
+        let md5Hex = md5.finalize().map { String(format: "%02x", $0) }.joined()
+        let shaHex = sha.finalize().map { String(format: "%02x", $0) }.joined()
+        #else
+        let md5Hex = md5.finalize().map { String(format: "%02x", $0) }.joined()
+        let shaHex = sha.finalize().map { String(format: "%02x", $0) }.joined()
+        #endif
+
+        return FileHashes(md5: md5Hex, sha256: shaHex, fileSize: total)
     }
 }
 

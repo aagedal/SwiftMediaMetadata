@@ -70,13 +70,13 @@ public struct MetadataExporter: Sendable {
             if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
                 dict["File:FileSize"] = size
             }
-            if includeHashes, let data = try? Data(contentsOf: url) {
-                let hashes = FileHasher.allHashes(data)
+            if includeHashes, let hashes = try? FileHasher.hash(url: url) {
                 dict["File:MD5"] = hashes.md5
                 dict["File:SHA256"] = hashes.sha256
-                // resourceValues didn't have the size (rare, e.g. non-file URL); fall back now that data is loaded.
+                // resourceValues didn't have the size (rare, e.g. non-file URL); the streaming
+                // hasher counted bytes as it read them, so reuse that.
                 if dict["File:FileSize"] == nil {
-                    dict["File:FileSize"] = Int(data.count)
+                    dict["File:FileSize"] = Int(hashes.fileSize)
                 }
             }
         }
