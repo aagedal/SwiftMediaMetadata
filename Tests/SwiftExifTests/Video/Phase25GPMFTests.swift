@@ -141,6 +141,61 @@ final class GPMFReaderTests: XCTestCase {
         XCTAssertFalse(t.hasMagnetometer)
     }
 
+    // MARK: - Safety / fuzzing
+
+    func testContainerWithDeclaredSizeBeyondBufferDoesNotCrash() {
+        // A container entry whose header declares sampleSize × sampleCount far
+        // larger than the bytes that actually follow. Pre-fix, the recursive
+        // walker passed `payloadStart + payloadBytes` straight through as the
+        // child range's upperBound, and the inner loop then read past the
+        // buffer end on the first iteration past the real payload.
+        var blob = Data()
+        blob.append(contentsOf: "DEVC".utf8)
+        blob.append(0x00)                       // type 0 = container
+        blob.append(0x01)                       // sample size = 1
+        blob.append(0x00); blob.append(0x64)    // sample count = 100  → declared 100 bytes
+        // Only one minimal 8-byte child header follows — far less than 100 bytes.
+        blob.append(contentsOf: "DVNM".utf8)
+        blob.append(0x63)                       // 'c' = ASCII string
+        blob.append(0x00)                       // sample size = 0
+        blob.append(0x00); blob.append(0x00)    // sample count = 0
+
+        // Must not crash. Buffer = 16 bytes; without clamping the recursion
+        // would step `off` to 16 and then try to read fourCC bytes at 16..<20.
+        let entries = GPMFReader.parse(blob)
+        XCTAssertEqual(entries.first?.fourCC, "DEVC")
+
+        // High-level telemetry path must also stay graceful.
+        _ = GPMFReader.telemetry(from: blob)
+    }
+
+    func testNestedContainerWithDeclaredSizeBeyondBufferDoesNotCrash() {
+        // Same hazard one level deeper: outer container is well-formed but the
+        // inner container lies about its declared length, so the second-level
+        // recursion is the one that has to clamp.
+        var inner = Data()
+        inner.append(contentsOf: "STRM".utf8)
+        inner.append(0x00)                      // container
+        inner.append(0x01)
+        inner.append(0x00); inner.append(0xFF)  // sample count = 255 → declared 255 bytes
+        inner.append(contentsOf: "DVNM".utf8)
+        inner.append(0x63); inner.append(0x00)
+        inner.append(0x00); inner.append(0x00)
+
+        var blob = Data()
+        blob.append(contentsOf: "DEVC".utf8)
+        blob.append(0x00)
+        blob.append(0x01)
+        let cnt = UInt16(inner.count)
+        blob.append(UInt8((cnt >> 8) & 0xFF))
+        blob.append(UInt8(cnt & 0xFF))
+        blob.append(inner)
+
+        let entries = GPMFReader.parse(blob)
+        XCTAssertEqual(entries.first?.fourCC, "DEVC")
+        XCTAssertEqual(entries.first?.children.first?.fourCC, "STRM")
+    }
+
     // MARK: - Helpers
 
     /// Append a KLV entry with payload padded to a 4-byte boundary.

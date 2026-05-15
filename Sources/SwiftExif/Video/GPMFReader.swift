@@ -162,8 +162,13 @@ public struct GPMFReader: Sendable {
 
             var children: [Entry] = []
             if case .container = type {
+                // Clamp recursive range to the actual buffer: an attacker-controlled
+                // sampleSize × sampleCount can declare a payload that extends past
+                // the buffer, and the inner loop's `off + 8 <= range.upperBound`
+                // check would otherwise let reads run off the end of `data`.
+                let childEnd = min(payloadStart + payloadBytes, payloadEnd, data.count)
                 children = parseEntries(in: data,
-                                         range: payloadStart ..< payloadStart + payloadBytes)
+                                         range: payloadStart ..< childEnd)
             }
 
             out.append(Entry(
