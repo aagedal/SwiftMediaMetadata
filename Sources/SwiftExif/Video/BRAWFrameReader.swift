@@ -110,7 +110,11 @@ public enum BRAWFrameReader {
     /// BRAW (no `br*` video sample entry) or the trak lacks the sample
     /// tables we need to walk.
     public static func readAttributes(from url: URL) throws -> [BRAWFrameAttribute] {
-        let data = try Data(contentsOf: url)
+        // Map rather than copy — BRAW files are routinely 10s of GB and the
+        // reader only scatter-reads small per-frame `bmdf` payloads. Matches
+        // the `VideoMetadata.loadContainerData` rationale (`.alwaysMapped`
+        // because external volumes silently defeat `.mappedIfSafe`).
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
         return try readAttributes(from: data)
     }
 
@@ -127,7 +131,8 @@ public enum BRAWFrameReader {
     public static func readMotionSamples(
         from url: URL, stream: BRAWMotionStream
     ) throws -> [BRAWMotionSample] {
-        let data = try Data(contentsOf: url)
+        // Same mmap rationale as `readAttributes(from url:)` above.
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
         return try readMotionSamples(from: data, stream: stream)
     }
 

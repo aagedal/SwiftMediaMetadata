@@ -106,7 +106,11 @@ public struct RTMDSummary: Sendable, Equatable {
 public enum RTMDReader {
 
     public static func readAttributes(from url: URL) throws -> [RTMDFrameAttribute] {
-        let data = try Data(contentsOf: url)
+        // Map rather than copy — Sony XAVC/MXF files are routinely multi-GB
+        // and the reader only scatter-reads per-frame RTMD payloads at offsets
+        // pulled from sample tables. See `VideoMetadata.loadContainerData`
+        // for the full `.alwaysMapped` rationale.
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
         return try readAttributes(from: data)
     }
 
@@ -131,7 +135,8 @@ public enum RTMDReader {
     public static func readMotionSamples(
         from url: URL, stream: RTMDStream
     ) throws -> [RTMDMotionSample] {
-        let data = try Data(contentsOf: url)
+        // Same mmap rationale as `readAttributes(from url:)` above.
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
         return try readMotionSamples(from: data, stream: stream)
     }
 

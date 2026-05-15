@@ -68,7 +68,10 @@ public struct AudioMetadata: Sendable {
     // MARK: - Reading
 
     public static func read(from url: URL) throws -> AudioMetadata {
-        let data = try Data(contentsOf: url)
+        // Map rather than copy — FLAC/WAV/AIFF can be hundreds of MB and the
+        // parsers only touch headers + tag chunks. Matches the rationale in
+        // `ImageMetadata.read` and `VideoMetadata.loadContainerData`.
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
         let ext = url.pathExtension.lowercased()
         let format: AudioFormat
         if let detected = FormatDetector.detectAudio(data) {

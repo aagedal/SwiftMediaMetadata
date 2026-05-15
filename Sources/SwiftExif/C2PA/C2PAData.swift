@@ -25,7 +25,9 @@ public struct C2PAData: Sendable {
 
     /// Read a sidecar `.c2pa` file from a URL.
     public static func readSidecar(from url: URL) throws -> C2PAData? {
-        let data = try Data(contentsOf: url)
+        // Map rather than copy — provenance-heavy C2PA manifests can reach
+        // multi-MB (cloud-rendered chains with embedded thumbnails).
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
         return try readSidecar(from: data)
     }
 }
