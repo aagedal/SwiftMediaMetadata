@@ -3,6 +3,8 @@ import Foundation
 /// Export video metadata in machine-readable formats.
 public struct VideoMetadataExporter: Sendable {
 
+    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
+
     /// Export video metadata as JSON Data.
     public static func toJSON(_ metadata: VideoMetadata) -> Data {
         let dict = buildDictionary(metadata)
@@ -177,10 +179,10 @@ public struct VideoMetadataExporter: Sendable {
         if let alt = metadata.gpsAltitude { dict["GPSAltitude"] = alt }
 
         if let date = metadata.creationDate {
-            dict["CreationDate"] = ISO8601DateFormatter().string(from: date)
+            dict["CreationDate"] = isoFormatter.string(from: date)
         }
         if let date = metadata.modificationDate {
-            dict["ModificationDate"] = ISO8601DateFormatter().string(from: date)
+            dict["ModificationDate"] = isoFormatter.string(from: date)
         }
 
         if let cam = metadata.camera {
@@ -197,7 +199,7 @@ public struct VideoMetadataExporter: Sendable {
                 dict["UserDescriptiveMetadataMetaContent"] = cam.userMetaContents
             }
             if let date = cam.creationDate {
-                dict["CreationDateValue"] = ISO8601DateFormatter().string(from: date)
+                dict["CreationDateValue"] = isoFormatter.string(from: date)
             }
 
             // X-OCN / cinema-camera fields. NRT AcquisitionRecord items map

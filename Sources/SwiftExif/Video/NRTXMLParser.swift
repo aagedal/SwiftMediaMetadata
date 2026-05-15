@@ -668,11 +668,20 @@ private final class NRTDelegate: NSObject, XMLParserDelegate {
         return String(format: "%02d:%02d:%02d%@%02d", hh, mm, ss, sep, ff)
     }
 
+    nonisolated(unsafe) private static let noFracFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    nonisolated(unsafe) private static let withFracFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     private func parseISO8601(_ value: String) -> Date? {
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime]
-        if let d = fmt.date(from: value) { return d }
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fmt.date(from: value)
+        if let d = NRTDelegate.noFracFormatter.date(from: value) { return d }
+        return NRTDelegate.withFracFormatter.date(from: value)
     }
 }

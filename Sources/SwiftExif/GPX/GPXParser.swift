@@ -49,13 +49,21 @@ private class GPXXMLParserDelegate: NSObject, XMLParserDelegate {
     private var inTrack = false
     private var currentElement = ""
 
+    nonisolated(unsafe) private static let withFracFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    nonisolated(unsafe) private static let noFracFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     private static func parseISO8601(_ string: String) -> Date? {
-        let withFrac = ISO8601DateFormatter()
-        withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = withFrac.date(from: string) { return d }
-        let noFrac = ISO8601DateFormatter()
-        noFrac.formatOptions = [.withInternetDateTime]
-        return noFrac.date(from: string)
+        if let d = withFracFormatter.date(from: string) { return d }
+        return noFracFormatter.date(from: string)
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
