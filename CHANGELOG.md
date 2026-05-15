@@ -8,6 +8,23 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MP4/MOV `displayWidth` / `displayHeight` orientation consistency** —
+  display dimensions on `VideoStream` now always reflect the final rendered
+  shape, after both pixel-aspect correction (`pasp`) and `tkhd` rotation,
+  matching ffprobe's `display_aspect_ratio` contract. Previously, MP4/MOV
+  files with a `pasp` box surfaced coded (pre-rotation) dimensions while
+  files without `pasp` but with a non-identity tkhd matrix surfaced
+  post-rotation dimensions, so a downstream consumer that applied
+  `rotation` to the display dims would double-rotate iPhone HEVC portrait
+  clips back to landscape. The same path also fixes a latent
+  `pixelAspectRatio` miscomputation for tkhd-derived rotated streams
+  without a `pasp` box (an iPhone H.264 portrait clip would previously
+  surface PAR `(81, 256)` instead of `(1, 1)`).
+  ([`Sources/SwiftExif/Video/MP4VisualSampleEntry.swift`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift),
+  [`Sources/SwiftExif/Video/MP4Parser.swift`](Sources/SwiftExif/Video/MP4Parser.swift))
+
 ## [1.8.0] — 2026-05-13
 
 ### Added

@@ -118,9 +118,15 @@ public struct VideoStream: Sendable, Equatable {
     public var profile: String?
     public var width: Int?
     public var height: Int?
+    /// Final rendered display dimensions, after pixel-aspect correction (`pasp`)
+    /// *and* rotation (the `tkhd` matrix on MP4/MOV). Matches `ffprobe`'s
+    /// `display_aspect_ratio` view. For an iPhone-recorded 3840×2160 portrait
+    /// clip this is 2160×3840 with `rotation = -90`. Consumers should use
+    /// these for UI/window sizing — do NOT also apply `rotation` to them.
     public var displayWidth: Int?
     public var displayHeight: Int?
-    /// Pixel aspect ratio as (horizontal, vertical).
+    /// Pixel aspect ratio as (horizontal, vertical). Intrinsic to the encoded
+    /// pixel grid — independent of any `rotation` applied at display time.
     public var pixelAspectRatio: (Int, Int)?
     public var bitDepth: Int?
     /// Stream bitrate in bits per second (if advertised by the container).

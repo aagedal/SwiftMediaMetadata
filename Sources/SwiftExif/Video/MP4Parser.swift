@@ -249,19 +249,31 @@ public struct MP4Parser: Sendable {
             // Pixel/display aspect ratio: default to square pixels when no
             // pasp box was present and tkhd didn't override. ffprobe always
             // emits SAR/DAR for video tracks.
+            //
+            // `displayWidth`/`displayHeight` follow ffprobe's convention: final
+            // rendered shape after PAR and rotation. The pasp branch and the
+            // tkhd fallback already write in that orientation; the defaults
+            // below apply a quarter-turn swap when neither fired and rotation
+            // is ±90. The PAR computation then un-rotates back to coded
+            // orientation — PAR is intrinsic to the encoded pixel grid and
+            // rotation doesn't change individual pixels.
             if let w = metadata.videoStreams[i].width,
                let h = metadata.videoStreams[i].height, w > 0, h > 0 {
+                let rotation = metadata.videoStreams[i].rotation ?? 0
+                let isQuarterTurn = abs(rotation) == 90
                 if metadata.videoStreams[i].displayWidth == nil {
-                    metadata.videoStreams[i].displayWidth = w
+                    metadata.videoStreams[i].displayWidth = isQuarterTurn ? h : w
                 }
                 if metadata.videoStreams[i].displayHeight == nil {
-                    metadata.videoStreams[i].displayHeight = h
+                    metadata.videoStreams[i].displayHeight = isQuarterTurn ? w : h
                 }
                 if metadata.videoStreams[i].pixelAspectRatio == nil,
                    let dw = metadata.videoStreams[i].displayWidth,
                    let dh = metadata.videoStreams[i].displayHeight, dw > 0, dh > 0 {
-                    let parNum = dw * h
-                    let parDen = dh * w
+                    let codedDW = isQuarterTurn ? dh : dw
+                    let codedDH = isQuarterTurn ? dw : dh
+                    let parNum = codedDW * h
+                    let parDen = codedDH * w
                     let g = gcdMP4(parNum, parDen)
                     metadata.videoStreams[i].pixelAspectRatio = (parNum / g, parDen / g)
                 }

@@ -191,7 +191,7 @@ plus convenience accessors that mirror the first video stream at the top level
 | `codecName` | Human-readable — `"H.265 / HEVC"`, `"Apple ProRes"`, `"AV1"`, `"VP9"`, `"MPEG-2 Video"` |
 | `profile` | Codec profile — `"Main"`, `"Main 10"`, `"High"`, `"Main 4:4:4 12"`, `"Professional"` — from `hvcC` / `av1C` / `avcC` or Matroska `CodecPrivate` |
 | `width` / `height` | Coded luma dimensions |
-| `displayWidth` / `displayHeight` | PAR-adjusted display dimensions (when advertised) |
+| `displayWidth` / `displayHeight` | Final rendered display dimensions, after PAR *and* rotation (matches ffprobe `display_aspect_ratio`). For an iPhone-recorded 3840×2160 portrait clip this is 2160×3840 with `rotation = -90` — do not re-apply rotation when sizing UI |
 | `pixelAspectRatio` | `(Int, Int)` — e.g. `(40, 33)` for anamorphic 1440×1080 |
 | `bitDepth` | 8 / 10 / 12 from `hvcC` / `av1C` / CDCI / Matroska `BitsPerChannel` or `CodecPrivate` |
 | `chromaSubsampling` | `"4:2:0"`, `"4:2:2"`, `"4:4:4"`, `"4:0:0"`, `"4:1:1"` |

@@ -847,6 +847,227 @@ final class MP4ParserTests: XCTestCase {
         return w.data
     }
 
+    // MARK: - displayWidth / displayHeight orientation
+
+    // SwiftExif's contract for `displayWidth` / `displayHeight`: final rendered
+    // shape after PAR and rotation, matching ffprobe's `display_aspect_ratio`.
+    // The fixture builder below exercises every combination of (pasp present,
+    // pasp absent) × (rotation identity, ±90) plus the rare anamorphic-rotated
+    // case so the contract is locked in across all three write sites
+    // (pasp branch, tkhd fallback, finalize defaults).
+
+    func testDisplayDimsSquarePixelsNoRotation() throws {
+        let data = buildMP4ForDisplayDims(
+            codedWidth: 1920, codedHeight: 1080,
+            tkhdWidth: 1920, tkhdHeight: 1080,
+            rotation: 0,
+            pasp: (1, 1)
+        )
+        let m = try VideoMetadata.read(from: data)
+        let s = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(s.width, 1920)
+        XCTAssertEqual(s.height, 1080)
+        XCTAssertEqual(s.displayWidth, 1920)
+        XCTAssertEqual(s.displayHeight, 1080)
+        XCTAssertEqual(s.pixelAspectRatio?.0, 1)
+        XCTAssertEqual(s.pixelAspectRatio?.1, 1)
+        XCTAssertNil(s.rotation)
+    }
+
+    func testDisplayDimsIPhoneHEVCPortrait_paspPlusMinus90() throws {
+        // The exact iPhone HEVC HDR case from the report:
+        // coded sensor-native 3840×2160, pasp 1:1, tkhd matrix encodes -90°,
+        // tkhd width/height are post-rotation portrait (2160×3840 per spec).
+        // Expected output: displayWidth/Height in post-rotation orientation.
+        let data = buildMP4ForDisplayDims(
+            codedWidth: 3840, codedHeight: 2160,
+            tkhdWidth: 2160, tkhdHeight: 3840,
+            rotation: -90,
+            pasp: (1, 1)
+        )
+        let m = try VideoMetadata.read(from: data)
+        let s = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(s.width, 3840)
+        XCTAssertEqual(s.height, 2160)
+        XCTAssertEqual(s.displayWidth, 2160)
+        XCTAssertEqual(s.displayHeight, 3840)
+        XCTAssertEqual(s.rotation, -90)
+        XCTAssertEqual(s.pixelAspectRatio?.0, 1)
+        XCTAssertEqual(s.pixelAspectRatio?.1, 1)
+    }
+
+    func testDisplayDimsNoPaspIdentityTkhdEqualsCoded() throws {
+        let data = buildMP4ForDisplayDims(
+            codedWidth: 1920, codedHeight: 1080,
+            tkhdWidth: 1920, tkhdHeight: 1080,
+            rotation: 0,
+            pasp: nil
+        )
+        let m = try VideoMetadata.read(from: data)
+        let s = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(s.displayWidth, 1920)
+        XCTAssertEqual(s.displayHeight, 1080)
+        XCTAssertEqual(s.pixelAspectRatio?.0, 1)
+        XCTAssertEqual(s.pixelAspectRatio?.1, 1)
+        XCTAssertNil(s.rotation)
+    }
+
+    func testDisplayDimsNoPaspMinus90TkhdPostRotation() throws {
+        // Older iPhone H.264 portrait: no pasp box, tkhd carries
+        // post-rotation 1080×1920 dims, rotation -90.
+        // Also asserts the latent PAR-computation bug is fixed — before this
+        // change the finalize loop computed pixelAspectRatio = (81, 256).
+        let data = buildMP4ForDisplayDims(
+            codedWidth: 1920, codedHeight: 1080,
+            tkhdWidth: 1080, tkhdHeight: 1920,
+            rotation: -90,
+            pasp: nil
+        )
+        let m = try VideoMetadata.read(from: data)
+        let s = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(s.width, 1920)
+        XCTAssertEqual(s.height, 1080)
+        XCTAssertEqual(s.displayWidth, 1080)
+        XCTAssertEqual(s.displayHeight, 1920)
+        XCTAssertEqual(s.rotation, -90)
+        XCTAssertEqual(s.pixelAspectRatio?.0, 1, "1:1 PAR — rotation must not warp PAR")
+        XCTAssertEqual(s.pixelAspectRatio?.1, 1)
+    }
+
+    func testDisplayDimsAnamorphicNoRotation() throws {
+        // SD anamorphic 16:9: coded 1440×1080 with pasp 4:3 → display 1920×1080.
+        let data = buildMP4ForDisplayDims(
+            codedWidth: 1440, codedHeight: 1080,
+            tkhdWidth: 1920, tkhdHeight: 1080,
+            rotation: 0,
+            pasp: (4, 3)
+        )
+        let m = try VideoMetadata.read(from: data)
+        let s = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(s.width, 1440)
+        XCTAssertEqual(s.height, 1080)
+        XCTAssertEqual(s.displayWidth, 1920)
+        XCTAssertEqual(s.displayHeight, 1080)
+        XCTAssertEqual(s.pixelAspectRatio?.0, 4)
+        XCTAssertEqual(s.pixelAspectRatio?.1, 3)
+        XCTAssertNil(s.rotation)
+    }
+
+    func testDisplayDimsAnamorphicRotatedMinus90() throws {
+        // Rare but real: anamorphic 4:3 PAR shot then rotated -90.
+        // Coded grid stays 1440×1080 with pasp 4:3; the rendered shape is
+        // 1080×1920 because the post-PAR landscape 1920×1080 becomes portrait
+        // 1080×1920 after the quarter-turn.
+        let data = buildMP4ForDisplayDims(
+            codedWidth: 1440, codedHeight: 1080,
+            tkhdWidth: 1080, tkhdHeight: 1920,
+            rotation: -90,
+            pasp: (4, 3)
+        )
+        let m = try VideoMetadata.read(from: data)
+        let s = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(s.width, 1440)
+        XCTAssertEqual(s.height, 1080)
+        XCTAssertEqual(s.displayWidth, 1080)
+        XCTAssertEqual(s.displayHeight, 1920)
+        XCTAssertEqual(s.rotation, -90)
+        XCTAssertEqual(s.pixelAspectRatio?.0, 4)
+        XCTAssertEqual(s.pixelAspectRatio?.1, 3)
+    }
+
+    func testDisplayDims180RotationKeepsDimensions() throws {
+        // 180° flip doesn't change the rendered shape's dimensions.
+        let data = buildMP4ForDisplayDims(
+            codedWidth: 1920, codedHeight: 1080,
+            tkhdWidth: 1920, tkhdHeight: 1080,
+            rotation: 180,
+            pasp: (1, 1)
+        )
+        let m = try VideoMetadata.read(from: data)
+        let s = try XCTUnwrap(m.videoStreams.first)
+        XCTAssertEqual(s.displayWidth, 1920)
+        XCTAssertEqual(s.displayHeight, 1080)
+        XCTAssertEqual(abs(s.rotation ?? 0), 180)
+        XCTAssertEqual(s.pixelAspectRatio?.0, 1)
+        XCTAssertEqual(s.pixelAspectRatio?.1, 1)
+    }
+
+    /// Build an MP4 with a single video track carrying a full `avc1`
+    /// VisualSampleEntry (so the parser sees coded width/height inside the
+    /// sample entry), a `tkhd` with the requested rotation matrix and tkhd
+    /// width/height, and an optional `pasp` child box. Combining what
+    /// `buildMP4WithRotatedTrack` and `buildMP4WithVisualChildBox` do above,
+    /// but parameterised across every dimension the displayWidth/Height path
+    /// touches.
+    private func buildMP4ForDisplayDims(
+        codedWidth: Int,
+        codedHeight: Int,
+        tkhdWidth: Int,
+        tkhdHeight: Int,
+        rotation: Int,
+        pasp: (Int, Int)?
+    ) -> Data {
+        var writer = BinaryWriter(capacity: 1024)
+        writeFtyp(&writer, brand: "isom")
+
+        var mvhdWriter = BinaryWriter(capacity: 128)
+        mvhdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhdWriter.writeBytes(Data(repeating: 0, count: 96))
+        let mvhdBox = buildBox("mvhd", data: mvhdWriter.data)
+
+        var tkhdWriter = BinaryWriter(capacity: 128)
+        tkhdWriter.writeBytes([0x00, 0x00, 0x00, 0x03])           // version 0 + flags
+        tkhdWriter.writeBytes(Data(repeating: 0, count: 36))       // creation → volume+reserved
+        tkhdWriter.writeBytes(tkhdMatrixBytes(rotation: rotation)) // matrix (36 bytes)
+        tkhdWriter.writeUInt32BigEndian(UInt32(tkhdWidth) << 16)   // 16.16 fixed
+        tkhdWriter.writeUInt32BigEndian(UInt32(tkhdHeight) << 16)
+        let tkhdBox = buildBox("tkhd", data: tkhdWriter.data)
+
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4))
+        hdlrWriter.writeString("vide", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12))
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        // avc1 VisualSampleEntry per ISO/IEC 14496-12 §8.5.2 (78 fixed bytes
+        // plus optional child boxes — here, optionally a pasp).
+        var avc1Payload = BinaryWriter(capacity: 256)
+        avc1Payload.writeBytes(Data(repeating: 0, count: 6))         // SampleEntry reserved
+        avc1Payload.writeUInt16BigEndian(1)                           // data_reference_index
+        avc1Payload.writeBytes(Data(repeating: 0, count: 16))        // pre_defined + reserved
+        avc1Payload.writeUInt16BigEndian(UInt16(codedWidth))          // width
+        avc1Payload.writeUInt16BigEndian(UInt16(codedHeight))         // height
+        avc1Payload.writeUInt32BigEndian(0x00480000)                  // horizresolution (72 dpi)
+        avc1Payload.writeUInt32BigEndian(0x00480000)                  // vertresolution
+        avc1Payload.writeUInt32BigEndian(0)                           // reserved
+        avc1Payload.writeUInt16BigEndian(1)                           // frame_count
+        avc1Payload.writeBytes(Data(repeating: 0, count: 32))        // compressorname
+        avc1Payload.writeUInt16BigEndian(0x0018)                      // depth = 24
+        avc1Payload.writeUInt16BigEndian(0xFFFF)                      // pre_defined = -1
+        if let (h, v) = pasp {
+            var paspWriter = BinaryWriter(capacity: 8)
+            paspWriter.writeUInt32BigEndian(UInt32(h))
+            paspWriter.writeUInt32BigEndian(UInt32(v))
+            avc1Payload.writeBytes(buildBox("pasp", data: paspWriter.data))
+        }
+        let avc1Box = buildBox("avc1", data: avc1Payload.data)
+
+        var stsdWriter = BinaryWriter(capacity: 256)
+        stsdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])              // version + flags
+        stsdWriter.writeUInt32BigEndian(1)                            // entry_count
+        stsdWriter.writeBytes(avc1Box)
+        let stsdBox = buildBox("stsd", data: stsdWriter.data)
+
+        let stblBox = buildBox("stbl", data: stsdBox)
+        let minfBox = buildBox("minf", data: stblBox)
+        let mdiaBox = buildBox("mdia", data: hdlrBox + minfBox)
+        let trakBox = buildBox("trak", data: tkhdBox + mdiaBox)
+        let moovBox = buildBox("moov", data: mvhdBox + trakBox)
+        writer.writeBytes(moovBox)
+        return writer.data
+    }
+
     // MARK: - HDR side-data: mdcv / clli / dvcC
 
     func testMasteringDisplayColorVolumeBox() throws {

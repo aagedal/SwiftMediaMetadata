@@ -7,7 +7,7 @@ import XCTest
 /// fixture folder is present; in CI they silently no-op.
 final class VideoStreamMetadataTests: XCTestCase {
 
-    private let fixtureDir = URL(fileURLWithPath: "/Users/traag222/Movies/TestVideo")
+    private let fixtureDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/TestVideo")
 
     /// Skip when the developer test fixture is missing so CI stays green.
     private func fixtureURL(_ name: String) throws -> URL {
@@ -28,6 +28,14 @@ final class VideoStreamMetadataTests: XCTestCase {
         XCTAssertEqual(m.videoCodec, "hvc1")
         XCTAssertEqual(m.videoWidth, 3840)
         XCTAssertEqual(m.videoHeight, 2160)
+        // Portrait clip: tkhd matrix rotates -90°, so the *rendered* shape is
+        // 2160×3840. displayWidth/Height follow ffprobe's convention (post-PAR,
+        // post-rotation) so consumers can size UI without re-applying rotation.
+        XCTAssertEqual(m.videoStreams.first?.displayWidth, 2160)
+        XCTAssertEqual(m.videoStreams.first?.displayHeight, 3840)
+        XCTAssertEqual(m.videoStreams.first?.rotation, -90)
+        XCTAssertEqual(m.videoStreams.first?.pixelAspectRatio?.0, 1)
+        XCTAssertEqual(m.videoStreams.first?.pixelAspectRatio?.1, 1)
         XCTAssertEqual(m.bitDepth, 10)
         XCTAssertEqual(m.chromaSubsampling, "4:2:0")
         XCTAssertEqual(m.colorInfo?.label, "bt2020-hlg")
@@ -138,7 +146,7 @@ final class VideoStreamMetadataTests: XCTestCase {
 /// Audio-only stream metadata (MP3, FLAC, M4A).
 final class StandaloneAudioMetadataTests: XCTestCase {
 
-    private let fixtureDir = URL(fileURLWithPath: "/Users/traag222/Movies/TestVideo")
+    private let fixtureDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/TestVideo")
 
     private func fixtureURL(_ name: String) throws -> URL {
         let url = fixtureDir.appendingPathComponent(name)

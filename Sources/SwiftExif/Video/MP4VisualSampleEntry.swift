@@ -117,10 +117,18 @@ extension MP4Parser {
         case "pasp":
             if let par = parsePaspBox(box.data) {
                 stream.pixelAspectRatio = par
-                if let w = stream.width, par.0 > 0, par.1 > 0 {
-                    stream.displayWidth = w * par.0 / par.1
+                if let w = stream.width, let h = stream.height,
+                   par.0 > 0, par.1 > 0 {
+                    let codedDW = w * par.0 / par.1
+                    let codedDH = h
+                    // displayWidth/Height contract: always post-rotation rendered
+                    // dims (matches ffprobe). MP4TrackParser sets `stream.rotation`
+                    // from the tkhd matrix *before* dispatching here, so it's
+                    // available; ±90 quarter-turns swap width and height.
+                    let isQuarterTurn = abs(stream.rotation ?? 0) == 90
+                    stream.displayWidth  = isQuarterTurn ? codedDH : codedDW
+                    stream.displayHeight = isQuarterTurn ? codedDW : codedDH
                 }
-                if let h = stream.height { stream.displayHeight = h }
             }
         case "hvcC":
             parseHVCC(box.data, into: &stream)

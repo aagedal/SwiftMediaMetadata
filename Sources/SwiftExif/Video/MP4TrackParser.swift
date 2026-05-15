@@ -200,9 +200,12 @@ extension MP4Parser {
             if stream.height == nil, let trackHeight, trackHeight > 0 {
                 stream.height = trackHeight
             }
-            // tkhd carries display-aspect-corrected dimensions. Only fall back
-            // to them when the sample entry (pasp) hasn't already set display
-            // dimensions, and only when they actually differ from the pixel grid.
+            // tkhd carries display-aspect-corrected, post-rotation dimensions
+            // per ISO/IEC 14496-12 §8.3.2 ("after all visual effects applied").
+            // Only fall back when the sample entry (pasp) hasn't already set
+            // display dims, and only when they actually differ from the pixel
+            // grid. Because tkhd is already post-rotation, no swap is needed
+            // here even when `tkhdRotation` is ±90.
             if stream.displayWidth == nil, let trackWidth, trackWidth > 0,
                stream.width.map({ $0 != trackWidth }) ?? false {
                 stream.displayWidth = trackWidth
