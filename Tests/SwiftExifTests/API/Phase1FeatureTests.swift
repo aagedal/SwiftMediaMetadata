@@ -392,4 +392,33 @@ final class DateShiftingTests: XCTestCase {
         let result = ImageMetadata.shiftExifDateString("not-a-date", by: 3600)
         XCTAssertNil(result)
     }
+
+    // Correctness smoke test for concurrent callers. DateFormatter is
+    // documented thread-unsafe; Apple's Foundation hides the race in
+    // practice but swift-corelibs-foundation (used in our musl Linux
+    // build) does not. Even on macOS this guards against future
+    // regressions if the static formatter ever comes back.
+    func testShiftExifDateStringIsThreadSafe() {
+        let cases: [(String, TimeInterval, String)] = [
+            ("2024:06:15 12:00:00",  3600, "2024:06:15 13:00:00"),
+            ("2024:01:31 23:30:00",  3600, "2024:02:01 00:30:00"),
+            ("2024:12:31 22:00:00",  7200, "2025:01:01 00:00:00"),
+            ("2024:03:10 02:00:00", -3600, "2024:03:10 01:00:00"),
+            ("1999:12:31 23:59:59",     1, "2000:01:01 00:00:00"),
+        ]
+
+        let lock = NSLock()
+        var mismatches: [(input: String, got: String?)] = []
+
+        DispatchQueue.concurrentPerform(iterations: 10_000) { i in
+            let c = cases[i % cases.count]
+            let r = ImageMetadata.shiftExifDateString(c.0, by: c.1)
+            if r != c.2 {
+                lock.lock(); mismatches.append((c.0, r)); lock.unlock()
+            }
+        }
+
+        XCTAssertTrue(mismatches.isEmpty,
+                      "Race in shiftExifDateString: \(mismatches.count) mismatches; first = \(mismatches.first as Any)")
+    }
 }

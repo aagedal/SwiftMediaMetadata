@@ -48,7 +48,11 @@ public struct ImageMetadata: Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw MetadataError.fileNotFound(url.path)
         }
-        let data = try Data(contentsOf: url)
+        // Use `.alwaysMapped` rather than `.mappedIfSafe` — the latter declines
+        // to map external volumes and silently loads the whole file into RAM,
+        // which is wasteful for large raws/HEIFs where metadata lives in the
+        // first few KB. (Same rationale as VideoMetadata.readMappedData.)
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
 
         // Try magic-byte detection first, fall back to extension
         let format = FormatDetector.detect(data)
@@ -425,18 +429,23 @@ public struct ImageMetadata: Sendable {
 
     // MARK: - Date Parsing Helpers
 
-    private static let exifDateFormatter: DateFormatter = {
+    // DateFormatter is not thread-safe — it mutates internal state during both
+    // `date(from:)` and `string(from:)`. Build a fresh instance per call so this
+    // static API stays safe under concurrent use (TaskGroups, batch operations,
+    // library clients running their own concurrency).
+    private static func makeExifFormatter() -> DateFormatter {
         let f = DateFormatter()
         f.dateFormat = "yyyy:MM:dd HH:mm:ss"
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(secondsFromGMT: 0)
         return f
-    }()
+    }
 
     static func shiftExifDateString(_ dateStr: String, by interval: TimeInterval) -> String? {
-        guard let date = exifDateFormatter.date(from: dateStr) else { return nil }
+        let formatter = makeExifFormatter()
+        guard let date = formatter.date(from: dateStr) else { return nil }
         let shifted = date.addingTimeInterval(interval)
-        return exifDateFormatter.string(from: shifted)
+        return formatter.string(from: shifted)
     }
 
     /// Shift a date string in various formats (EXIF, ISO 8601).

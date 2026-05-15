@@ -168,20 +168,24 @@ public struct MetadataRenamer: Sendable {
         return String(describing: value)
     }
 
+    // Locale / TimeZone are immutable value types and thread-safe to share.
+    // We deliberately don't cache the DateFormatter itself — DateFormatter is
+    // not thread-safe, and `MetadataRenamer` is `Sendable`.
+    private static let posixLocale = Locale(identifier: "en_US_POSIX")
+    private static let utcTimeZone = TimeZone(secondsFromGMT: 0)!
+
     private func formatDateField(field: String, format: String, dict: [String: Any]) -> String {
         guard let dateStr = dict[field] as? String else { return "" }
 
-        // Try parsing EXIF format "YYYY:MM:DD HH:MM:SS"
-        let exifFmt = DateFormatter()
-        exifFmt.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        exifFmt.locale = Locale(identifier: "en_US_POSIX")
-        exifFmt.timeZone = TimeZone(secondsFromGMT: 0)
+        let fmt = DateFormatter()
+        fmt.locale = Self.posixLocale
+        fmt.timeZone = Self.utcTimeZone
+        fmt.dateFormat = "yyyy:MM:dd HH:mm:ss"
 
         let date: Date?
-        if let d = exifFmt.date(from: dateStr) {
+        if let d = fmt.date(from: dateStr) {
             date = d
         } else {
-            // Try ISO 8601
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime]
             date = iso.date(from: dateStr)
@@ -189,11 +193,8 @@ public struct MetadataRenamer: Sendable {
 
         guard let parsed = date else { return dateStr }
 
-        let outputFmt = DateFormatter()
-        outputFmt.dateFormat = format
-        outputFmt.locale = Locale(identifier: "en_US_POSIX")
-        outputFmt.timeZone = TimeZone(secondsFromGMT: 0)
-        return outputFmt.string(from: parsed)
+        fmt.dateFormat = format
+        return fmt.string(from: parsed)
     }
 
     private func sanitizeFilename(_ name: String) -> String {
