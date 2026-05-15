@@ -74,4 +74,86 @@ final class ISOBMFFBoxTests: XCTestCase {
         let boxes = try ISOBMFFBoxReader.parseBoxes(from: Data())
         XCTAssertTrue(boxes.isEmpty)
     }
+
+    // Regression for the stack-overflow DoS in `ISOBMFFMetadata.findBox`:
+    // a crafted chain of 8-byte container boxes used to recurse without
+    // bound. Wrappers use `moov` (a real container in the allowlist) so
+    // the depth cap, not the leaf-skip allowlist, is what stops descent.
+    func testFindBoxRejectsDeeplyNestedContainers() throws {
+        let nestingLevels = 5000
+
+        // Innermost 8-byte empty "leaf" box.
+        var inner = Data()
+        do {
+            var w = BinaryWriter(capacity: 8)
+            w.writeUInt32BigEndian(8)
+            w.writeString("leaf", encoding: .ascii)
+            inner = w.data
+        }
+
+        // Wrap N times from the inside out, each wrapper a `moov` container.
+        for _ in 0..<nestingLevels {
+            let newSize = inner.count + 8
+            XCTAssertLessThanOrEqual(newSize, Int(UInt32.max))
+            var w = BinaryWriter(capacity: newSize)
+            w.writeUInt32BigEndian(UInt32(newSize))
+            w.writeString("moov", encoding: .ascii)
+            w.writeBytes(inner)
+            inner = w.data
+        }
+
+        let outer = try ISOBMFFBoxReader.parseBoxes(from: inner)
+        XCTAssertEqual(outer.count, 1)
+        XCTAssertEqual(outer[0].type, "moov")
+
+        // Type absent from the tree: returns nil, and crucially returns at
+        // all (a stack overflow here would terminate the process).
+        XCTAssertNil(ISOBMFFMetadata.findBox(type: "zzzz", in: outer))
+
+        // The innermost "leaf" sits `nestingLevels` deep — far past
+        // `maxRecursionDepth`. The depth cap must stop descent before
+        // reaching it. Pins the cap so a regression that silently lifts
+        // it is caught.
+        XCTAssertNil(ISOBMFFMetadata.findBox(type: "leaf", in: outer))
+    }
+
+    // findBox must descend into known container box types so that real
+    // ISOBMFF layouts (e.g. moov → udta → Exif) still resolve.
+    func testFindBoxDescendsIntoKnownContainers() throws {
+        let exifPayload = Data([0xCA, 0xFE, 0xBA, 0xBE])
+        let exifBox = makeBox(type: "Exif", payload: exifPayload)
+        let udtaBox = makeBox(type: "udta", payload: exifBox)
+        let moovBox = makeBox(type: "moov", payload: udtaBox)
+
+        let outer = try ISOBMFFBoxReader.parseBoxes(from: moovBox)
+        let found = ISOBMFFMetadata.findBox(type: "Exif", in: outer)
+        XCTAssertEqual(found?.type, "Exif")
+        XCTAssertEqual(found?.data, exifPayload)
+    }
+
+    // findBox must NOT descend into leaf boxes whose payloads are opaque
+    // (mdat, Exif, iloc, ipma, ispe, colr, hvcC, …). Hide a well-formed
+    // fake Exif child inside an mdat: the previous unconditional descent
+    // would have surfaced it; the leaf-skip allowlist must treat mdat as
+    // opaque.
+    func testFindBoxDoesNotDescendIntoLeafBoxes() throws {
+        let fakeExif = makeBox(type: "Exif", payload: Data([0x00, 0x00, 0x00, 0x00]))
+        let mdatBox = makeBox(type: "mdat", payload: fakeExif)
+
+        let outer = try ISOBMFFBoxReader.parseBoxes(from: mdatBox)
+        XCTAssertEqual(outer.count, 1)
+        XCTAssertEqual(outer[0].type, "mdat")
+        XCTAssertNil(ISOBMFFMetadata.findBox(type: "Exif", in: outer))
+    }
+
+    private func makeBox(type: String, payload: Data) -> Data {
+        precondition(type.utf8.count == 4)
+        let total = 8 + payload.count
+        precondition(total <= Int(UInt32.max))
+        var w = BinaryWriter(capacity: total)
+        w.writeUInt32BigEndian(UInt32(total))
+        w.writeString(type, encoding: .ascii)
+        w.writeBytes(payload)
+        return w.data
+    }
 }

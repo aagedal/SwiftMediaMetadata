@@ -120,12 +120,43 @@ public struct ISOBMFFMetadata: Sendable {
         return ICCProfile(data: profileData)
     }
 
-    /// Recursively find a box of the given type.
-    public static func findBox(type: String, in boxes: [ISOBMFFBox]) -> ISOBMFFBox? {
+    /// Hard cap on ISOBMFF box-tree descent. Real container hierarchies top
+    /// out at `moov → trak → mdia → minf → stbl → stsd` (depth ~6) and
+    /// HEIF/AVIF `meta → iprp → ipco` (depth 3); 32 leaves plenty of
+    /// headroom while keeping a crafted file from blowing the thread stack
+    /// via chained 8-byte container boxes. Mirrors `GPMFReader.maxRecursionDepth`.
+    static let maxRecursionDepth = 32
+
+    /// ISOBMFF box types whose payload is a plain concatenation of child
+    /// boxes (no version/flags or other prefix). `findBox` descends only
+    /// into these; everything else is treated as a leaf so we don't waste
+    /// work re-parsing payloads of `mdat`, `Exif`, `iloc`, `ipma`, `ispe`,
+    /// `colr`, `hvcC`, etc. — none of which are box-formatted.
+    ///
+    /// Intentionally excluded:
+    /// - `meta` has a 4-byte FullBox header; `parseMetaChildren` handles it.
+    /// - `stsd` has a version/flags + entry_count prefix before its entries.
+    /// - `uuid` starts with a 16-byte UUID; format-specific readers (e.g.
+    ///   `CR3Parser`) know how to descend it.
+    private static let containerBoxTypes: Set<String> = [
+        "moov", "trak", "mdia", "minf", "stbl", "dinf", "udta",
+        "edts", "mvex", "moof", "traf", "mfra", "iprp", "ipco",
+    ]
+
+    /// Recursively find a box of the given type. Only descends into box
+    /// types listed in `containerBoxTypes`; payloads of other boxes are
+    /// treated as opaque leaves.
+    public static func findBox(type: String, in boxes: [ISOBMFFBox], depth: Int = 0) -> ISOBMFFBox? {
         for box in boxes {
             if box.type == type { return box }
+            guard containerBoxTypes.contains(box.type) else { continue }
+            // Stop descending once `maxRecursionDepth` levels deep — an attacker
+            // can chain 8-byte container boxes to exhaust the thread stack.
+            // Graceful degradation: skip the descent and continue with siblings,
+            // matching the GPMF depth-clamp posture.
+            guard depth < ISOBMFFMetadata.maxRecursionDepth else { continue }
             if let children = try? ISOBMFFBoxReader.parseBoxes(from: box.data) {
-                if let found = findBox(type: type, in: children) {
+                if let found = findBox(type: type, in: children, depth: depth + 1) {
                     return found
                 }
             }
