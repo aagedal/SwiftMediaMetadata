@@ -8,6 +8,31 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+## [1.8.2] — 2026-06-02
+
+### Fixed
+
+- **AVIF/HEIF write path now stores EXIF and XMP as spec-conformant metadata
+  items** (`iinf`/`infe` + `iloc` + `iref cdsc`, payload in `idat`) instead of
+  as `iprp`/`ipco` properties, which spec-compliant readers (exiftool, Apple
+  ImageIO, Preview, Lightroom) could not see. Growing the `meta` box shifts
+  `mdat`, so construction-method-0 `iloc` offsets for the primary image item
+  are patched by the size delta; large-size (64-bit) box headers are now
+  preserved on write so those offsets stay valid for Apple/sips files. The
+  AVIF read path passes `fileData` so the items round-trip.
+  ([`Sources/SwiftExif/Binary/ISOBMFFMetadata.swift`](Sources/SwiftExif/Binary/ISOBMFFMetadata.swift),
+  [`Sources/SwiftExif/AVIF/AVIFParser.swift`](Sources/SwiftExif/AVIF/AVIFParser.swift),
+  [`Sources/SwiftExif/Binary/ISOBMFFBox.swift`](Sources/SwiftExif/Binary/ISOBMFFBox.swift))
+- **`TIFFWriter` no longer drops strip/tile pixel data on write.** Previously
+  it left `StripOffsets` pointing past EOF, so any photographic TIFF
+  round-tripped through SwiftExif decoded black. It now relocates every block
+  an IFD entry points at — strip/tile rasters, the old-style JPEG thumbnail,
+  and the Exif/GPS sub-IFDs — copying the bytes and rewriting the offsets
+  across the whole IFD chain. Exif sub-IFD values (ISO, LensModel, exposure)
+  are now serialized into TIFF, and assigned IFD0 camera tags (Make/Model)
+  are written while the destination's structural tags are preserved.
+  ([`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+
 ## [1.8.1] — 2026-05-15
 
 ### Changed
@@ -877,6 +902,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
+[1.8.2]: https://github.com/aagedal/SwiftExif/compare/1.8.1...1.8.2
 [1.8.1]: https://github.com/aagedal/SwiftExif/compare/1.8.0...1.8.1
 [1.8.0]: https://github.com/aagedal/SwiftExif/compare/1.7.0...1.8.0
 [1.7.0]: https://github.com/aagedal/SwiftExif/compare/1.6.0...1.7.0
