@@ -97,6 +97,40 @@ final class CRMReaderTests: XCTestCase {
         XCTAssertEqual(metadata.camera?.isoSensitivity, 800)
     }
 
+    // Regression for an integer-overflow trap walking the CTMD sample table.
+    // A crafted co64 chunk offset near UInt64.max makes `chunkBaseOffset +
+    // sampleOffsetInChunk` (and the `offset + length` bounds check in
+    // sliceFile) overflow UInt64 and trap (SIGTRAP). With two samples per
+    // chunk the running in-chunk offset is also exercised on the second
+    // iteration. The reader must reject the out-of-range chunk gracefully.
+    func testCTMDRejectsOverflowingCo64ChunkOffset() throws {
+        let s1 = makeCTMDRecord(type: 0x0005, payload: makeExposurePayload(fNum: 4, fDen: 1, expNum: 1, expDen: 50, iso: 800))
+        let s2 = makeCTMDRecord(type: 0x0005, payload: makeExposurePayload(fNum: 8, fDen: 1, expNum: 1, expDen: 100, iso: 1600))
+        let sampleSizes = [UInt32(s1.count), UInt32(s2.count)]
+        // Chunk offset a few bytes below UInt64.max so both the chunk-base add
+        // and the sliceFile bounds add would overflow without the hardening.
+        let trak = buildCTMDTrakCo64(sampleSizes: sampleSizes, chunkOffset: UInt64.max - 4)
+
+        var mvhd = Data([0, 0, 0, 0])
+        mvhd.append(Data(repeating: 0, count: 96))
+        var moovChildren = writeBoxRaw("mvhd", payload: mvhd)
+        // Canon metadata uuid + CNCV so the file is routed to the CRM reader
+        // (and thus the CTMD walker) rather than the generic MP4 path.
+        var uuidPayload = Data(CanonUUID.canonMetadata)
+        uuidPayload.append(writeBoxRaw("CNCV", payload: Data("CanonCRM0001/02.10.00/00.00.00".utf8)))
+        moovChildren.append(writeBoxRaw("uuid", payload: uuidPayload))
+        moovChildren.append(trak)
+
+        var data = Data()
+        data.append(writeBoxRaw("ftyp", payload: Data("crx ".utf8) + Data([0, 0, 0, 0])))
+        data.append(writeBoxRaw("moov", payload: moovChildren))
+        data.append(writeBoxRaw("mdat", payload: s1 + s2))
+
+        // Must return without trapping; the bogus chunk yields no timeline.
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertTrue(metadata.cameraTimeline.isEmpty)
+    }
+
     // MARK: - Thumb / preview
 
     func testTHMBExtractedAsEmbeddedThumbnail() throws {
@@ -287,6 +321,51 @@ final class CRMReaderTests: XCTestCase {
         return writeBoxRaw("trak", payload: writeBoxRaw("mdia", payload: mdia))
     }
 
+    /// Like `buildCTMDTrak`, but emits a 64-bit `co64` chunk-offset table so a
+    /// test can plant a chunk offset near `UInt64.max`. All `sampleSizes` live
+    /// in one chunk (`samples_per_chunk = sampleSizes.count`).
+    private func buildCTMDTrakCo64(sampleSizes: [UInt32], chunkOffset: UInt64) -> Data {
+        var hdlr = Data(repeating: 0, count: 4 + 4)
+        hdlr.append(Data("meta".utf8))
+        hdlr.append(Data(repeating: 0, count: 12))
+        hdlr.append(0x00)
+
+        var stsd = Data(repeating: 0, count: 4)
+        stsd.append(uint32BE(1))
+        var sampleEntry = uint32BE(16)
+        sampleEntry.append(Data("CTMD".utf8))
+        sampleEntry.append(Data(repeating: 0, count: 6))
+        sampleEntry.append(uint16BE(1))
+        stsd.append(sampleEntry)
+
+        var stsz = Data(repeating: 0, count: 4)
+        stsz.append(uint32BE(0))
+        stsz.append(uint32BE(UInt32(sampleSizes.count)))
+        for size in sampleSizes {
+            stsz.append(uint32BE(size))
+        }
+
+        var stsc = Data(repeating: 0, count: 4)
+        stsc.append(uint32BE(1))
+        stsc.append(uint32BE(1)) // first_chunk
+        stsc.append(uint32BE(UInt32(sampleSizes.count))) // samples_per_chunk
+        stsc.append(uint32BE(1)) // sample_description_index
+
+        var co64 = Data(repeating: 0, count: 4)
+        co64.append(uint32BE(1)) // entry_count
+        co64.append(uint64BE(chunkOffset))
+
+        var stbl = writeBoxRaw("stsd", payload: stsd)
+        stbl.append(writeBoxRaw("stsz", payload: stsz))
+        stbl.append(writeBoxRaw("stsc", payload: stsc))
+        stbl.append(writeBoxRaw("co64", payload: co64))
+
+        let minf = writeBoxRaw("stbl", payload: stbl)
+        var mdia = writeBoxRaw("hdlr", payload: hdlr)
+        mdia.append(writeBoxRaw("minf", payload: minf))
+        return writeBoxRaw("trak", payload: writeBoxRaw("mdia", payload: mdia))
+    }
+
     /// Wrap a JPEG payload into the THMB/PRVW header layout
     /// (version(4) + width(2) + height(2) + jpegSize(4) + padding(2) + jpeg).
     private func buildJPEGBoxBody(jpeg: Data, width: UInt16, height: UInt16) -> Data {
@@ -410,6 +489,10 @@ final class CRMReaderTests: XCTestCase {
 
     private func uint32BE(_ v: UInt32) -> Data {
         Data([UInt8((v >> 24) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)])
+    }
+
+    private func uint64BE(_ v: UInt64) -> Data {
+        Data((0..<8).reversed().map { UInt8((v >> (UInt64($0) * 8)) & 0xFF) })
     }
 
     private func uint16LE(_ v: UInt16) -> Data {

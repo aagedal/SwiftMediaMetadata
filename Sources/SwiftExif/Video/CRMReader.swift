@@ -269,14 +269,20 @@ public struct CRMReader: Sendable {
             for _ in 0..<Int(entry.samplesPerChunk) {
                 guard sampleIndex < sampleSizes.count else { break }
                 let sampleSize = sampleSizes[sampleIndex]
-                let absoluteOffset = chunkBaseOffset + sampleOffsetInChunk
+                // A crafted co64 chunk offset near UInt64.max plus the running
+                // in-chunk offset would trap on the addition; stop walking this
+                // chunk instead. sliceFile rejects any out-of-range result too.
+                let (absoluteOffset, ovf) = chunkBaseOffset.addingReportingOverflow(sampleOffsetInChunk)
+                if ovf { break }
                 if let sample = sliceFile(fileData, offset: absoluteOffset, length: UInt64(sampleSize)) {
                     var frame = CTMDFrame(sampleIndex: sampleIndex)
                     decodeCTMDSample(sample, into: &frame)
                     frames.append(frame)
                 }
-                sampleOffsetInChunk += UInt64(sampleSize)
                 sampleIndex += 1
+                let (nextInChunk, ovf2) = sampleOffsetInChunk.addingReportingOverflow(UInt64(sampleSize))
+                if ovf2 { break }
+                sampleOffsetInChunk = nextInChunk
             }
         }
         return frames
@@ -480,8 +486,13 @@ public struct CRMReader: Sendable {
     // MARK: - Helpers
 
     private static func sliceFile(_ data: Data, offset: UInt64, length: UInt64) -> Data? {
+        // Overflow-safe bounds check: `offset + length` would trap (UInt64
+        // addition overflows) on a crafted file declaring both near UInt64.max.
+        // Validate via subtraction against the file size, which cannot overflow.
+        let fileCount = UInt64(data.count)
         guard length > 0,
-              offset + length <= UInt64(data.count),
+              offset <= fileCount,
+              length <= fileCount - offset,
               offset <= UInt64(Int.max),
               length <= UInt64(Int.max) else { return nil }
         let start = data.startIndex + Int(offset)

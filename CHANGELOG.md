@@ -10,6 +10,17 @@ the CLI; the library target follows the same numbering.
 
 ### Fixed
 
+- **Integer-overflow trap walking a Canon CRM `CTMD` sample table** is fixed. A
+  crafted file with a 64-bit `co64` chunk offset near `UInt64.max` made the
+  per-sample `chunkBaseOffset + sampleOffsetInChunk` addition — and the
+  `offset + length` bounds check in `sliceFile` — overflow `UInt64` and trap
+  (SIGTRAP), crashing the parser. Both additions are now overflow-safe
+  (`addingReportingOverflow` for the running offset; subtraction-form bounds
+  check against the file size in `sliceFile`), matching the hardening already
+  applied to the ISOBMFF box parser and BRAW frame window. The out-of-range
+  chunk is dropped gracefully. Regression test
+  `testCTMDRejectsOverflowingCo64ChunkOffset`.
+  ([`Sources/SwiftExif/Video/CRMReader.swift`](Sources/SwiftExif/Video/CRMReader.swift))
 - **Relocated MakerNote (0x927C) internal offsets are now fixed up** on every
   write path that rebuilds a TIFF block — `TIFFWriter` (TIFF/DNG) **and**
   `ExifWriter` (embedded EXIF in JPEG/PNG/AVIF/HEIF/JPEG XL/WebP). Modeled on
