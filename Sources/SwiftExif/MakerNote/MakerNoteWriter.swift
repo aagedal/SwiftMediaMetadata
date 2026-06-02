@@ -416,8 +416,9 @@ public struct MakerNoteWriter: Sendable {
         // dataOffset must be relative to tiffStart, since the parser resolves: tiffStart + offset
         let absoluteDataPos = headerData.count + 2 + entries.count * 12 + 4
         let dataOffset = absoluteDataPos - tiffStart
+        var warnings: [String] = []  // MakerNote relocation is off here; never populated
         ExifWriter.writeIFD(&writer, entries: entries.sorted { $0.tag < $1.tag },
-                            endian: endian, dataOffset: dataOffset, nextIFDOffset: 0, tiffStart: tiffStart)
+                            endian: endian, dataOffset: dataOffset, nextIFDOffset: 0, tiffStart: tiffStart, warnings: &warnings)
 
         return writer.data
     }

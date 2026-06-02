@@ -5,13 +5,21 @@ public struct ExifWriter: Sendable {
 
     /// Serialize ExifData to APP1 segment payload (including "Exif\0\0" prefix).
     public static func write(_ exifData: ExifData) -> Data {
+        var warnings: [String] = []
+        return write(exifData, warnings: &warnings)
+    }
+
+    /// Serialize ExifData to APP1 segment payload (including "Exif\0\0" prefix),
+    /// collecting non-fatal write warnings (e.g. a relocated MakerNote whose
+    /// internal offsets could not be fixed up).
+    public static func write(_ exifData: ExifData, warnings: inout [String]) -> Data {
         var writer = BinaryWriter(capacity: 4096)
 
         // Exif identifier
         writer.writeBytes([0x45, 0x78, 0x69, 0x66, 0x00, 0x00])
 
         // Append raw TIFF data
-        writer.writeBytes(writeTIFF(exifData))
+        writer.writeBytes(writeTIFF(exifData, warnings: &warnings))
 
         return writer.data
     }
@@ -19,7 +27,14 @@ public struct ExifWriter: Sendable {
     /// Serialize ExifData to raw TIFF bytes (no "Exif\0\0" prefix).
     /// Used by PNG (eXIf chunk), JPEG XL (Exif box), AVIF (Exif property box), and TIFF files.
     public static func writeTIFF(_ exifData: ExifData) -> Data {
+        var warnings: [String] = []
+        return writeTIFF(exifData, warnings: &warnings)
+    }
+
+    /// Serialize ExifData to raw TIFF bytes, collecting non-fatal write warnings.
+    public static func writeTIFF(_ exifData: ExifData, warnings: inout [String]) -> Data {
         let endian = exifData.byteOrder
+        let make = exifData.make
         var writer = BinaryWriter(capacity: 4096)
 
         let tiffStart = writer.count
@@ -33,7 +48,10 @@ public struct ExifWriter: Sendable {
         var exifIFDEntries = exifData.exifIFD?.entries ?? []
         let gpsIFDEntries = exifData.gpsIFD?.entries ?? []
 
-        // If MakerNote is dirty, regenerate its binary and update the Exif IFD entry
+        // If MakerNote is dirty, regenerate its binary and update the Exif IFD entry.
+        // A regenerated note is rebuilt by MakerNoteWriter, so it bypasses
+        // relocation fix-up below.
+        var makerNoteWasRebuilt = false
         if let makerNote = exifData.makerNote, makerNote.isDirty {
             let newMakerNoteData = MakerNoteWriter.write(makerNote, byteOrder: endian)
             exifIFDEntries = exifIFDEntries.map { entry in
@@ -43,6 +61,7 @@ public struct ExifWriter: Sendable {
                 }
                 return entry
             }
+            makerNoteWasRebuilt = true
         }
 
         // Remove existing sub-IFD pointers (we'll recalculate)
@@ -123,20 +142,20 @@ public struct ExifWriter: Sendable {
         // Sort by tag ID (TIFF spec requires this)
         allIFD0Entries.sort { $0.tag < $1.tag }
 
-        writeIFD(&writer, entries: allIFD0Entries, endian: endian, dataOffset: ifd0DataStart, nextIFDOffset: 0, tiffStart: tiffStart)
+        writeIFD(&writer, entries: allIFD0Entries, endian: endian, dataOffset: ifd0DataStart, nextIFDOffset: 0, tiffStart: tiffStart, make: make, relocateMakerNote: false, warnings: &warnings)
 
         // Write Exif IFD
         if hasExifIFD {
             let exifDataStart = exifIFDOffset + 2 + exifIFDEntries.count * 12 + 4
             let sortedExifEntries = exifIFDEntries.sorted { $0.tag < $1.tag }
-            writeIFD(&writer, entries: sortedExifEntries, endian: endian, dataOffset: exifDataStart, nextIFDOffset: 0, tiffStart: tiffStart)
+            writeIFD(&writer, entries: sortedExifEntries, endian: endian, dataOffset: exifDataStart, nextIFDOffset: 0, tiffStart: tiffStart, make: make, relocateMakerNote: !makerNoteWasRebuilt, warnings: &warnings)
         }
 
         // Write GPS IFD
         if hasGPSIFD {
             let gpsDataStart = gpsIFDOffset + 2 + gpsIFDEntries.count * 12 + 4
             let sortedGPSEntries = gpsIFDEntries.sorted { $0.tag < $1.tag }
-            writeIFD(&writer, entries: sortedGPSEntries, endian: endian, dataOffset: gpsDataStart, nextIFDOffset: 0, tiffStart: tiffStart)
+            writeIFD(&writer, entries: sortedGPSEntries, endian: endian, dataOffset: gpsDataStart, nextIFDOffset: 0, tiffStart: tiffStart, make: make, relocateMakerNote: false, warnings: &warnings)
         }
 
         return writer.data
@@ -144,7 +163,8 @@ public struct ExifWriter: Sendable {
 
     // MARK: - Private
 
-    static func writeIFD(_ writer: inout BinaryWriter, entries: [IFDEntry], endian: ByteOrder, dataOffset: Int, nextIFDOffset: UInt32, tiffStart: Int) {
+    static func writeIFD(_ writer: inout BinaryWriter, entries: [IFDEntry], endian: ByteOrder, dataOffset: Int, nextIFDOffset: UInt32, tiffStart: Int,
+                         make: String? = nil, relocateMakerNote: Bool = false, warnings: inout [String]) {
         writer.writeUInt16(UInt16(entries.count), endian: endian)
 
         // Track where external data will go
@@ -175,7 +195,20 @@ public struct ExifWriter: Sendable {
         // Second pass: write external data
         for entry in entries {
             if entry.totalValueSize > 4 {
-                writer.writeBytes(entry.valueData)
+                if relocateMakerNote, entry.tag == ExifTag.makerNote {
+                    // The block lands at this position; `delta` is TIFF-relative.
+                    let newOffset = writer.count - tiffStart
+                    if let src = entry.sourceOffset {
+                        let r = MakerNoteRelocator.relocate(data: entry.valueData, make: make, endian: endian, delta: newOffset - src)
+                        writer.writeBytes(r.bytes)
+                        if !r.isSafe { TIFFWriter.appendMakerNoteWarning(&warnings) }
+                    } else {
+                        writer.writeBytes(entry.valueData)
+                        TIFFWriter.appendMakerNoteWarning(&warnings)
+                    }
+                } else {
+                    writer.writeBytes(entry.valueData)
+                }
                 if entry.valueData.count % 2 != 0 {
                     writer.writeUInt8(0x00)
                 }

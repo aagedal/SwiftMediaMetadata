@@ -8,6 +8,31 @@ the CLI; the library target follows the same numbering.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Relocated MakerNote (0x927C) internal offsets are now fixed up** on every
+  write path that rebuilds a TIFF block — `TIFFWriter` (TIFF/DNG) **and**
+  `ExifWriter` (embedded EXIF in JPEG/PNG/AVIF/HEIF/JPEG XL/WebP). Modeled on
+  ExifTool's `FixBase`/`RebuildMakerNotes`: a MakerNote whose internal pointers
+  are relative to the note/embedded-TIFF start (Nikon, Fujifilm, Sony,
+  Panasonic, Olympus, Apple) moves with the block and is copied verbatim, while
+  one whose pointers are TIFF-absolute (Canon, DJI, Samsung, Pentax) has every
+  out-of-line value-offset field shifted by the relocation delta (and a Canon
+  TIFF footer patched to match). The fix-up preserves byte length and is fully
+  bounds-checked; a note that can't be classified or safely patched (unknown
+  manufacturer, parse failure, a chained MakerNote IFD) is still copied verbatim
+  and surfaces the non-fatal `writeToDataWithWarnings()` warning, so output is
+  never more corrupt than a plain copy. This converts the 1.8.2 "known
+  limitation" into a fix. New `IFDParser` records each out-of-line value's
+  TIFF-relative source offset on `IFDEntry.sourceOffset` (excluded from
+  equality) to compute the delta. New tests: `MakerNoteRelocatorTests` plus
+  end-to-end coverage in `TIFFWriterTests` and `ExifRoundTripTests`.
+  ([`Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift`](Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift),
+  [`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift),
+  [`Sources/SwiftExif/Exif/ExifWriter.swift`](Sources/SwiftExif/Exif/ExifWriter.swift),
+  [`Sources/SwiftExif/Exif/IFDParser.swift`](Sources/SwiftExif/Exif/IFDParser.swift),
+  [`Sources/SwiftExif/Exif/IFDEntry.swift`](Sources/SwiftExif/Exif/IFDEntry.swift))
+
 ## [1.8.2] — 2026-06-02
 
 ### Added

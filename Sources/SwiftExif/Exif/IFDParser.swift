@@ -33,6 +33,8 @@ struct IFDParser {
                 throw MetadataError.invalidIFDEntry
             }
             let valueData: Data
+            // TIFF-relative offset of out-of-line value bytes (nil when inline).
+            var sourceOffset: Int? = nil
 
             if totalSize <= 4 {
                 // Value is inline (in the 4-byte field)
@@ -42,9 +44,10 @@ struct IFDParser {
                 var offsetReader = BinaryReader(data: valueOrOffset)
                 let dataOffset = try offsetReader.readUInt32(endian: endian)
                 valueData = try reader.slice(from: tiffStart + Int(dataOffset), count: totalSize)
+                sourceOffset = Int(dataOffset)
             }
 
-            entries.append(IFDEntry(tag: tag, type: type, count: valueCount, valueData: valueData))
+            entries.append(IFDEntry(tag: tag, type: type, count: valueCount, valueData: valueData, sourceOffset: sourceOffset))
         }
 
         let nextIFDOffset = try reader.readUInt32(endian: endian)

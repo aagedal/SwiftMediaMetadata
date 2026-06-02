@@ -157,13 +157,13 @@ public struct ImageMetadata: Sendable {
     private func writeToData(collectingWarnings warnings: inout [String]) throws -> Data {
         switch container {
         case .jpeg(var file):
-            return try writeJPEG(&file)
+            return try writeJPEG(&file, warnings: &warnings)
         case .png(var file):
-            return writePNG(&file)
+            return writePNG(&file, warnings: &warnings)
         case .tiff(let file):
             return try writeTIFFFile(file, warnings: &warnings)
         case .jpegXL(var file):
-            return try writeJXL(&file)
+            return try writeJXL(&file, warnings: &warnings)
         case .avif(let file):
             return try writeAVIF(file)
         case .heif(let file):
@@ -1152,7 +1152,7 @@ public struct ImageMetadata: Sendable {
 
     // MARK: - Format-Specific Writing
 
-    private func writeJPEG(_ file: inout JPEGFile) throws -> Data {
+    private func writeJPEG(_ file: inout JPEGFile, warnings: inout [String]) throws -> Data {
         // Write IPTC
         let existingAPP13 = file.iptcSegment()?.data
         let app13Data = try IPTCWriter.writeToAPP13(iptc, existingAPP13: existingAPP13)
@@ -1160,7 +1160,7 @@ public struct ImageMetadata: Sendable {
 
         // Write Exif
         if let exif = exif {
-            let exifData = ExifWriter.write(exif)
+            let exifData = ExifWriter.write(exif, warnings: &warnings)
             file.replaceOrAddExifSegment(JPEGSegment(marker: .app1, data: exifData))
         }
 
@@ -1181,10 +1181,10 @@ public struct ImageMetadata: Sendable {
         return try JPEGWriter.write(file)
     }
 
-    private func writePNG(_ file: inout PNGFile) -> Data {
+    private func writePNG(_ file: inout PNGFile, warnings: inout [String]) -> Data {
         // Write Exif as eXIf chunk (raw TIFF, no prefix)
         if let exif = exif {
-            let tiffData = ExifWriter.writeTIFF(exif)
+            let tiffData = ExifWriter.writeTIFF(exif, warnings: &warnings)
             file.replaceOrAddExifChunk(tiffData)
         }
 
@@ -1218,11 +1218,11 @@ public struct ImageMetadata: Sendable {
         file.replaceOrAddChunk("iCCP", data: payload)
     }
 
-    private func writeJXL(_ file: inout JXLFile) throws -> Data {
+    private func writeJXL(_ file: inout JXLFile, warnings: inout [String]) throws -> Data {
         // Write Exif box (4-byte offset prefix + TIFF data)
         if let exif = exif {
             var exifPayload = Data([0x00, 0x00, 0x00, 0x00]) // offset prefix
-            exifPayload.append(ExifWriter.writeTIFF(exif))
+            exifPayload.append(ExifWriter.writeTIFF(exif, warnings: &warnings))
             file.replaceOrAddBox("Exif", data: exifPayload)
         }
 

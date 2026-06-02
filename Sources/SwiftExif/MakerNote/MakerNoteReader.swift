@@ -57,7 +57,7 @@ public struct MakerNoteReader: Sendable {
         return MakerNoteData(manufacturer: manufacturer, tags: tags, rawData: rawData)
     }
 
-    private static func identifyManufacturer(make: String?) -> MakerNoteManufacturer {
+    static func identifyManufacturer(make: String?) -> MakerNoteManufacturer {
         guard let make = make?.lowercased() else { return .unknown }
         if make.hasPrefix("canon") { return .canon }
         if make.hasPrefix("nikon") { return .nikon }

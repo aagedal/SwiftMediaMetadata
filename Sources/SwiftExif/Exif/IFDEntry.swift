@@ -33,12 +33,27 @@ public struct IFDEntry: Equatable, Sendable {
     public let count: UInt32
     /// The resolved value data (either inline 4 bytes or fetched from offset).
     public let valueData: Data
+    /// TIFF-relative offset where out-of-line value bytes were read from the
+    /// source (the raw value of the entry's 4-byte offset field); `nil` for
+    /// inline values and synthesized entries. Provenance only — used by the
+    /// writers to relocate a MakerNote's internal offsets; excluded from
+    /// equality (see `==` below).
+    public let sourceOffset: Int?
 
-    public init(tag: UInt16, type: TIFFDataType, count: UInt32, valueData: Data) {
+    public init(tag: UInt16, type: TIFFDataType, count: UInt32, valueData: Data, sourceOffset: Int? = nil) {
         self.tag = tag
         self.type = type
         self.count = count
         self.valueData = valueData
+        self.sourceOffset = sourceOffset
+    }
+
+    public static func == (lhs: IFDEntry, rhs: IFDEntry) -> Bool {
+        lhs.tag == rhs.tag &&
+        lhs.type == rhs.type &&
+        lhs.count == rhs.count &&
+        lhs.valueData == rhs.valueData
+        // sourceOffset intentionally excluded (provenance, not semantic value)
     }
 
     /// Total byte size of this entry's value data.

@@ -483,6 +483,80 @@ final class TIFFWriterTests: XCTestCase {
         XCTAssertTrue(warnings.isEmpty, "a MakerNote-free write must not warn")
     }
 
+    /// Build a little-endian TIFF whose Exif IFD carries a Canon-style absolute
+    /// MakerNote: a bare IFD at the note's start with one out-of-line value whose
+    /// offset field is TIFF-absolute (points at the value bytes inside the file).
+    /// Returns the file bytes; the value reads "CANONSER" at its absolute offset.
+    private func makeCanonMakerNoteTIFF() -> Data {
+        let make = Data("Canon\u{0}".utf8)            // 6 bytes (out-of-line)
+        let strip = Data([0xDE, 0xAD, 0xBE, 0xEF])
+
+        // IFD0: width,height,Make,StripOffsets,RowsPerStrip,StripByteCounts,ExifPointer
+        let ifd0Count = 7
+        let ifd0Size = 2 + ifd0Count * 12 + 4
+        let makeOffset = 8 + ifd0Size
+        let exifIFDOffset = makeOffset + make.count
+
+        // Exif IFD: just the MakerNote (1 entry).
+        let exifIFDSize = 2 + 1 * 12 + 4
+        let makerNoteOffset = exifIFDOffset + exifIFDSize
+
+        // MakerNote: count(2)+entry(12)+next(4) = 18, then 8-byte value.
+        let makerNoteValueAbsolute = makerNoteOffset + 18
+        let makerNoteLen = 18 + 8
+        let stripOffset = makerNoteOffset + makerNoteLen
+
+        var out = Data()
+        out += Data([0x49, 0x49]) + le16(42) + le32(8)        // TIFF header → IFD0 @ 8
+        out += encodeIFD([
+            (0x0100, 3, 1, le16(2)),
+            (0x0101, 3, 1, le16(2)),
+            (0x010F, 2, UInt32(make.count), le32(UInt32(makeOffset))),
+            (0x0111, 4, 1, le32(UInt32(stripOffset))),
+            (0x0116, 3, 1, le16(2)),
+            (0x0117, 4, 1, le32(UInt32(strip.count))),
+            (0x8769, 4, 1, le32(UInt32(exifIFDOffset))),
+        ])
+        XCTAssertEqual(out.count, makeOffset)
+        out += make
+        // Exif IFD
+        out += encodeIFD([
+            (0x927C, 7, UInt32(makerNoteLen), le32(UInt32(makerNoteOffset))),
+        ])
+        XCTAssertEqual(out.count, makerNoteOffset)
+        // MakerNote: bare IFD with one out-of-line ASCII value (absolute offset).
+        out += encodeIFD([
+            (0x0006, 2, 8, le32(UInt32(makerNoteValueAbsolute))),
+        ])
+        out += Data("CANONSER".utf8)
+        XCTAssertEqual(out.count, stripOffset)
+        out += strip
+        return out
+    }
+
+    func testAbsoluteMakerNoteFixedUpNoWarning() throws {
+        let tiff = makeCanonMakerNoteTIFF()
+        let metadata = try ImageMetadata.read(from: tiff)
+        XCTAssertEqual(metadata.exif?.make, "Canon")
+
+        let (written, warnings) = try metadata.writeToDataWithWarnings()
+        XCTAssertFalse(warnings.contains { $0.contains("MakerNote") },
+                       "a recognized absolute MakerNote must be fixed up, not warned about")
+
+        // Re-read: the relocated MakerNote's internal absolute offset must now
+        // resolve, in the *written* file, to the original value bytes.
+        let reread = try ImageMetadata.read(from: written)
+        let mn = try XCTUnwrap(reread.exif?.exifIFD?.entry(for: ExifTag.makerNote))
+        // Internal value-offset field sits at byte 10 of the MakerNote IFD.
+        let s = mn.valueData.startIndex + 10
+        let ptr = Int(UInt32(mn.valueData[s]) | (UInt32(mn.valueData[s + 1]) << 8)
+                      | (UInt32(mn.valueData[s + 2]) << 16) | (UInt32(mn.valueData[s + 3]) << 24))
+        XCTAssertLessThanOrEqual(ptr + 8, written.count)
+        let resolved = written.subdata(in: (written.startIndex + ptr) ..< (written.startIndex + ptr + 8))
+        XCTAssertEqual(resolved, Data("CANONSER".utf8),
+                       "patched MakerNote offset must resolve to the original value in the new file")
+    }
+
     func testAllMetadataTogether() throws {
         let original = TestFixtures.tiffWithExif(make: "Sony", model: "A7")
         var metadata = try ImageMetadata.read(from: original)

@@ -18,17 +18,17 @@ import Foundation
 /// malformed input drops the offending pointer rather than crashing or emitting
 /// a dangling offset.
 ///
-/// **Known limitation — MakerNote (0x927C):** a MakerNote is copied verbatim to
-/// its new file offset. Many manufacturers store internal pointers inside the
-/// MakerNote (some absolute from the TIFF start, some relative to the
-/// Exif-IFD/MakerNote start); those break when the containing IFD is relocated,
-/// exactly as they would in any rewriter without per-manufacturer fix-up logic
-/// (what exiftool implements). SwiftExif does not attempt that fix-up, so a
-/// relocated MakerNote's internal offsets may not resolve. This is unchanged
-/// from prior releases; the write now surfaces a warning (via the `warnings`
-/// out-parameter, reachable through `ImageMetadata.writeToDataWithWarnings()`)
-/// rather than silently emitting a possibly-corrupt MakerNote. A proper fix
-/// (per-manufacturer offset fix-up) is deferred to a future design change.
+/// **MakerNote (0x927C) relocation.** A relocated MakerNote has its internal
+/// offsets fixed up per manufacturer (`MakerNoteRelocator`). Notes whose
+/// pointers are relative to the MakerNote/embedded-TIFF start (Nikon, Fujifilm,
+/// Sony, Panasonic, Olympus, Apple) move with the block and are copied verbatim;
+/// notes with TIFF-absolute pointers (Canon, DJI, Samsung, Pentax) have every
+/// out-of-line value-offset field shifted by the relocation delta (and a Canon
+/// TIFF footer patched to match). Anything we cannot classify or safely patch
+/// (unknown manufacturer, parse failure, a chained MakerNote IFD) is copied
+/// verbatim and surfaces a non-fatal warning via the `warnings` out-parameter
+/// (reachable through `ImageMetadata.writeToDataWithWarnings()`), so the output
+/// is never more corrupt than a plain verbatim copy.
 public struct TIFFWriter: Sendable {
 
     // Offset-bearing tags whose values are file offsets that must be rewritten.
@@ -120,6 +120,10 @@ public struct TIFFWriter: Sendable {
         if let exifIFD = exif?.exifIFD { ifd0SubIFDs[exifPointer] = exifIFD.entries }
         if let gpsIFD = exif?.gpsIFD { ifd0SubIFDs[gpsPointer] = gpsIFD.entries }
 
+        // Camera Make (from the IFD0 being written) drives per-manufacturer
+        // MakerNote offset fix-up when the Exif sub-IFD is relocated below.
+        let make = topIFDs[0].first { $0.tag == ExifTag.make }?.stringValue(endian: endian)
+
         var prevNextField: Int? = nil
         for (index, entries) in topIFDs.enumerated() {
             if writer.count % 2 != 0 { writer.writeUInt8(0) } // word-align each IFD
@@ -128,7 +132,7 @@ public struct TIFFWriter: Sendable {
                 try writer.patchUInt32(UInt32(ifdStart), at: p, endian: endian)
             }
             let subIFDs = index == 0 ? ifd0SubIFDs : [:]
-            prevNextField = try writeIFD(&writer, entries: entries, endian: endian, raw: raw, subIFDs: subIFDs, warnings: &warnings)
+            prevNextField = try writeIFD(&writer, entries: entries, endian: endian, raw: raw, subIFDs: subIFDs, make: make, warnings: &warnings)
         }
         // The final IFD's next-offset field was written as 0 — leave it.
 
@@ -187,7 +191,7 @@ public struct TIFFWriter: Sendable {
     /// this IFD's 4-byte next-IFD-offset field (initialized to 0) so the caller
     /// can chain it.
     private static func writeIFD(_ writer: inout BinaryWriter, entries rawEntries: [IFDEntry], endian: ByteOrder,
-                                 raw: Data, subIFDs: [UInt16: [IFDEntry]], warnings: inout [String], depth: Int = 0) throws -> Int {
+                                 raw: Data, subIFDs: [UInt16: [IFDEntry]], make: String?, warnings: inout [String], depth: Int = 0) throws -> Int {
         // Resolve every pointer entry to the child IFD(s) we will relocate.
         // Model-supplied children (Exif/GPS) win; every other pointer — Interop,
         // any nested pointer, and the per-offset children of a 0x014A array — is
@@ -228,16 +232,6 @@ public struct TIFFWriter: Sendable {
             entries.append(IFDEntry(tag: tag, type: .long, count: 1, valueData: Data([0, 0, 0, 0])))
         }
         entries.sort { $0.tag < $1.tag }
-
-        // A MakerNote is copied verbatim to a new file offset, but its internal
-        // pointers (manufacturer-specific, some absolute from TIFF start, some
-        // relative to the Exif/MakerNote start) are not fixed up, so they may not
-        // resolve after relocation. Surface this once rather than silently
-        // writing a possibly-corrupt MakerNote. (See the type doc comment.)
-        if entries.contains(where: { $0.tag == ExifTag.makerNote }) {
-            let note = "MakerNote (0x927C) was relocated; its manufacturer-specific internal offsets may no longer resolve. SwiftExif does not rewrite them."
-            if !warnings.contains(note) { warnings.append(note) }
-        }
 
         // Directory type per entry: offset arrays (strip/tile rasters and the
         // 0x014A SubIFDs array) are written as LONG so a relocated offset always
@@ -310,7 +304,7 @@ public struct TIFFWriter: Sendable {
                 for child in subIFDChildren {
                     align(&writer)
                     newOffsets.append(UInt64(writer.count))
-                    _ = try writeIFD(&writer, entries: child, endian: endian, raw: raw, subIFDs: [:], warnings: &warnings, depth: depth + 1)
+                    _ = try writeIFD(&writer, entries: child, endian: endian, raw: raw, subIFDs: [:], make: make, warnings: &warnings, depth: depth + 1)
                 }
                 writeOffsetArray(&writer, newOffsets, into: pos, endian: endian)
 
@@ -319,8 +313,25 @@ public struct TIFFWriter: Sendable {
                 let childPos = writer.count
                 // Recurse with no model children: nested pointers (e.g. Interop
                 // inside Exif) are relocated from `raw` by the resolver above.
-                _ = try writeIFD(&writer, entries: childEntries, endian: endian, raw: raw, subIFDs: [:], warnings: &warnings, depth: depth + 1)
+                _ = try writeIFD(&writer, entries: childEntries, endian: endian, raw: raw, subIFDs: [:], make: make, warnings: &warnings, depth: depth + 1)
                 try writer.patchUInt32(UInt32(childPos), at: pos, endian: endian)
+
+            } else if e.tag == ExifTag.makerNote, Int(e.count) * e.type.unitSize > 4 {
+                // Relocate the MakerNote, fixing up absolute internal offsets
+                // for manufacturers we recognize. `delta` is TIFF-relative: the
+                // destination header sits at buffer 0, so the new offset is the
+                // write position. Without a source offset we cannot compute it.
+                align(&writer)
+                let off = writer.count
+                if let src = e.sourceOffset {
+                    let r = MakerNoteRelocator.relocate(data: e.valueData, make: make, endian: endian, delta: off - src)
+                    writer.writeBytes(r.bytes)
+                    if !r.isSafe { appendMakerNoteWarning(&warnings) }
+                } else {
+                    writer.writeBytes(e.valueData)
+                    appendMakerNoteWarning(&warnings)
+                }
+                try writer.patchUInt32(UInt32(off), at: pos, endian: endian)
 
             } else if Int(e.count) * e.type.unitSize > 4 {
                 align(&writer)
@@ -389,5 +400,12 @@ public struct TIFFWriter: Sendable {
 
     private static func align(_ writer: inout BinaryWriter) {
         if writer.count % 2 != 0 { writer.writeUInt8(0) }
+    }
+
+    /// Append the (deduplicated) warning for a MakerNote that was relocated but
+    /// could not have its internal offsets safely fixed up.
+    static func appendMakerNoteWarning(_ warnings: inout [String]) {
+        let note = "MakerNote (0x927C) was relocated but its manufacturer-specific internal offsets could not be fixed up, so they may no longer resolve."
+        if !warnings.contains(note) { warnings.append(note) }
     }
 }
