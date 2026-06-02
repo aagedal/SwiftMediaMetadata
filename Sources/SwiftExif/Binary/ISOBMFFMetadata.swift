@@ -210,7 +210,11 @@ public struct ISOBMFFMetadata: Sendable {
         let newMetaData = try buildMetaBox(fromMeta: boxes[metaIndex].data, shiftThreshold: shiftThreshold,
                                            exifPayload: exifPayload, xmpPayload: xmpPayload,
                                            removeExif: exif == nil, removeXMP: xmp == nil)
-        boxes[metaIndex] = ISOBMFFBox(type: "meta", data: newMetaData)
+        // Preserve the original meta box's header width: `shiftThreshold` (and
+        // thus the method-0 offset patching) assumed `boxHeaderSize(meta)`, so
+        // the re-serialized header must match it. Dropping a 64-bit header to
+        // 32-bit would shift `mdat` 8 bytes past where the patched offsets point.
+        boxes[metaIndex] = ISOBMFFBox(type: "meta", data: newMetaData, usesLargeSize: boxes[metaIndex].usesLargeSize)
     }
 
     // MARK: - Private (Reading)
