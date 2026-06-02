@@ -1440,8 +1440,8 @@ public struct ImageMetadata: Sendable {
     private static func readAVIF(from data: Data) throws -> ImageMetadata {
         let avifFile = try AVIFParser.parse(data)
 
-        let exif = try AVIFParser.extractExif(from: avifFile)
-        let xmp = try AVIFParser.extractXMP(from: avifFile)
+        let exif = try AVIFParser.extractExif(from: avifFile, fileData: data)
+        let xmp = try AVIFParser.extractXMP(from: avifFile, fileData: data)
 
         // C2PA from jumb or uuid box
         var c2pa: C2PAData?

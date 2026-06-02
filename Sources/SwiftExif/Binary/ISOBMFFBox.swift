@@ -6,20 +6,40 @@ public struct ISOBMFFBox: Sendable, Equatable {
     public let type: String
     /// Box payload data (not including the size + type header).
     public let data: Data
+    /// True when the source box used a 64-bit extended size header (the
+    /// `size == 1` form). The writer preserves this so re-serializing a file
+    /// does not shrink a box's header from 16 to 8 bytes — which would shift
+    /// every absolute `iloc` file offset that points past it (e.g. a `mdat`
+    /// written by Apple/`sips`). Purely a serialization hint: it is excluded
+    /// from equality so semantically identical boxes still compare equal.
+    public var usesLargeSize: Bool = false
 
     public init(type: String, data: Data) {
         self.type = type
         self.data = data
+    }
+
+    public init(type: String, data: Data, usesLargeSize: Bool) {
+        self.type = type
+        self.data = data
+        self.usesLargeSize = usesLargeSize
+    }
+
+    public static func == (lhs: ISOBMFFBox, rhs: ISOBMFFBox) -> Bool {
+        lhs.type == rhs.type && lhs.data == rhs.data
     }
 }
 
 /// Serialize ISOBMFF boxes.
 public struct ISOBMFFBoxWriter: Sendable {
 
-    /// Write a single box (size + type + payload). Uses extended size for payloads that exceed the 32-bit limit.
+    /// Write a single box (size + type + payload). Uses extended (64-bit) size
+    /// when the payload exceeds the 32-bit limit, or when the source box used
+    /// one — preserving the original header length so absolute `iloc` offsets
+    /// past this box stay valid.
     public static func writeBox(_ writer: inout BinaryWriter, box: ISOBMFFBox) {
         let totalSize = 8 + box.data.count
-        if totalSize > UInt32.max {
+        if totalSize > UInt32.max || box.usesLargeSize {
             // Extended size: size32 = 1 signals 64-bit size follows
             writer.writeUInt32BigEndian(1)
             writer.writeString(box.type, encoding: .isoLatin1)
@@ -41,7 +61,7 @@ public struct ISOBMFFBoxWriter: Sendable {
     /// Serialize a sequence of boxes to Data.
     public static func serialize(boxes: [ISOBMFFBox]) -> Data {
         let capacity = boxes.reduce(0) { total, box in
-            let headerSize = (8 + box.data.count > UInt32.max) ? 16 : 8
+            let headerSize = (8 + box.data.count > UInt32.max || box.usesLargeSize) ? 16 : 8
             return total + headerSize + box.data.count
         }
         var writer = BinaryWriter(capacity: capacity)
@@ -95,11 +115,11 @@ public struct ISOBMFFBoxReader: Sendable {
             guard payloadSize >= 0 && reader.offset + payloadSize <= data.count else { break }
 
             if type == "mdat" {
-                boxes.append(ISOBMFFBox(type: "mdat", data: Data()))
+                boxes.append(ISOBMFFBox(type: "mdat", data: Data(), usesLargeSize: headerSize == 16))
                 try reader.seek(to: reader.offset + payloadSize)
             } else {
                 let payload = try reader.readBytes(payloadSize)
-                boxes.append(ISOBMFFBox(type: type, data: payload))
+                boxes.append(ISOBMFFBox(type: type, data: payload, usesLargeSize: headerSize == 16))
             }
 
             let expectedEnd = boxStart + headerSize + payloadSize
@@ -127,6 +147,7 @@ public struct ISOBMFFBoxReader: Sendable {
             }
 
             let payloadSize: Int
+            var usesLargeSize = false
             if size32 == 1 {
                 // Extended size (UInt64). Guard against values that don't fit in
                 // Int — Int(UInt64) traps on overflow, which a malformed file could
@@ -134,6 +155,7 @@ public struct ISOBMFFBoxReader: Sendable {
                 let size64 = try reader.readUInt64BigEndian()
                 guard size64 >= 16, size64 <= UInt64(Int.max) else { break }
                 payloadSize = Int(size64) - 16 // 16 = 4 (size32) + 4 (type) + 8 (size64)
+                usesLargeSize = true
             } else if size32 == 0 {
                 // Box extends to end of data
                 payloadSize = endOffset - reader.offset
@@ -147,7 +169,7 @@ public struct ISOBMFFBoxReader: Sendable {
             }
 
             let payload = try reader.readBytes(payloadSize)
-            boxes.append(ISOBMFFBox(type: type, data: payload))
+            boxes.append(ISOBMFFBox(type: type, data: payload, usesLargeSize: usesLargeSize))
 
             // Ensure we advance past the box (handles padding)
             if size32 > 0 && size32 != 1 {

@@ -24,13 +24,15 @@ public struct AVIFParser: Sendable {
         return AVIFFile(boxes: boxes, brand: brand)
     }
 
-    /// Extract Exif data by recursively searching for an "Exif" box.
-    public static func extractExif(from avifFile: AVIFFile) throws -> ExifData? {
-        try ISOBMFFMetadata.extractExif(from: avifFile.boxes)
+    /// Extract Exif data, preferring a conformant `iloc`-located `Exif` item
+    /// (requires `fileData`) and falling back to a top-level/`ipco` `Exif` box.
+    public static func extractExif(from avifFile: AVIFFile, fileData: Data? = nil) throws -> ExifData? {
+        try ISOBMFFMetadata.extractExif(from: avifFile.boxes, fileData: fileData)
     }
 
-    /// Extract XMP data by recursively searching for a "mime" box with XMP content type.
-    public static func extractXMP(from avifFile: AVIFFile) throws -> XMPData? {
-        try ISOBMFFMetadata.extractXMP(from: avifFile.boxes)
+    /// Extract XMP data, preferring a conformant `iloc`-located `mime` item
+    /// (requires `fileData`) and falling back to an `ipco` `mime` property.
+    public static func extractXMP(from avifFile: AVIFFile, fileData: Data? = nil) throws -> XMPData? {
+        try ISOBMFFMetadata.extractXMP(from: avifFile.boxes, fileData: fileData)
     }
 }
