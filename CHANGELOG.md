@@ -10,6 +10,19 @@ the CLI; the library target follows the same numbering.
 
 ## [1.8.2] — 2026-06-02
 
+### Added
+
+- **`ImageMetadata.writeToDataWithWarnings()`** and **`write(to:)` /
+  `write(to:options:)` now return non-fatal write warnings** (`[String]`,
+  `@discardableResult` so existing call sites stay source-compatible). The
+  warnings surface conditions a write recovered from rather than failed on —
+  currently a relocated TIFF/DNG MakerNote whose manufacturer-specific
+  internal offsets may no longer resolve (see below). The underlying
+  `TIFFWriter.write(_:exif:iptc:xmp:iccProfile:)` gains a sibling overload
+  taking a `warnings: inout [String]` out-parameter.
+  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift),
+  [`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+
 ### Fixed
 
 - **AVIF/HEIF write path now stores EXIF and XMP as spec-conformant metadata
@@ -27,10 +40,38 @@ the CLI; the library target follows the same numbering.
   it left `StripOffsets` pointing past EOF, so any photographic TIFF
   round-tripped through SwiftExif decoded black. It now relocates every block
   an IFD entry points at — strip/tile rasters, the old-style JPEG thumbnail,
-  and the Exif/GPS sub-IFDs — copying the bytes and rewriting the offsets
-  across the whole IFD chain. Exif sub-IFD values (ISO, LensModel, exposure)
-  are now serialized into TIFF, and assigned IFD0 camera tags (Make/Model)
-  are written while the destination's structural tags are preserved.
+  and every child IFD — copying the bytes and rewriting the offsets across the
+  whole IFD chain. Exif sub-IFD values (ISO, LensModel, exposure) are now
+  serialized into TIFF, and assigned IFD0 camera tags (Make/Model) are written
+  while the destination's structural tags are preserved.
+  ([`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+- **`TIFFWriter` now relocates SubIFDs (0x014A) and the Interoperability IFD
+  (0xA005) too, not just Exif/GPS.** Child-IFD relocation is now generic:
+  Exif (0x8769) and GPS (0x8825) still come from the assigned `exif` model so
+  user edits apply, but every other pointer — the SubIFDs array that carries a
+  DNG's full-resolution raw image, the Interop IFD nested inside Exif, and any
+  pointer nested inside a child — is parsed from the source bytes and relocated
+  recursively, with the child's own strips/tiles and nested pointers carried
+  along. The 0x014A array is rewritten as new LONG offsets in order, fixing DNG
+  raw-image loss on round-trip. Recursion is bounded (`maxIFDDepth = 32`) and
+  every source offset is bounds-checked, so malformed input drops the offending
+  pointer rather than crashing or emitting a dangling offset. New regression
+  tests cover SubIFD-array + child-raster survival, a single inline SubIFD,
+  Interop-inside-Exif round-trip, and malformed-pointer drop.
+  ([`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+
+### Known limitations
+
+- **Relocated TIFF/DNG MakerNote (0x927C) internal offsets are not fixed up.**
+  A MakerNote is copied verbatim to its new file offset, but manufacturers
+  store internal pointers inside it (some absolute from the TIFF start, some
+  relative to the Exif-IFD/MakerNote start) that break when the containing IFD
+  moves — exactly as in any rewriter without per-manufacturer fix-up logic.
+  SwiftExif does not attempt that fix-up (unchanged from prior releases), but
+  the write now surfaces a non-fatal warning via the new
+  `writeToDataWithWarnings()` / `write(to:)` return value instead of silently
+  emitting a possibly-corrupt note. A proper per-manufacturer fix-up is
+  deferred to a future design change.
   ([`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
 
 ## [1.8.1] — 2026-05-15
