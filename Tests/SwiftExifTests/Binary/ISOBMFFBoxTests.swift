@@ -75,6 +75,33 @@ final class ISOBMFFBoxTests: XCTestCase {
         XCTAssertTrue(boxes.isEmpty)
     }
 
+    // Regression for an integer-overflow trap in the box-bounds check. A box
+    // using extended size (size32 == 1) can declare a 64-bit size near Int.max.
+    // The cast `Int(size64)` is already guarded against trapping, but the
+    // subsequent bounds check `reader.offset + payloadSize <= endOffset` would
+    // itself overflow Int and trap whenever the box does not start at offset 0
+    // (so `reader.offset` > 16). A leading 8-byte box pushes the offset up, then
+    // the oversized extended box triggers the overflow. The parser must reject
+    // it gracefully instead of crashing the process.
+    func testParseRejectsOverflowingExtendedSize() throws {
+        var writer = BinaryWriter(capacity: 32)
+        // Box 1: harmless 8-byte header-only box to advance the read offset > 16.
+        writer.writeUInt32BigEndian(8)
+        writer.writeString("free", encoding: .ascii)
+        // Box 2: extended size declaring ~Int.max bytes of payload.
+        writer.writeUInt32BigEndian(1)
+        writer.writeString("ext ", encoding: .ascii)
+        writer.writeUInt64BigEndian(UInt64(Int.max))
+
+        // Must return without trapping; the oversized box is dropped.
+        let boxes = try ISOBMFFBoxReader.parseBoxes(from: writer.data)
+        XCTAssertEqual(boxes.map(\.type), ["free"])
+
+        // Same overflow path in the mdat-skipping top-level parser.
+        let skipping = try ISOBMFFBoxReader.parseTopLevelBoxesSkippingMdat(writer.data)
+        XCTAssertEqual(skipping.map(\.type), ["free"])
+    }
+
     // Regression for the stack-overflow DoS in `ISOBMFFMetadata.findBox`:
     // a crafted chain of 8-byte container boxes used to recurse without
     // bound. Wrappers use `moov` (a real container in the allowlist) so

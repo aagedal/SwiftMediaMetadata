@@ -174,7 +174,9 @@ public struct BinaryReader: Sendable {
         guard count >= 0 else {
             throw MetadataError.invalidSegmentLength
         }
-        guard offset + count <= data.count else {
+        // Subtraction, not `offset + count`: a parsed count near Int.max would
+        // overflow the addition and trap. `offset <= data.count` always holds.
+        guard count <= data.count - offset else {
             throw MetadataError.unexpectedEndOfData
         }
         let start = data.startIndex + offset
@@ -205,7 +207,9 @@ public struct BinaryReader: Sendable {
         guard count >= 0 else {
             throw MetadataError.invalidSegmentLength
         }
-        guard offset + count <= data.count else {
+        // Subtraction, not `offset + count`: avoids an Int-overflow trap when a
+        // parsed count is near Int.max. `offset <= data.count` always holds.
+        guard count <= data.count - offset else {
             throw MetadataError.unexpectedEndOfData
         }
         offset += count
@@ -243,7 +247,11 @@ public struct BinaryReader: Sendable {
 
     /// Get a slice of the underlying data without advancing the offset.
     public func slice(from start: Int, count: Int) throws -> Data {
-        guard start >= 0, start + count <= data.count else {
+        // `start` is caller-supplied (not the bounds-checked read offset), so
+        // validate it independently and use subtraction to avoid an overflow
+        // trap on `start + count`. A negative count would also form an invalid
+        // Range and trap below, so reject it explicitly.
+        guard start >= 0, count >= 0, start <= data.count, count <= data.count - start else {
             throw MetadataError.unexpectedEndOfData
         }
         let dataStart = data.startIndex + start

@@ -112,7 +112,9 @@ public struct ISOBMFFBoxReader: Sendable {
                 headerSize = 8
             }
 
-            guard payloadSize >= 0 && reader.offset + payloadSize <= data.count else { break }
+            // Compare via subtraction, not `reader.offset + payloadSize`: an
+            // extended size near Int.max makes that addition overflow and trap.
+            guard payloadSize >= 0 && payloadSize <= data.count - reader.offset else { break }
 
             if type == "mdat" {
                 boxes.append(ISOBMFFBox(type: "mdat", data: Data(), usesLargeSize: headerSize == 16))
@@ -164,7 +166,11 @@ public struct ISOBMFFBoxReader: Sendable {
                 payloadSize = Int(size32) - 8 // 8 = 4 (size32) + 4 (type)
             }
 
-            guard payloadSize >= 0 && reader.offset + payloadSize <= endOffset else {
+            // Compare via subtraction, not `reader.offset + payloadSize`: an
+            // extended size near Int.max makes that addition overflow and trap.
+            // `endOffset - reader.offset` can go negative (a short final box),
+            // which correctly fails the `payloadSize <=` test and breaks.
+            guard payloadSize >= 0 && payloadSize <= endOffset - reader.offset else {
                 break
             }
 
