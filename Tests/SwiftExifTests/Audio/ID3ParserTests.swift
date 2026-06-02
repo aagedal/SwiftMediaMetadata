@@ -76,6 +76,17 @@ final class ID3ParserTests: XCTestCase {
         let result = ID3Parser.decodeTextFrame(data)
         XCTAssertEqual(result, "Caf\u{e9}")
     }
+
+    /// The frame decoders must index relative to `startIndex`, not 0, so a
+    /// `Data` slice with a non-zero base (e.g. one produced by `dropFirst`)
+    /// decodes correctly instead of trapping on an out-of-bounds access.
+    func testDecodeTextFrameOnNonZeroBasedSlice() {
+        // Prepend padding, then slice it off so startIndex != 0.
+        let frame = Data([0x03]) + Data("Hello".utf8)
+        let slice = (Data([0xFF, 0xFF]) + frame).dropFirst(2)
+        XCTAssertNotEqual(slice.startIndex, 0)
+        XCTAssertEqual(ID3Parser.decodeTextFrame(slice), "Hello")
+    }
 }
 
 private extension Data {

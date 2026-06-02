@@ -512,7 +512,7 @@ public struct ID3Parser: Sendable {
     /// Decode a text frame: encoding byte + text data.
     static func decodeTextFrame(_ data: Data) -> String? {
         guard !data.isEmpty else { return nil }
-        let encoding = data[0]
+        let encoding = data[data.startIndex]
         let textData = data.dropFirst()
         return decodeString(textData, encoding: encoding)
     }
@@ -520,54 +520,56 @@ public struct ID3Parser: Sendable {
     /// Decode a COMM frame: encoding (1) + language (3) + short desc (null-terminated) + text
     private static func decodeCommentFrame(_ data: Data) -> String? {
         guard data.count >= 5 else { return nil }
-        let encoding = data[0]
-        // Skip language (3 bytes)
-        var offset = 4
+        let base = data.startIndex
+        let encoding = data[base]
+        // Skip encoding (1) + language (3 bytes).
+        var offset = base + 4
 
         // Skip short description (null-terminated)
         if encoding == 1 || encoding == 2 {
             // UTF-16: null terminator is 2 bytes
-            while offset + 1 < data.count {
+            while offset + 1 < data.endIndex {
                 if data[offset] == 0 && data[offset + 1] == 0 { offset += 2; break }
                 offset += 2
             }
         } else {
-            while offset < data.count {
+            while offset < data.endIndex {
                 if data[offset] == 0 { offset += 1; break }
                 offset += 1
             }
         }
 
-        guard offset < data.count else { return nil }
+        guard offset < data.endIndex else { return nil }
         return decodeString(data[offset...], encoding: encoding)
     }
 
     /// Extract image data from APIC frame.
     private static func extractAPIC(_ data: Data) -> Data? {
         guard data.count > 4 else { return nil }
-        let encoding = data[0]
-        var offset = 1
+        let base = data.startIndex
+        let encoding = data[base]
+        var offset = base + 1
 
         // Skip MIME type (null-terminated ASCII)
-        while offset < data.count && data[offset] != 0 { offset += 1 }
+        while offset < data.endIndex && data[offset] != 0 { offset += 1 }
         offset += 1 // skip null
 
-        guard offset < data.count else { return nil }
+        guard offset < data.endIndex else { return nil }
         // Skip picture type byte
         offset += 1
 
         // Skip description (null-terminated, encoding-aware)
         if encoding == 1 || encoding == 2 {
-            while offset + 1 < data.count {
+            while offset + 1 < data.endIndex {
                 if data[offset] == 0 && data[offset + 1] == 0 { offset += 2; break }
                 offset += 2
             }
         } else {
-            while offset < data.count && data[offset] != 0 { offset += 1 }
+            while offset < data.endIndex && data[offset] != 0 { offset += 1 }
             offset += 1
         }
 
-        guard offset < data.count else { return nil }
+        guard offset < data.endIndex else { return nil }
         return Data(data[offset...])
     }
 
