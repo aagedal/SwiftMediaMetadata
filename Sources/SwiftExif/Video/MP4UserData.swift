@@ -539,11 +539,19 @@ extension MP4Parser {
     internal static func brawFrameWindow(
         at chunkOffset: UInt64, in fullData: Data
     ) -> Data? {
+        // `chunkOffset` is a raw 64-bit value straight from a `co64` box, so a
+        // crafted file can set it past Int.max — where `Int(chunkOffset)` traps
+        // and crashes the parser. Bound it in UInt64 space first; afterwards the
+        // Int math stays in range (mirrors CRMReader.sliceFile / parseTmcd).
+        guard chunkOffset <= UInt64(Int.max) else { return nil }
         let s = Int(chunkOffset)
-        guard s >= 0, s + 8 <= fullData.count else { return nil }
+        // Subtraction, not `s + 8`: s can be up to Int.max, so the addition
+        // would overflow. `fullData.count - 8` is negative for tiny files,
+        // which s (>= 0) correctly fails.
+        guard s <= fullData.count - 8 else { return nil }
         let bmdfSize = readUInt32BE(fullData, at: fullData.startIndex + s)
         let windowSize = min(max(Int(bmdfSize), 256), 4096)
-        guard s + windowSize <= fullData.count else { return nil }
+        guard s <= fullData.count - windowSize else { return nil }
         return fullData.subdata(in: (fullData.startIndex + s)..<(fullData.startIndex + s + windowSize))
     }
 

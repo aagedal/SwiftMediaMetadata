@@ -105,6 +105,18 @@ final class BRAWFrameReaderTests: XCTestCase {
         XCTAssertThrowsError(try BRAWFrameReader.readAttributes(from: file))
     }
 
+    /// A `co64` chunk offset past Int.max must not trap when converted to Int.
+    /// Regression: `brawFrameWindow` previously did `Int(chunkOffset)` before
+    /// any bound check, so a crafted 64-bit offset crashed the parser.
+    func testBrawFrameWindowRejectsOutOfRangeOffsetWithoutTrapping() {
+        let data = Data(repeating: 0, count: 4096)
+        XCTAssertNil(MP4Parser.brawFrameWindow(at: UInt64(Int.max) + 1, in: data))
+        XCTAssertNil(MP4Parser.brawFrameWindow(at: .max, in: data))
+        // A small file with an in-range but past-the-end offset is also rejected.
+        XCTAssertNil(MP4Parser.brawFrameWindow(at: 5000, in: data))
+        XCTAssertNil(MP4Parser.brawFrameWindow(at: 0, in: Data([0, 0, 0])))
+    }
+
     // MARK: - readMotionSamples (mebx vec3 walker)
 
     /// Build an mebx track with three samples (each [size=20][mogy][3×f32 LE])
