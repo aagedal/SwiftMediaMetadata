@@ -141,13 +141,27 @@ public struct ImageMetadata: Sendable {
 
     /// Write all metadata back to a new Data blob (preserving image data).
     public func writeToData() throws -> Data {
+        var warnings: [String] = []
+        return try writeToData(collectingWarnings: &warnings)
+    }
+
+    /// Write all metadata back to a new Data blob and return any non-fatal write
+    /// warnings. Currently this surfaces a relocated TIFF/DNG MakerNote whose
+    /// manufacturer-specific internal offsets may not resolve (see `TIFFWriter`).
+    public func writeToDataWithWarnings() throws -> (data: Data, warnings: [String]) {
+        var warnings: [String] = []
+        let data = try writeToData(collectingWarnings: &warnings)
+        return (data, warnings)
+    }
+
+    private func writeToData(collectingWarnings warnings: inout [String]) throws -> Data {
         switch container {
         case .jpeg(var file):
             return try writeJPEG(&file)
         case .png(var file):
             return writePNG(&file)
         case .tiff(let file):
-            return try writeTIFFFile(file)
+            return try writeTIFFFile(file, warnings: &warnings)
         case .jpegXL(var file):
             return try writeJXL(&file)
         case .avif(let file):
@@ -172,13 +186,17 @@ public struct ImageMetadata: Sendable {
     }
 
     /// Write metadata to a file URL with default options (atomic, no backup).
-    public func write(to url: URL) throws {
+    /// - Returns: non-fatal write warnings (see `writeToDataWithWarnings()`).
+    @discardableResult
+    public func write(to url: URL) throws -> [String] {
         try write(to: url, options: .default)
     }
 
     /// Write metadata to a file URL with the given options.
-    public func write(to url: URL, options: WriteOptions) throws {
-        let data = try writeToData()
+    /// - Returns: non-fatal write warnings (see `writeToDataWithWarnings()`).
+    @discardableResult
+    public func write(to url: URL, options: WriteOptions) throws -> [String] {
+        let (data, warnings) = try writeToDataWithWarnings()
         let fm = FileManager.default
 
         // Create backup if requested and original file exists
@@ -204,6 +222,7 @@ public struct ImageMetadata: Sendable {
         } else {
             try data.write(to: url)
         }
+        return warnings
     }
 
     /// Get the backup URL for a given file URL.
@@ -1235,8 +1254,8 @@ public struct ImageMetadata: Sendable {
         return try CR3Writer.write(file, exif: exif, xmp: xmp, originalData: originalData)
     }
 
-    private func writeTIFFFile(_ file: TIFFFile) throws -> Data {
-        return try TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp, iccProfile: iccProfile)
+    private func writeTIFFFile(_ file: TIFFFile, warnings: inout [String]) throws -> Data {
+        return try TIFFWriter.write(file, exif: exif, iptc: iptc, xmp: xmp, iccProfile: iccProfile, warnings: &warnings)
     }
 
     // MARK: - Format-Specific Reading

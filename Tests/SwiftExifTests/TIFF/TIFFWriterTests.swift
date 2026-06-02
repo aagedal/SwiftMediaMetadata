@@ -238,6 +238,251 @@ final class TIFFWriterTests: XCTestCase {
         XCTAssertEqual(try extractStrips(written), strip, "raster intact alongside sub-IFD")
     }
 
+    // MARK: - SubIFD (0x014A) relocation
+
+    private func le16(_ v: UInt16) -> Data { Data([UInt8(v & 0xFF), UInt8(v >> 8)]) }
+    private func le32(_ v: UInt32) -> Data { Data([UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]) }
+
+    /// Serialize one little-endian IFD: returns (bytes, [slot offsets of entries
+    /// whose value must be patched with an absolute file offset later]). Each
+    /// entry is (tag, type, count, inlineValueOr4ByteOffset). The IFD's
+    /// next-pointer is written as `nextIFD`.
+    private func encodeIFD(_ entries: [(UInt16, UInt16, UInt32, Data)], nextIFD: UInt32 = 0) -> Data {
+        var out = le16(UInt16(entries.count))
+        for (tag, type, count, value) in entries {
+            var v = value.prefix(4); while v.count < 4 { v.append(0) }
+            out += le16(tag) + le16(type) + le32(count) + Data(v)
+        }
+        out += le32(nextIFD)
+        return out
+    }
+
+    /// Build a multi-IFD TIFF: IFD0 (small preview strip) carries a SubIFDs
+    /// (0x014A) array pointing at `subStrips.count` child IFDs, each a
+    /// single-strip raster. Returns the file plus the raw sub-strip data so a
+    /// round-trip can assert byte-identical survival.
+    private func makeSubIFDTIFF(subStrips: [Data]) -> Data {
+        // Layout: header(8) | IFD0 | SubIFDs offset array | [child IFD + its strip]* | IFD0 strip
+        // A single SubIFD offset is stored inline in the 0x014A value (TIFF rule
+        // for totalSize ≤ 4), so the out-of-line array is emitted only when n > 1.
+        let n = subStrips.count
+        let ifd0EntryCount = 6 // width,height,stripOffsets,stripByteCounts,rowsPerStrip,subIFDs
+        let ifd0Size = 2 + ifd0EntryCount * 12 + 4
+        let subArrayOffset = 8 + ifd0Size
+        let subArraySize = n > 1 ? n * 4 : 0
+        var cursor = subArrayOffset + subArraySize
+
+        // Each child IFD has: width,height,stripOffsets,stripByteCounts,rowsPerStrip (5 entries).
+        let childIFDSize = 2 + 5 * 12 + 4
+        var childIFDOffsets: [UInt32] = []
+        var childBlocks = Data()
+        for strip in subStrips {
+            let childOffset = cursor
+            let stripOffset = childOffset + childIFDSize
+            childIFDOffsets.append(UInt32(childOffset))
+            let childIFD = encodeIFD([
+                (0x0100, 3, 1, le16(8)),
+                (0x0101, 3, 1, le16(UInt16(strip.count))),
+                (0x0111, 4, 1, le32(UInt32(stripOffset))),
+                (0x0117, 4, 1, le32(UInt32(strip.count))),
+                (0x0116, 3, 1, le16(UInt16(strip.count))),
+            ])
+            childBlocks += childIFD + strip
+            cursor += childIFDSize + strip.count
+        }
+
+        // IFD0's own tiny preview strip after all the child blocks.
+        let ifd0Strip = Data((0..<8).map { UInt8(0xA0 + $0) })
+        let ifd0StripOffset = cursor
+
+        let ifd0 = encodeIFD([
+            (0x0100, 3, 1, le16(8)),
+            (0x0101, 3, 1, le16(1)),
+            (0x0111, 4, 1, le32(UInt32(ifd0StripOffset))),
+            (0x0117, 4, 1, le32(UInt32(ifd0Strip.count))),
+            (0x0116, 3, 1, le16(1)),
+            // SubIFDs: a single offset is inline; multiple offsets live in the
+            // out-of-line array at `subArrayOffset`.
+            (0x014A, 4, UInt32(n), n > 1 ? le32(UInt32(subArrayOffset)) : le32(childIFDOffsets[0])),
+        ])
+
+        var out = Data()
+        out += Data([0x49, 0x49]) + le16(42) + le32(8)
+        out += ifd0
+        if n > 1 { for o in childIFDOffsets { out += le32(o) } }
+        out += childBlocks
+        out += ifd0Strip
+        return out
+    }
+
+    /// Resolve the SubIFDs (0x014A) array in a written TIFF and return each
+    /// child IFD's single-strip raster, in array order.
+    private func extractSubIFDStrips(_ data: Data) throws -> [Data] {
+        let file = try TIFFFileParser.parse(data)
+        let endian = file.header.byteOrder
+        let ifd0 = try XCTUnwrap(file.ifd0)
+        let sub = try XCTUnwrap(ifd0.entry(for: 0x014A), "SubIFDs pointer must survive")
+        XCTAssertEqual(sub.type, .long, "relocated SubIFDs offsets must be written as LONG")
+        var subReader = BinaryReader(data: sub.valueData)
+        let childOffsets = (0..<sub.count).compactMap { _ in (try? subReader.readUInt32(endian: endian)).map(Int.init) }
+        var strips: [Data] = []
+        for off in childOffsets {
+            let (child, _) = try IFDParser.parseIFD(data: data, tiffStart: 0, offset: off, endian: endian)
+            let so = try XCTUnwrap(child.entry(for: 0x0111)?.uint32Value(endian: endian))
+            let bc = try XCTUnwrap(child.entry(for: 0x0117)?.uint32Value(endian: endian))
+            strips.append(data.subdata(in: Int(so) ..< Int(so) + Int(bc)))
+        }
+        return strips
+    }
+
+    func testSubIFDArrayAndChildRastersPreserved() throws {
+        let sub0 = Data((0..<32).map { UInt8($0) })
+        let sub1 = Data((0..<48).map { UInt8(0x40 + $0) })
+        let tiff = makeSubIFDTIFF(subStrips: [sub0, sub1])
+        XCTAssertEqual(try extractSubIFDStrips(tiff), [sub0, sub1], "fixture sanity")
+
+        var metadata = try ImageMetadata.read(from: tiff)
+        metadata.xmp = XMPData()
+        metadata.xmp?.headline = "force a layout change" // grow IFD0 so offsets must move
+        let written = try metadata.writeToData()
+
+        XCTAssertEqual(try extractSubIFDStrips(written), [sub0, sub1],
+                       "each SubIFD child raster must be relocated byte-identically with its 0x014A offset repointed in order")
+        // The relocated child offsets must point forward into the new file (no
+        // dangling/stale offset carried from the source layout).
+        let file = try TIFFFileParser.parse(written)
+        let sub = try XCTUnwrap(file.ifd0?.entry(for: 0x014A))
+        var r = BinaryReader(data: sub.valueData)
+        let offs = (0..<sub.count).compactMap { _ in (try? r.readUInt32(endian: file.header.byteOrder)).map(Int.init) }
+        XCTAssertEqual(offs.count, 2)
+        for o in offs { XCTAssertGreaterThan(o, 0); XCTAssertLessThan(o, written.count) }
+    }
+
+    func testSingleSubIFDPreserved() throws {
+        let sub0 = Data(repeating: 0x5A, count: 40)
+        let tiff = makeSubIFDTIFF(subStrips: [sub0])
+        let written = try ImageMetadata.read(from: tiff).writeToData()
+        XCTAssertEqual(try extractSubIFDStrips(written), [sub0],
+                       "a single inline SubIFD offset must relocate its child raster")
+    }
+
+    // MARK: - Interop IFD (0xA005) relocation
+
+    /// Build a TIFF whose Exif sub-IFD (0x8769) contains an Interop pointer
+    /// (0xA005) referencing a small Interop IFD (InteroperabilityIndex "R98").
+    /// Verifies the nested pointer survives a round-trip even though the Exif
+    /// IFD is relocated.
+    private func makeInteropTIFF() -> Data {
+        // Layout: header(8) | IFD0 | Exif IFD | Interop IFD | IFD0 strip
+        let ifd0Size = 2 + 3 * 12 + 4 // width,height,exifPointer
+        let exifIFDSize = 2 + 2 * 12 + 4 // isoSpeed, interopPointer
+        let interopIFDSize = 2 + 1 * 12 + 4 // InteroperabilityIndex
+
+        let exifOffset = 8 + ifd0Size
+        let interopOffset = exifOffset + exifIFDSize
+        let stripOffset = interopOffset + interopIFDSize
+        let strip = Data([0xDE, 0xAD, 0xBE, 0xEF])
+
+        let interopIFD = encodeIFD([
+            (0x0001, 2, 4, Data("R98\0".utf8)), // InteroperabilityIndex, inline ASCII
+        ])
+        let exifIFD = encodeIFD([
+            (0x8827, 3, 1, le16(800)),                    // ISOSpeedRatings
+            (0xA005, 4, 1, le32(UInt32(interopOffset))),  // Interop pointer
+        ])
+        let ifd0 = encodeIFD([
+            (0x0100, 3, 1, le16(2)),
+            (0x0101, 3, 1, le16(2)),
+            (0x8769, 4, 1, le32(UInt32(exifOffset))),     // Exif pointer
+        ])
+        // No StripOffsets in IFD0 here — strip presence is irrelevant to the test.
+        var out = Data()
+        out += Data([0x49, 0x49]) + le16(42) + le32(8)
+        out += ifd0 + exifIFD + interopIFD + strip
+        return out
+    }
+
+    func testInteropIFDInsideExifRoundTrip() throws {
+        let tiff = makeInteropTIFF()
+        var metadata = try ImageMetadata.read(from: tiff)
+        // Sanity: the assigned exif round-trips the Exif sub-IFD.
+        XCTAssertEqual(metadata.exif?.exifIFD?.entry(for: ExifTag.isoSpeedRatings)?.uint16Value(endian: .littleEndian), 800)
+
+        metadata.xmp = XMPData()
+        metadata.xmp?.headline = "grow it" // force a layout change so offsets must move
+        let written = try metadata.writeToData()
+
+        // Walk IFD0 → Exif → Interop in the written file by following offsets.
+        let file = try TIFFFileParser.parse(written)
+        let endian = file.header.byteOrder
+        let exifPtr = try XCTUnwrap(file.ifd0?.entry(for: ExifTag.exifIFDPointer)?.uint32Value(endian: endian))
+        let (exif, _) = try IFDParser.parseIFD(data: written, tiffStart: 0, offset: Int(exifPtr), endian: endian)
+        XCTAssertEqual(exif.entry(for: ExifTag.isoSpeedRatings)?.uint16Value(endian: endian), 800,
+                       "Exif sub-IFD must survive")
+        let interopPtr = try XCTUnwrap(exif.entry(for: ExifTag.interopIFDPointer)?.uint32Value(endian: endian),
+                                       "Interop pointer (0xA005) must survive inside the relocated Exif IFD")
+        XCTAssertGreaterThan(Int(interopPtr), 0)
+        XCTAssertLessThan(Int(interopPtr), written.count, "relocated Interop offset must be in-bounds")
+        let (interop, _) = try IFDParser.parseIFD(data: written, tiffStart: 0, offset: Int(interopPtr), endian: endian)
+        XCTAssertEqual(interop.entry(for: 0x0001)?.stringValue(endian: endian), "R98",
+                       "the relocated Interop IFD's contents must be intact")
+    }
+
+    /// A pointer whose offset is out of bounds must be dropped (not crash, not
+    /// emit a dangling offset).
+    func testMalformedInteropPointerDropped() throws {
+        var tiff = makeInteropTIFF()
+        // Corrupt the Exif IFD's Interop pointer to an absurd offset by rewriting
+        // the whole file through a parse that keeps the bogus value: simplest is
+        // to point Interop past EOF. Locate the 0xA005 entry's value slot.
+        // The Exif IFD starts at 8 + (2 + 3*12 + 4) = 50; entries at 52.
+        // 0xA005 is the 2nd entry → 52 + 12 = 64; its 4-byte value at 64 + 8 = 72.
+        let valueSlot = 72
+        tiff.replaceSubrange(valueSlot ..< valueSlot + 4, with: le32(0xFFFFFFF0))
+        // Reading must still succeed; writing must not crash and must drop the
+        // unrelocatable Interop pointer rather than emit a dangling offset.
+        let metadata = try ImageMetadata.read(from: tiff)
+        let written = try metadata.writeToData()
+        let file = try TIFFFileParser.parse(written)
+        let endian = file.header.byteOrder
+        if let exifPtr = file.ifd0?.entry(for: ExifTag.exifIFDPointer)?.uint32Value(endian: endian) {
+            let (exif, _) = try IFDParser.parseIFD(data: written, tiffStart: 0, offset: Int(exifPtr), endian: endian)
+            XCTAssertNil(exif.entry(for: ExifTag.interopIFDPointer),
+                         "an out-of-bounds Interop pointer must be dropped, not relocated")
+            // ISO still survives.
+            XCTAssertEqual(exif.entry(for: ExifTag.isoSpeedRatings)?.uint16Value(endian: endian), 800)
+        }
+    }
+
+    // MARK: - MakerNote relocation warning
+
+    func testMakerNoteRelocationEmitsWarning() throws {
+        let strip = Data(repeating: 0x7F, count: 16)
+        let tiff = makeStripTIFF(width: 4, height: 4, rowsPerStrip: 4, strips: [strip])
+        var metadata = try ImageMetadata.read(from: tiff)
+
+        // Assign an Exif sub-IFD carrying a MakerNote (lives in the Exif IFD).
+        metadata.exif = ExifData(byteOrder: .littleEndian)
+        metadata.exif?.exifIFD = IFD(entries: [
+            IFDEntry(tag: ExifTag.makerNote, type: .undefined, count: 8,
+                     valueData: Data([0, 1, 2, 3, 4, 5, 6, 7])),
+        ])
+
+        let (_, warnings) = try metadata.writeToDataWithWarnings()
+        XCTAssertTrue(warnings.contains { $0.contains("MakerNote") && $0.contains("0x927C") },
+                      "relocating a MakerNote must surface a non-fatal warning")
+    }
+
+    func testNoMakerNoteNoWarning() throws {
+        let strip = Data(repeating: 0x10, count: 16)
+        let tiff = makeStripTIFF(width: 4, height: 4, rowsPerStrip: 4, strips: [strip])
+        var metadata = try ImageMetadata.read(from: tiff)
+        metadata.xmp = XMPData(); metadata.xmp?.headline = "no makernote here"
+
+        let (_, warnings) = try metadata.writeToDataWithWarnings()
+        XCTAssertTrue(warnings.isEmpty, "a MakerNote-free write must not warn")
+    }
+
     func testAllMetadataTogether() throws {
         let original = TestFixtures.tiffWithExif(make: "Sony", model: "A7")
         var metadata = try ImageMetadata.read(from: original)

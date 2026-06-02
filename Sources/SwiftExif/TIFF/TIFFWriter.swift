@@ -4,9 +4,31 @@ import Foundation
 ///
 /// The writer rebuilds the IFD chain from scratch and **relocates every block
 /// an IFD entry points at** — strip/tile pixel data, the old-style JPEG
-/// thumbnail, and the Exif/GPS sub-IFDs — copying the bytes into the output and
+/// thumbnail, and every child IFD — copying the bytes into the output and
 /// rewriting the offsets. This keeps the raster (and any compressed payload)
 /// valid; a TIFF round-tripped through SwiftExif decodes identically.
+///
+/// Child-IFD relocation is generic. Exif (0x8769) and GPS (0x8825) come from the
+/// assigned `exif` model so user edits apply; every other pointer — the
+/// Interoperability IFD (0xA005) nested inside Exif, the SubIFDs array (0x014A)
+/// that carries a DNG's full-resolution raw image, and any pointer nested inside
+/// a child — is parsed from the source bytes and relocated recursively, with the
+/// child's own strips/tiles and nested pointers carried along. Recursion is
+/// bounded (`maxIFDDepth`) and every source offset is bounds-checked, so
+/// malformed input drops the offending pointer rather than crashing or emitting
+/// a dangling offset.
+///
+/// **Known limitation — MakerNote (0x927C):** a MakerNote is copied verbatim to
+/// its new file offset. Many manufacturers store internal pointers inside the
+/// MakerNote (some absolute from the TIFF start, some relative to the
+/// Exif-IFD/MakerNote start); those break when the containing IFD is relocated,
+/// exactly as they would in any rewriter without per-manufacturer fix-up logic
+/// (what exiftool implements). SwiftExif does not attempt that fix-up, so a
+/// relocated MakerNote's internal offsets may not resolve. This is unchanged
+/// from prior releases; the write now surfaces a warning (via the `warnings`
+/// out-parameter, reachable through `ImageMetadata.writeToDataWithWarnings()`)
+/// rather than silently emitting a possibly-corrupt MakerNote. A proper fix
+/// (per-manufacturer offset fix-up) is deferred to a future design change.
 public struct TIFFWriter: Sendable {
 
     // Offset-bearing tags whose values are file offsets that must be rewritten.
@@ -22,9 +44,18 @@ public struct TIFFWriter: Sendable {
     /// so the output never carries a dangling offset.
     private static let exifPointer: UInt16 = 0x8769
     private static let gpsPointer: UInt16 = 0x8825
+    /// SubIFDs (0x014A) is special: its value is an *array* of child-IFD offsets
+    /// (DNG stores the full-resolution raw image in one of these), not a single
+    /// offset like the other pointers.
+    private static let subIFDsPointer: UInt16 = 0x014A
     private static let pointerTags: Set<UInt16> = [
         0x8769, 0x8825, 0xA005, 0x014A, // Exif, GPS, Interoperability, SubIFDs
     ]
+
+    /// Bound on child-IFD relocation recursion, guarding against cyclic or
+    /// adversarial offset chains. Mirrors the posture used elsewhere (e.g.
+    /// `GPMFReader.maxRecursionDepth`, `JUMBFParser.maxDepth`).
+    private static let maxIFDDepth = 32
 
     /// Metadata tag IDs that we manage (replaced during write).
     private static let metadataTagIDs: Set<UInt16> = [
@@ -58,6 +89,15 @@ public struct TIFFWriter: Sendable {
 
     /// Reconstruct a TIFF file with updated metadata, preserving the raster.
     public static func write(_ tiffFile: TIFFFile, exif: ExifData?, iptc: IPTCData?, xmp: XMPData?, iccProfile: ICCProfile? = nil) throws -> Data {
+        var warnings: [String] = []
+        return try write(tiffFile, exif: exif, iptc: iptc, xmp: xmp, iccProfile: iccProfile, warnings: &warnings)
+    }
+
+    /// Reconstruct a TIFF file with updated metadata, preserving the raster, and
+    /// collect non-fatal write warnings (e.g. a relocated MakerNote whose
+    /// internal offsets may no longer resolve — see the type doc comment).
+    public static func write(_ tiffFile: TIFFFile, exif: ExifData?, iptc: IPTCData?, xmp: XMPData?,
+                             iccProfile: ICCProfile? = nil, warnings: inout [String]) throws -> Data {
         let endian = tiffFile.header.byteOrder
         let raw = tiffFile.rawData
         var writer = BinaryWriter(capacity: raw.count + 8192)
@@ -88,7 +128,7 @@ public struct TIFFWriter: Sendable {
                 try writer.patchUInt32(UInt32(ifdStart), at: p, endian: endian)
             }
             let subIFDs = index == 0 ? ifd0SubIFDs : [:]
-            prevNextField = try writeIFD(&writer, entries: entries, endian: endian, raw: raw, subIFDs: subIFDs)
+            prevNextField = try writeIFD(&writer, entries: entries, endian: endian, raw: raw, subIFDs: subIFDs, warnings: &warnings)
         }
         // The final IFD's next-offset field was written as 0 — leave it.
 
@@ -147,23 +187,70 @@ public struct TIFFWriter: Sendable {
     /// this IFD's 4-byte next-IFD-offset field (initialized to 0) so the caller
     /// can chain it.
     private static func writeIFD(_ writer: inout BinaryWriter, entries rawEntries: [IFDEntry], endian: ByteOrder,
-                                 raw: Data, subIFDs: [UInt16: [IFDEntry]]) throws -> Int {
-        // Drop pointer entries we cannot relocate (avoids dangling offsets),
-        // keeping only pointers whose child IFD we will write.
-        var entries = rawEntries.filter { !pointerTags.contains($0.tag) || subIFDs[$0.tag] != nil }
-        // Inject a placeholder pointer entry for each sub-IFD we will write.
-        for tag in subIFDs.keys where !entries.contains(where: { $0.tag == tag }) {
+                                 raw: Data, subIFDs: [UInt16: [IFDEntry]], warnings: inout [String], depth: Int = 0) throws -> Int {
+        // Resolve every pointer entry to the child IFD(s) we will relocate.
+        // Model-supplied children (Exif/GPS) win; every other pointer — Interop,
+        // any nested pointer, and the per-offset children of a 0x014A array — is
+        // parsed from the source bytes. Pointers we cannot resolve (offset out of
+        // bounds, malformed IFD, or recursion bounded) are dropped so the output
+        // never carries a dangling offset.
+        let canRecurse = depth < maxIFDDepth
+        var singleChildren: [UInt16: [IFDEntry]] = [:]  // single-offset pointers → child entries
+        var subIFDChildren: [[IFDEntry]] = []           // 0x014A array → child entries, in order
+        for e in rawEntries where pointerTags.contains(e.tag) {
+            if e.tag == subIFDsPointer {
+                guard canRecurse else { continue }
+                for off in parseOffsets(e, endian: endian) {
+                    if let child = parseChildIFD(raw, offset: Int(off), endian: endian) {
+                        subIFDChildren.append(child)
+                    }
+                }
+            } else if let model = subIFDs[e.tag] {
+                singleChildren[e.tag] = model
+            } else if canRecurse, let off = parseOffsets(e, endian: endian).first,
+                      let child = parseChildIFD(raw, offset: Int(off), endian: endian) {
+                singleChildren[e.tag] = child
+            }
+        }
+        // Model children whose pointer entry was stripped upstream (Exif/GPS are
+        // removed in `buildIFD0Entries` and re-injected here).
+        for (tag, child) in subIFDs where singleChildren[tag] == nil {
+            singleChildren[tag] = child
+        }
+
+        // Keep only pointer entries whose child we resolved; inject a placeholder
+        // pointer for resolved model children not already present in the source.
+        var entries = rawEntries.filter { e in
+            guard pointerTags.contains(e.tag) else { return true }
+            return e.tag == subIFDsPointer ? !subIFDChildren.isEmpty : singleChildren[e.tag] != nil
+        }
+        for tag in singleChildren.keys where !entries.contains(where: { $0.tag == tag }) {
             entries.append(IFDEntry(tag: tag, type: .long, count: 1, valueData: Data([0, 0, 0, 0])))
         }
         entries.sort { $0.tag < $1.tag }
 
-        // Directory type per entry: offset arrays are written as LONG so a
-        // relocated offset always fits even if the source used SHORT.
+        // A MakerNote is copied verbatim to a new file offset, but its internal
+        // pointers (manufacturer-specific, some absolute from TIFF start, some
+        // relative to the Exif/MakerNote start) are not fixed up, so they may not
+        // resolve after relocation. Surface this once rather than silently
+        // writing a possibly-corrupt MakerNote. (See the type doc comment.)
+        if entries.contains(where: { $0.tag == ExifTag.makerNote }) {
+            let note = "MakerNote (0x927C) was relocated; its manufacturer-specific internal offsets may no longer resolve. SwiftExif does not rewrite them."
+            if !warnings.contains(note) { warnings.append(note) }
+        }
+
+        // Directory type per entry: offset arrays (strip/tile rasters and the
+        // 0x014A SubIFDs array) are written as LONG so a relocated offset always
+        // fits even if the source used SHORT.
+        func isOffsetArray(_ tag: UInt16) -> Bool {
+            tag == stripOffsets || tag == tileOffsets || tag == subIFDsPointer
+        }
         func dirType(_ e: IFDEntry) -> TIFFDataType {
-            (e.tag == stripOffsets || e.tag == tileOffsets) ? .long : e.type
+            isOffsetArray(e.tag) ? .long : e.type
         }
         func dirCount(_ e: IFDEntry) -> UInt32 {
-            (e.tag == stripOffsets || e.tag == tileOffsets) ? UInt32(parseOffsets(e, endian: endian).count) : e.count
+            if e.tag == subIFDsPointer { return UInt32(subIFDChildren.count) }
+            return isOffsetArray(e.tag) ? UInt32(parseOffsets(e, endian: endian).count) : e.count
         }
 
         // --- Directory pass: write entries; inline small values, leave a
@@ -216,12 +303,23 @@ public struct TIFFWriter: Sendable {
                 writer.writeBytes(copyBlock(raw, offset: srcOff, length: len))
                 try writer.patchUInt32(UInt32(newOff), at: pos, endian: endian)
 
-            } else if pointerTags.contains(e.tag), let childEntries = subIFDs[e.tag] {
+            } else if e.tag == subIFDsPointer {
+                // Relocate each child IFD (with its own raster and nested
+                // pointers) and rewrite 0x014A as the new LONG offset array.
+                var newOffsets: [UInt64] = []
+                for child in subIFDChildren {
+                    align(&writer)
+                    newOffsets.append(UInt64(writer.count))
+                    _ = try writeIFD(&writer, entries: child, endian: endian, raw: raw, subIFDs: [:], warnings: &warnings, depth: depth + 1)
+                }
+                writeOffsetArray(&writer, newOffsets, into: pos, endian: endian)
+
+            } else if pointerTags.contains(e.tag), let childEntries = singleChildren[e.tag] {
                 align(&writer)
                 let childPos = writer.count
-                // Child IFDs have no further sub-IFDs we relocate; pointer tags
-                // inside them are dropped to avoid dangling offsets.
-                _ = try writeIFD(&writer, entries: childEntries, endian: endian, raw: raw, subIFDs: [:])
+                // Recurse with no model children: nested pointers (e.g. Interop
+                // inside Exif) are relocated from `raw` by the resolver above.
+                _ = try writeIFD(&writer, entries: childEntries, endian: endian, raw: raw, subIFDs: [:], warnings: &warnings, depth: depth + 1)
                 try writer.patchUInt32(UInt32(childPos), at: pos, endian: endian)
 
             } else if Int(e.count) * e.type.unitSize > 4 {
@@ -255,6 +353,18 @@ public struct TIFFWriter: Sendable {
             }
         }
         return values
+    }
+
+    /// Parse a child IFD from the source bytes for relocation. Offsets are
+    /// absolute from the TIFF start (0 for a standalone TIFF). Returns nil when
+    /// the offset is out of bounds or the IFD is malformed, so the caller drops
+    /// the pointer rather than emitting a dangling offset.
+    private static func parseChildIFD(_ raw: Data, offset: Int, endian: ByteOrder) -> [IFDEntry]? {
+        guard offset >= 0, offset < raw.count else { return nil }
+        guard let (ifd, _) = try? IFDParser.parseIFD(data: raw, tiffStart: 0, offset: offset, endian: endian) else {
+            return nil
+        }
+        return ifd.entries
     }
 
     /// Copy `length` bytes at `offset` from the source file, clamped to bounds.
