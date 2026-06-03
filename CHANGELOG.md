@@ -61,6 +61,20 @@ the CLI; the library target follows the same numbering.
 
 ### Fixed
 
+- **Over-length IPTC fields no longer abort an unrelated write.** Every write
+  re-serializes the whole IPTC block, and `IPTCWriter` hard-threw
+  `dataExceedsMaxLength` for any field exceeding its spec limit. Agency/wire
+  JPEGs routinely ship over-spec fields (e.g. a 34-byte `By-line` against the
+  32-byte 2:80 maximum), so an unrelated edit — such as a photo app setting an
+  XMP star `Rating` — failed outright, and the same file became unwritable for
+  any change. Matching ExifTool, over-length values are now preserved verbatim
+  and reported as a non-fatal warning through the existing
+  `writeToDataWithWarnings()` channel (and printed by the `write` command);
+  `IPTCData.validate()` stays strict for callers that gate submissions. The
+  `Rating` CLI tag now maps to `xmp:Rating` instead of being skipped as unknown.
+  Regression tests `testWritePreservesOverLengthIPTCWhenSettingRating` and the
+  reworked over-length cases in `IPTCWriterTests`.
+  ([`Sources/SwiftExif/IPTC/IPTCWriter.swift`](Sources/SwiftExif/IPTC/IPTCWriter.swift))
 - **Writing metadata to a CR3 no longer corrupts the file.** CR3 stores
   absolute file offsets in each track's `co64`/`stco` chunk table and in the
   Canon `CTBO` box. Rebuilding `moov` (re-serialized `CMT1`/`CMT2`/`CMT4`) or
