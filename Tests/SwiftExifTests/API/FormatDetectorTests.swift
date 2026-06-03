@@ -93,4 +93,28 @@ final class FormatDetectorTests: XCTestCase {
         XCTAssertEqual(FormatDetector.detectAudioFromExtension("wav"), .wav)
         XCTAssertEqual(FormatDetector.detectAudioFromExtension("aiff"), .aiff)
     }
+
+    // MARK: - GPR (GoPro) vs DNG
+
+    /// Synthetic DNG (TIFF + DNGVersion) with the given Make.
+    private func dngFixture(make: String) -> Data {
+        let makeData = Data(make.utf8) + Data([0x00])
+        return TestFixtures.minimalTIFF(byteOrder: .littleEndian, entries: [
+            (tag: 0x010F, type: .ascii, count: UInt32(makeData.count), valueData: makeData), // Make
+            (tag: 0xC612, type: .byte, count: 4, valueData: Data([1, 4, 0, 0])),             // DNGVersion
+        ])
+    }
+
+    func testGoProDNGDetectedAsGPR() {
+        XCTAssertEqual(FormatDetector.detect(dngFixture(make: "GoPro")), .raw(.gpr))
+    }
+
+    func testNonGoProDNGStaysDNG() {
+        XCTAssertEqual(FormatDetector.detect(dngFixture(make: "Canon")), .raw(.dng))
+    }
+
+    func testGPRExtension() {
+        XCTAssertEqual(FormatDetector.detectFromExtension("gpr"), .raw(.gpr))
+        XCTAssertEqual(FormatDetector.detectFromExtension("GPR"), .raw(.gpr))
+    }
 }

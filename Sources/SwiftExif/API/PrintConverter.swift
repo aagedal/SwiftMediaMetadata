@@ -53,6 +53,17 @@ public struct PrintConverter: Sendable {
             if let v = value as? Int { return lightSource(v) }
         case "Compression":
             if let v = value as? Int { return compression(v) }
+        case "PhotometricInterpretation":
+            if let v = value as? Int { return photometricInterpretation(v) }
+        case "SubfileType":
+            if let v = value as? Int { return subfileType(v) }
+        // DNG calibration illuminants use the same enumeration as EXIF LightSource.
+        case "DNG:CalibrationIlluminant1", "DNG:CalibrationIlluminant2":
+            if let v = value as? Int { return lightSource(v) }
+        case "DNG:ProfileEmbedPolicy":
+            if let v = value as? Int { return profileEmbedPolicy(v) }
+        case "DNG:CFALayout":
+            if let v = value as? Int { return cfaLayout(v) }
         case "GPSLatitude":
             if let v = value as? Double {
                 return formatGPSCoordinate(v, isLatitude: true)
@@ -344,9 +355,74 @@ public struct PrintConverter: Sendable {
     public static func compression(_ value: Int) -> String {
         switch value {
         case 1: return "Uncompressed"
+        case 2: return "CCITT 1D"
+        case 5: return "LZW"
         case 6: return "JPEG"
         case 7: return "JPEG (DCT)"
+        case 8: return "Deflate"
+        case 9: return "JBIG B&W"
+        case 10: return "JBIG Color"
+        case 32773: return "PackBits"
         case 34712: return "JPEG 2000"
+        case 34892: return "Lossy JPEG"
+        default: return "Unknown (\(value))"
+        }
+    }
+
+    // MARK: - DNG / TIFF structural enums
+
+    /// TIFF PhotometricInterpretation (tag 0x0106), incl. DNG raw extensions.
+    public static func photometricInterpretation(_ value: Int) -> String {
+        switch value {
+        case 0: return "WhiteIsZero"
+        case 1: return "BlackIsZero"
+        case 2: return "RGB"
+        case 3: return "RGB Palette"
+        case 4: return "Transparency Mask"
+        case 5: return "CMYK"
+        case 6: return "YCbCr"
+        case 8: return "CIELab"
+        case 32803: return "Color Filter Array"
+        case 34892: return "Linear Raw"
+        case 51177: return "Depth Map"
+        default: return "Unknown (\(value))"
+        }
+    }
+
+    /// TIFF NewSubfileType (tag 0x00FE) — a bitmask describing the IFD's image.
+    public static func subfileType(_ value: Int) -> String {
+        switch value {
+        case 0: return "Full-resolution image"
+        case 1: return "Reduced-resolution image"
+        case 2: return "Single page of multi-page image"
+        case 3: return "Single page of multi-page reduced-resolution image"
+        default: return "Unknown (\(value))"
+        }
+    }
+
+    /// DNG ProfileEmbedPolicy (tag 0xC6FD).
+    public static func profileEmbedPolicy(_ value: Int) -> String {
+        switch value {
+        case 0: return "Allow Copying"
+        case 1: return "Embed if Used"
+        case 2: return "Never Embed"
+        case 3: return "No Restrictions"
+        default: return "Unknown (\(value))"
+        }
+    }
+
+    /// DNG CFALayout (tag 0xC617).
+    public static func cfaLayout(_ value: Int) -> String {
+        switch value {
+        case 1: return "Rectangular"
+        case 2: return "Even columns offset down 1/2 row"
+        case 3: return "Even columns offset up 1/2 row"
+        case 4: return "Even rows offset right 1/2 column"
+        case 5: return "Even rows offset left 1/2 column"
+        case 6: return "Even rows offset up by 1/2 row, even columns offset left by 1/2 column"
+        case 7: return "Even rows offset up by 1/2 row, even columns offset right by 1/2 column"
+        case 8: return "Even rows offset down by 1/2 row, even columns offset left by 1/2 column"
+        case 9: return "Even rows offset down by 1/2 row, even columns offset right by 1/2 column"
         default: return "Unknown (\(value))"
         }
     }

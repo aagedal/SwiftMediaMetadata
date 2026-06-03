@@ -252,6 +252,7 @@ public struct MetadataExporter: Sendable {
             if let v = dng.dngVersion { dict["DNG:DNGVersion"] = v }
             if let v = dng.dngBackwardVersion { dict["DNG:DNGBackwardVersion"] = v }
             if let v = dng.uniqueCameraModel { dict["DNG:UniqueCameraModel"] = v }
+            if let v = dng.localizedCameraModel { dict["DNG:LocalizedCameraModel"] = v }
             if let v = dng.cameraSerialNumber { dict["DNG:CameraSerialNumber"] = v }
             if let v = dng.calibrationIlluminant1 { dict["DNG:CalibrationIlluminant1"] = Int(v) }
             if let v = dng.calibrationIlluminant2 { dict["DNG:CalibrationIlluminant2"] = Int(v) }
@@ -267,6 +268,9 @@ public struct MetadataExporter: Sendable {
             if let v = dng.cameraCalibration2 {
                 dict["DNG:CameraCalibration2"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
             }
+            if let v = dng.analogBalance {
+                dict["DNG:AnalogBalance"] = v.map { String(format: "%.6g", $0) }.joined(separator: " ")
+            }
             if let v = dng.asShotNeutral {
                 dict["DNG:AsShotNeutral"] = v.map { String(format: "%.6f", $0) }.joined(separator: " ")
             }
@@ -276,8 +280,33 @@ public struct MetadataExporter: Sendable {
             if let v = dng.baselineExposure { dict["DNG:BaselineExposure"] = v }
             if let v = dng.baselineNoise { dict["DNG:BaselineNoise"] = v }
             if let v = dng.baselineSharpness { dict["DNG:BaselineSharpness"] = v }
-            if let v = dng.lensInfo {
-                dict["DNG:LensInfo"] = v.map { String(format: "%.2f", $0) }.joined(separator: " ")
+            if let v = dng.bayerGreenSplit { dict["DNG:BayerGreenSplit"] = Int(v) }
+            if let v = dng.linearResponseLimit { dict["DNG:LinearResponseLimit"] = v }
+            if let v = dng.antiAliasStrength { dict["DNG:AntiAliasStrength"] = v }
+            if let v = dng.shadowScale { dict["DNG:ShadowScale"] = v }
+            if let v = dng.bestQualityScale { dict["DNG:BestQualityScale"] = v }
+            if let v = dng.cfaPlaneColor { dict["DNG:CFAPlaneColor"] = v }
+            if let v = dng.cfaLayout { dict["DNG:CFALayout"] = Int(v) }
+            if let v = dng.cfaRepeatPatternDim {
+                dict["DNG:CFARepeatPatternDim"] = v.map { String(format: "%.0f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.blackLevelRepeatDim {
+                dict["DNG:BlackLevelRepeatDim"] = v.map { String(format: "%.0f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.blackLevel {
+                dict["DNG:BlackLevel"] = v.map { String(format: "%.6g", $0) }.joined(separator: " ")
+            }
+            if let v = dng.whiteLevel {
+                dict["DNG:WhiteLevel"] = v.map { String(format: "%.0f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.defaultScale {
+                dict["DNG:DefaultScale"] = v.map { String(format: "%.6g", $0) }.joined(separator: " ")
+            }
+            if let v = dng.activeArea {
+                dict["DNG:ActiveArea"] = v.map { String(format: "%.0f", $0) }.joined(separator: " ")
+            }
+            if let v = dng.defaultUserCrop {
+                dict["DNG:DefaultUserCrop"] = v.map { String(format: "%.6g", $0) }.joined(separator: " ")
             }
             if let v = dng.defaultCropOrigin {
                 dict["DNG:DefaultCropOrigin"] = v.map { String(format: "%.0f", $0) }.joined(separator: " ")
@@ -389,6 +418,18 @@ public struct MetadataExporter: Sendable {
            let v = entry.uint16Value(endian: exif.byteOrder) { dict["ResolutionUnit"] = Int(v) }
         if let entry = exif.ifd0?.entry(for: ExifTag.compression),
            let v = entry.uint16Value(endian: exif.byteOrder) { dict["Compression"] = Int(v) }
+
+        // Standard TIFF structural tags (present in TIFF/DNG/RAW IFD0).
+        if let entry = exif.ifd0?.entry(for: ExifTag.bitsPerSample),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["BitsPerSample"] = Int(v) }
+        if let entry = exif.ifd0?.entry(for: ExifTag.photometricInterpretation),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["PhotometricInterpretation"] = Int(v) }
+        if let entry = exif.ifd0?.entry(for: ExifTag.samplesPerPixel),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["SamplesPerPixel"] = Int(v) }
+        if let entry = exif.ifd0?.entry(for: 0x011C),
+           let v = entry.uint16Value(endian: exif.byteOrder) { dict["PlanarConfiguration"] = Int(v) }
+        if let entry = exif.ifd0?.entry(for: 0x00FE),
+           let v = entry.uint32Value(endian: exif.byteOrder) { dict["SubfileType"] = Int(v) }
 
         if let lat = exif.gpsLatitude { dict["GPSLatitude"] = lat }
         if let lon = exif.gpsLongitude { dict["GPSLongitude"] = lon }

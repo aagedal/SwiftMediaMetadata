@@ -170,7 +170,7 @@ public struct BatchProcessor: Sendable {
     static let supportedExtensions: Set<String> = [
         "jpg", "jpeg",
         "tif", "tiff",
-        "dng", "cr2", "nef", "arw",
+        "dng", "gpr", "cr2", "nef", "arw",
         "jxl",
         "png",
         "avif",

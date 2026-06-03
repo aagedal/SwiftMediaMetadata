@@ -76,10 +76,11 @@ public struct RAWFileParser: Sendable {
             return try parseX3F(data)
         case .mrw:
             return try parseMRW(data)
-        case .dng, .nef, .nrw, .arw, .orf, .pef, .srw, .raw:
+        case .dng, .gpr, .nef, .nrw, .arw, .orf, .pef, .srw, .raw:
             // These all parse identically to TIFF.
-            // NRW (Nikon Coolpix) and SRW (Samsung) are TIFF/IFD-based variants.
-            // The generic `.raw` case is a best-effort TIFF parse for vendor-neutral extensions.
+            // GPR (GoPro) is DNG-structured. NRW (Nikon Coolpix) and SRW (Samsung)
+            // are TIFF/IFD-based variants. The generic `.raw` case is a best-effort
+            // TIFF parse for vendor-neutral extensions.
             return try TIFFFileParser.parse(data)
         }
     }

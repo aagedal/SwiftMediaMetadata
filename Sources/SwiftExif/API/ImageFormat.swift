@@ -29,5 +29,8 @@ public enum ImageFormat: Sendable, Equatable {
         case x3f
         /// Minolta MRW — `\0MRM` (or `\0MRI`) header followed by TIFF/Exif IFD.
         case mrw
+        /// GoPro GPR — a DNG-compatible (TIFF-based) container using VC-5 compression.
+        /// Distinguished from generic DNG by the `.gpr` extension or a GoPro Make.
+        case gpr
     }
 }

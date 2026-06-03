@@ -128,6 +128,8 @@ public struct FormatDetector: Sendable {
             return .tiff
         case "dng":
             return .raw(.dng)
+        case "gpr":
+            return .raw(.gpr)
         case "cr2":
             return .raw(.cr2)
         case "nef":
@@ -235,6 +237,7 @@ public struct FormatDetector: Sendable {
             // Scan tag IDs (first 2 bytes of each 12-byte entry)
             let maxEntries = min(Int(entryCount), (data.count - ifdOffset - 2) / 12)
             var makeString: String?
+            var sawDNGVersion = false
 
             for i in 0..<maxEntries {
                 let entryOffset = ifdOffset + 2 + (i * 12)
@@ -242,9 +245,11 @@ public struct FormatDetector: Sendable {
                 try reader.seek(to: entryOffset)
                 let tag = try reader.readUInt16(endian: endian)
 
-                // DNGVersion tag
+                // DNGVersion tag — marks a DNG-compatible file. Defer the DNG/GPR
+                // decision until after Make is read (tags are sorted, so Make at
+                // 0x010F is normally seen before DNGVersion at 0xC612 anyway).
                 if tag == 0xC612 {
-                    return .raw(.dng)
+                    sawDNGVersion = true
                 }
 
                 // Read Make tag (0x010F) to help distinguish formats
@@ -264,6 +269,16 @@ public struct FormatDetector: Sendable {
                         }
                     }
                 }
+            }
+
+            // A DNG-compatible file: GoPro's GPR shares the DNG structure, so flag
+            // it as GPR when the Make says GoPro; otherwise it's a generic DNG.
+            // (The .gpr extension is the other GPR signal, handled by the caller.)
+            if sawDNGVersion {
+                if let make = makeString?.uppercased(), make.contains("GOPRO") {
+                    return .raw(.gpr)
+                }
+                return .raw(.dng)
             }
 
             // Use Make to distinguish ORF (Olympus) and PEF (Pentax)

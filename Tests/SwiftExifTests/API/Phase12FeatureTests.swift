@@ -27,7 +27,8 @@ final class Phase12FeatureTests: XCTestCase {
         XCTAssertTrue(allCases.contains(.rw2))
         XCTAssertTrue(allCases.contains(.orf))
         XCTAssertTrue(allCases.contains(.pef))
-        XCTAssertEqual(allCases.count, 17) // 12 originals + iiq, 3fr, fff, x3f, mrw (Phase 24)
+        XCTAssertTrue(allCases.contains(.gpr))
+        XCTAssertEqual(allCases.count, 18) // 12 originals + iiq, 3fr, fff, x3f, mrw (Phase 24) + gpr
     }
 
     // MARK: - RAF Magic Byte Detection

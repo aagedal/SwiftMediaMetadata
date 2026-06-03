@@ -55,8 +55,15 @@ public struct ImageMetadata: Sendable {
         let data = try Data(contentsOf: url, options: .alwaysMapped)
 
         // Try magic-byte detection first, fall back to extension
-        let format = FormatDetector.detect(data)
+        var format = FormatDetector.detect(data)
             ?? FormatDetector.detectFromExtension(url.pathExtension)
+
+        // GPR is DNG-structured, so content detection may report generic DNG. The
+        // .gpr extension disambiguates it (content detection already upgrades files
+        // with a GoPro Make on its own).
+        if format == .raw(.dng), url.pathExtension.lowercased() == "gpr" {
+            format = .raw(.gpr)
+        }
 
         guard let format else {
             throw MetadataError.unsupportedFormat
