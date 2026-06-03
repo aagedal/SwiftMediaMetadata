@@ -130,7 +130,13 @@ public struct GPMFReader: Sendable {
     /// Parse a raw GPMF buffer (typically the concatenated payload of every
     /// `gpmd`-track sample) into a tree of entries.
     public static func parse(_ data: Data) -> [Entry] {
-        parseEntries(in: data, range: data.startIndex ..< data.endIndex)
+        // `parseEntries` treats `range`/`off` as offsets *relative to*
+        // `data.startIndex` — it converts to absolute indices via `data[s + off]`
+        // and clamps recursion with `data.count`. Seed it with `0 ..< count`, not
+        // the absolute `startIndex ..< endIndex`: a sliced `Data` argument (non-zero
+        // `startIndex`, e.g. `parse(buf[100...])`) would otherwise double-count
+        // `startIndex` and index past `endIndex` → out-of-bounds trap.
+        parseEntries(in: data, range: 0 ..< data.count)
     }
 
     /// High-level convenience: walk the GPMF tree and pull common telemetry.

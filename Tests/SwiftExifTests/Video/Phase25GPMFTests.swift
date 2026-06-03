@@ -244,6 +244,27 @@ final class GPMFReaderTests: XCTestCase {
         XCTAssertEqual(entries.first?.children.first?.fourCC, "STRM")
     }
 
+    func testParsesSlicedDataWithNonZeroStartIndex() {
+        // `parse` is public API; a caller may hand it a `Data` slice whose
+        // `startIndex` is non-zero (e.g. `parse(buffer[prefix...])`). Internally
+        // offsets are relative to `startIndex`, so seeding the walk with absolute
+        // indices used to double-count `startIndex` and read past `endIndex`,
+        // trapping. Build a valid entry, prepend junk, then slice past it.
+        var entry = Data()
+        appendKLV(&entry, fourCC: "DVNM", typeChar: 0x63, sampleSize: 6, sampleCount: 1,
+                  payload: Data("HERO11".utf8))
+
+        var buffer = Data(repeating: 0xAB, count: 100)
+        buffer.append(entry)
+        let slice = buffer[(buffer.startIndex + 100)...]
+        XCTAssertNotEqual(slice.startIndex, 0)
+
+        // Must not trap, and must decode the entry from the slice.
+        let entries = GPMFReader.parse(slice)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.fourCC, "DVNM")
+    }
+
     // MARK: - Helpers
 
     /// Append a KLV entry with payload padded to a 4-byte boundary.
