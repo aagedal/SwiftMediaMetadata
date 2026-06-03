@@ -56,6 +56,17 @@ public struct TIFFFileParser: Sendable {
             exifData.gpsIFD = gpsIFD
         }
 
+        // MakerNote from the Exif sub-IFD. Mirrors ExifReader's JPEG path; without
+        // this, TIFF-based RAW formats (ARW, NEF, ORF, CR2, …) silently drop their
+        // manufacturer MakerNote. Value offsets here are TIFF-relative (tiffStart 0).
+        if let exifIFD = exifData.exifIFD {
+            exifData.makerNote = MakerNoteReader.parse(
+                from: exifIFD,
+                make: exifData.make,
+                byteOrder: endian
+            )
+        }
+
         return exifData
     }
 

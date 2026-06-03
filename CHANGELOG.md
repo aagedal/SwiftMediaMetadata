@@ -14,6 +14,12 @@ the CLI; the library target follows the same numbering.
   new `RawFormat.gpr` case is detected via the `.gpr` extension or a GoPro
   `Make` (so the data-only API works too), and `FileFormat` now reports GPR.
   ([`Sources/SwiftExif/RAW`](Sources/SwiftExif))
+- **Sony `.ARW` files are now recognized by content**, not just extension. A
+  non-DNG TIFF whose `Make` is "SONY" is detected as `RawFormat.arw` (mirroring
+  the existing Olympus→ORF and Pentax→PEF heuristics), so `FileFormat` reports
+  ARW and the data-only API routes through the RAW reader instead of labeling
+  the file a generic TIFF.
+  ([`Sources/SwiftExif/API/FormatDetector.swift`](Sources/SwiftExif/API/FormatDetector.swift))
 - **Expanded DNG structural-tag extraction**, benefiting all DNG/RAW files.
   New tags: `BlackLevel`, `WhiteLevel`, `ActiveArea`, `DefaultScale`,
   `DefaultUserCrop`, `LocalizedCameraModel`, `AnalogBalance`, `BayerGreenSplit`,
@@ -62,11 +68,13 @@ the CLI; the library target follows the same numbering.
   write path that rebuilds a TIFF block — `TIFFWriter` (TIFF/DNG) **and**
   `ExifWriter` (embedded EXIF in JPEG/PNG/AVIF/HEIF/JPEG XL/WebP). Modeled on
   ExifTool's `FixBase`/`RebuildMakerNotes`: a MakerNote whose internal pointers
-  are relative to the note/embedded-TIFF start (Nikon, Fujifilm, Sony,
-  Panasonic, Olympus, Apple) moves with the block and is copied verbatim, while
-  one whose pointers are TIFF-absolute (Canon, DJI, Samsung, Pentax) has every
-  out-of-line value-offset field shifted by the relocation delta (and a Canon
-  TIFF footer patched to match). The fix-up preserves byte length and is fully
+  are relative to the note/embedded-TIFF start (Nikon, Fujifilm, Panasonic,
+  Olympus, Apple) moves with the block and is copied verbatim, while one whose
+  pointers are TIFF-absolute (Canon, DJI, Samsung, Pentax, and modern "Sony5"
+  Alpha/RX/FX notes) has every out-of-line value-offset field shifted by the
+  relocation delta (and a Canon TIFF footer patched to match). Older
+  "SONY DSC"/"SONY CAM"-prefixed notes use an unconfirmed base and fall back to
+  verbatim+warn. The fix-up preserves byte length and is fully
   bounds-checked; a note that can't be classified or safely patched (unknown
   manufacturer, parse failure, a chained MakerNote IFD) is still copied verbatim
   and surfaces the non-fatal `writeToDataWithWarnings()` warning, so output is
@@ -174,6 +182,55 @@ the CLI; the library target follows the same numbering.
   non-zero-based slice. They now base offsets on `data.startIndex` and bound
   against `data.endIndex`, matching every other decoder in the file. (Safe
   today since callers re-base via `Data(...)`, but fragile against refactors.)
+- **MakerNotes are now parsed for TIFF-based files and RAWs** (ARW, NEF, ORF,
+  CR2, DNG, plain TIFF, …). `TIFFFileParser.extractExif` populated IFD0, the
+  Exif/GPS sub-IFDs and IFD1 but never invoked `MakerNoteReader`, so every
+  TIFF/RAW silently dropped its manufacturer MakerNote (the JPEG path already
+  parsed it). It now parses the MakerNote from the Exif sub-IFD exactly as the
+  JPEG path does. Regression coverage builds an absolute-offset Sony note.
+  ([`Sources/SwiftExif/TIFF/TIFFFileParser.swift`](Sources/SwiftExif/TIFF/TIFFFileParser.swift))
+- **Modern Sony ("Sony5") MakerNotes now read correctly.** Sony Alpha/RX/FX
+  bodies store their MakerNote IFD's out-of-line value pointers as TIFF-absolute
+  offsets, but `SonyMakerNote.parse` re-parsed the isolated note blob with
+  `tiffStart: 0`, so the tail pointers ran past the blob and `parseIFD` threw —
+  dropping the **entire** Sony MakerNote on every real ARW. The parser now
+  receives the note's TIFF-relative base offset (`IFDEntry.sourceOffset`) and
+  auto-detects whether pointers are block-relative or TIFF-absolute, rebasing
+  the latter. Combined with the MakerNote-relocator fix below, Sony notes also
+  survive a metadata rewrite intact. Regression test
+  `testSonyAbsoluteOffsetMakerNote`.
+  ([`Sources/SwiftExif/MakerNote/SonyMakerNote.swift`](Sources/SwiftExif/MakerNote/SonyMakerNote.swift),
+  [`Sources/SwiftExif/MakerNote/MakerNoteReader.swift`](Sources/SwiftExif/MakerNote/MakerNoteReader.swift))
+- **Relocating a Sony MakerNote on write no longer corrupts it.** The
+  MakerNote-relocator classified Sony as relative/verbatim, but Sony5 pointers
+  are TIFF-absolute (above), so a write that moved the block left every internal
+  pointer dangling — silently destroying the note. Sony is now treated as an
+  absolute-offset note whose out-of-line value-offset fields are shifted by the
+  relocation delta (non-prefixed Sony5 only; "SONY DSC"/"SONY CAM"-prefixed
+  notes fall back to verbatim+warn). Regression tests `testSonyNoteGetsAbsoluteFixUp`
+  and `testSonyPrefixedNoteWarnsVerbatim`.
+  ([`Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift`](Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift))
+- **Sony MakerNote tag `0xB020` is no longer mislabeled `SerialNumber`.** Per
+  ExifTool's `Sony.pm` it is the ASCII `CreativeStyle` preset ("Standard",
+  "Vivid", …); reading it as a serial number emitted a bogus value that collided
+  with the real body serial (ExifIFD `0xA431`). It is now surfaced as
+  `CreativeStyle` with trailing NUL/space trimming. Tests updated accordingly.
+  ([`Sources/SwiftExif/MakerNote/SonyMakerNote.swift`](Sources/SwiftExif/MakerNote/SonyMakerNote.swift))
+- **C2PA signing certificates stored under a text `x5chain` label are now
+  read.** `parseSignature` looked for the COSE x5chain only under the registered
+  integer header label 33; Sony's in-camera C2PA signer places it under the
+  text label `"x5chain"`, so the certificate chain came back empty and the
+  signer could not be identified. The header is now searched for both forms, in
+  the protected and (as a fallback) the unprotected bucket. Regression test
+  `testParseSignatureTextX5Chain`.
+  ([`Sources/SwiftExif/C2PA/C2PAReader.swift`](Sources/SwiftExif/C2PA/C2PAReader.swift))
+- **C2PA v1 claim assertion references are now parsed.** The claim parser only
+  read the v2 `created_assertions` / `gathered_assertions` arrays, so a v1 claim
+  (e.g. Sony's in-camera `SONY_CAMERA` generator) reported zero assertion
+  references even though its assertion store was populated. The v1 `assertions`
+  array is now read alongside the v2 keys. Regression test
+  `testParseClaimV1AssertionReferences`.
+  ([`Sources/SwiftExif/C2PA/C2PAReader.swift`](Sources/SwiftExif/C2PA/C2PAReader.swift))
 
 ## [1.8.2] — 2026-06-02
 

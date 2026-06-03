@@ -61,30 +61,59 @@ final class MakerNoteReaderTests: XCTestCase {
 
     // MARK: - Sony MakerNote
 
-    func testSonySerialNumber() {
-        let makerNoteData = buildSonyMakerNote(serialNumber: "A7R-12345")
+    func testSonyCreativeStyle() {
+        // Tag 0xB020 is the ASCII CreativeStyle preset, not a serial number.
+        let makerNoteData = buildSonyMakerNote(creativeStyle: "Standard")
         let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
         let result = MakerNoteReader.parse(from: ifd, make: "SONY", byteOrder: .bigEndian)
 
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.manufacturer, .sony)
-        if case .string(let serial) = result?.tags["SerialNumber"] {
-            XCTAssertEqual(serial, "A7R-12345")
+        if case .string(let style) = result?.tags["CreativeStyle"] {
+            XCTAssertEqual(style, "Standard")
         } else {
-            XCTFail("SerialNumber not found")
+            XCTFail("CreativeStyle not found")
         }
+        XCTAssertNil(result?.tags["SerialNumber"], "0xB020 must not surface as SerialNumber")
+    }
+
+    func testSonyAbsoluteOffsetMakerNote() {
+        // Modern "Sony5" MakerNotes store out-of-line value pointers as offsets
+        // from the TIFF header, not from the MakerNote block. Build a note whose
+        // CreativeStyle string sits out-of-line with a TIFF-absolute pointer that
+        // only resolves once rebased by the block's own TIFF offset.
+        let base = 5000
+        let styleBytes = Data("Vivid".utf8) + Data([0x00])
+        let entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = [
+            (0xB020, .ascii, UInt32(styleBytes.count), styleBytes)
+        ]
+        let blob = buildMiniIFD(entries: entries, byteOrder: .littleEndian, offsetBase: base)
+
+        // With the block's TIFF offset, the absolute pointer rebases into the blob.
+        let tags = SonyMakerNote.parse(data: blob, byteOrder: .littleEndian, makerNoteTIFFOffset: base)
+        if case .string(let style) = tags["CreativeStyle"] {
+            XCTAssertEqual(style, "Vivid")
+        } else {
+            XCTFail("CreativeStyle not parsed from absolute-offset MakerNote")
+        }
+
+        // Without the rebase (legacy behaviour) the pointer lands outside the
+        // small blob, so the IFD parse fails and no tag surfaces — this is the
+        // exact failure that dropped the entire MakerNote on real Sony ARW files.
+        let unresolved = SonyMakerNote.parse(data: blob, byteOrder: .littleEndian, makerNoteTIFFOffset: 0)
+        XCTAssertNil(unresolved["CreativeStyle"], "absolute pointer must not resolve block-relative")
     }
 
     func testSonyWithPrefix() {
-        let makerNoteData = buildSonyMakerNote(serialNumber: "SN999", withPrefix: true)
+        let makerNoteData = buildSonyMakerNote(creativeStyle: "Vivid", withPrefix: true)
         let ifd = buildExifIFDWithMakerNote(makerNoteData, byteOrder: .bigEndian)
         let result = MakerNoteReader.parse(from: ifd, make: "Sony", byteOrder: .bigEndian)
 
         XCTAssertNotNil(result)
-        if case .string(let serial) = result?.tags["SerialNumber"] {
-            XCTAssertEqual(serial, "SN999")
+        if case .string(let style) = result?.tags["CreativeStyle"] {
+            XCTAssertEqual(style, "Vivid")
         } else {
-            XCTFail("SerialNumber not found with prefix")
+            XCTFail("CreativeStyle not found with prefix")
         }
     }
 
@@ -437,11 +466,11 @@ final class MakerNoteReaderTests: XCTestCase {
     }
 
     /// Build a Sony MakerNote: optional "SONY DSC \0\0\0" prefix + IFD.
-    private func buildSonyMakerNote(serialNumber: String, withPrefix: Bool = false) -> Data {
+    private func buildSonyMakerNote(creativeStyle: String, withPrefix: Bool = false) -> Data {
         var entries: [(tag: UInt16, type: TIFFDataType, count: UInt32, data: Data)] = []
 
-        // Serial number (tag 0xB020)
-        let snBytes = Data(serialNumber.utf8) + Data([0x00])
+        // CreativeStyle (tag 0xB020) — ASCII string
+        let snBytes = Data(creativeStyle.utf8) + Data([0x00])
         entries.append((0xB020, .ascii, UInt32(snBytes.count), snBytes))
 
         entries.sort { $0.tag < $1.tag }

@@ -70,10 +70,12 @@ struct MakerNoteRelocator: Sendable {
     private static func convention(make: String?) -> Convention {
         switch MakerNoteReader.identifyManufacturer(make: make) {
         // Bare IFD at offset 0 (and Pentax "AOC") using TIFF-absolute offsets.
-        case .canon, .dji, .samsung, .pentax:
+        // Modern Sony ("Sony5") notes also store TIFF-absolute value pointers, so
+        // a verbatim copy after a move leaves them dangling — they need fix-up.
+        case .canon, .dji, .samsung, .pentax, .sony:
             return .absolute
         // Header- or embedded-TIFF-anchored offsets that move with the block.
-        case .nikon, .fujifilm, .panasonic, .sony, .olympus, .apple:
+        case .nikon, .fujifilm, .panasonic, .olympus, .apple:
             return .relativeSafe
         // Be conservative for the rest (Leica/Sigma mix conventions per model).
         case .leica, .sigma, .unknown:
@@ -110,6 +112,17 @@ struct MakerNoteRelocator: Sendable {
             else if bom0 == 0x49 && bom1 == 0x49 { e = .littleEndian }
             else { return nil }
             return Layout(ifdOffset: 6, endian: e, footerLength: 0)
+        case .sony:
+            // Sony5 (modern Alpha/RX/FX): a bare IFD at offset 0 in the parent
+            // byte order, no footer, TIFF-absolute value pointers. The older
+            // "SONY DSC"/"SONY CAM"-prefixed notes use an offset base we can't
+            // confirm without sample coverage, so bail to verbatim+warn for them
+            // rather than risk patching the wrong fields.
+            if data.count > 12,
+               data.prefix(9) == Data("SONY DSC ".utf8) || data.prefix(9) == Data("SONY CAM ".utf8) {
+                return nil
+            }
+            return Layout(ifdOffset: 0, endian: parentEndian, footerLength: 0)
         default:
             return nil
         }

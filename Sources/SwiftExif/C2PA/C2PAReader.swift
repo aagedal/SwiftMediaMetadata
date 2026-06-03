@@ -246,8 +246,13 @@ public struct C2PAReader: Sendable {
         let title = cbor["dc:title"]?.textStringValue
         let algorithm = cbor["alg"]?.textStringValue
 
-        // Parse assertion references
+        // Parse assertion references. v2 claims split these into
+        // created_assertions / gathered_assertions; v1 claims (e.g. Sony's
+        // in-camera "SONY_CAMERA" generator) list them all under "assertions".
         var assertionRefs: [C2PAHashedURI] = []
+        if let assertions = cbor["assertions"]?.arrayValue {
+            assertionRefs.append(contentsOf: assertions.compactMap { parseHashedURI($0) })
+        }
         if let created = cbor["created_assertions"]?.arrayValue {
             assertionRefs.append(contentsOf: created.compactMap { parseHashedURI($0) })
         }
@@ -308,17 +313,16 @@ public struct C2PAReader: Sendable {
             if let algValue = protectedMap[intKey: 1]?.intValue {
                 algorithm = C2PASignatureAlgorithm(coseValue: algValue)
             }
-            // Key 33 = x5chain (single cert or array of certs)
-            if let chainValue = protectedMap[intKey: 33] {
-                switch chainValue {
-                case .byteString(let cert):
-                    certChain = [cert]
-                case .array(let certs):
-                    certChain = certs.compactMap { $0.byteStringValue }
-                default:
-                    break
-                }
-            }
+            certChain = x5chain(from: protectedMap)
+        }
+
+        // The x5chain may live in the unprotected header instead of (or in
+        // addition to) the protected one — COSE permits either bucket. Sony's
+        // in-camera signer, for instance, places it in the protected header but
+        // under the text label "x5chain" rather than the registered integer 33;
+        // `x5chain(from:)` accepts both. Fall back to the unprotected header.
+        if certChain.isEmpty {
+            certChain = x5chain(from: coseArray[1])
         }
 
         // [1] unprotected: map — check for timestamp
@@ -349,6 +353,21 @@ public struct C2PAReader: Sendable {
             signatureBytes: signatureBytes,
             raw: cbor
         )
+    }
+
+    /// Extract the COSE x5chain (DER cert or certs) from a header map. Accepts
+    /// both the registered integer label 33 and the non-standard text label
+    /// "x5chain" used by some signers (e.g. Sony in-camera C2PA).
+    private static func x5chain(from map: CBORValue) -> [Data] {
+        guard let chainValue = map[intKey: 33] ?? map["x5chain"] else { return [] }
+        switch chainValue {
+        case .byteString(let cert):
+            return [cert]
+        case .array(let certs):
+            return certs.compactMap { $0.byteStringValue }
+        default:
+            return []
+        }
     }
 
     // MARK: - Assertion Parsing

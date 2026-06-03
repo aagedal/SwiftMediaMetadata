@@ -281,7 +281,7 @@ public struct FormatDetector: Sendable {
                 return .raw(.dng)
             }
 
-            // Use Make to distinguish ORF (Olympus) and PEF (Pentax)
+            // Use Make to distinguish ORF (Olympus), PEF (Pentax) and ARW (Sony).
             if let make = makeString?.uppercased() {
                 if make.contains("OLYMPUS") {
                     return .raw(.orf)
@@ -289,13 +289,20 @@ public struct FormatDetector: Sendable {
                 if make.contains("PENTAX") || make.contains("RICOH") {
                     return .raw(.pef)
                 }
+                // Sony's only TIFF-structured raw is ARW (the legacy SR2/SRF
+                // predate any modern body). A non-DNG TIFF with Make "SONY" is an
+                // ARW — without this it falls through to a generic .tiff label.
+                if make.contains("SONY") {
+                    return .raw(.arw)
+                }
             }
         } catch {
             return nil
         }
 
-        // NEF and ARW are harder to distinguish from plain TIFF without parsing MakerNotes.
-        // Fall back to extension-based detection for these.
+        // NEF is still hard to distinguish from plain TIFF without parsing
+        // MakerNotes (Make "NIKON" also appears on NRW and Nikon-authored TIFFs),
+        // so it falls back to extension-based detection.
         return nil
     }
 

@@ -29,7 +29,12 @@ public struct MakerNoteReader: Sendable {
         case .nikon:
             tags = NikonMakerNote.parse(data: rawData, parentByteOrder: byteOrder)
         case .sony:
-            tags = SonyMakerNote.parse(data: rawData, byteOrder: byteOrder)
+            // Sony5 MakerNotes store out-of-line value pointers as TIFF-relative
+            // offsets. Pass the block's own TIFF-relative offset so they rebase.
+            tags = SonyMakerNote.parse(
+                data: rawData, byteOrder: byteOrder,
+                makerNoteTIFFOffset: entry.sourceOffset ?? 0
+            )
         case .fujifilm:
             tags = FujifilmMakerNote.parse(data: rawData, parentByteOrder: byteOrder)
         case .olympus:

@@ -58,6 +58,19 @@ final class C2PAReaderTests: XCTestCase {
         XCTAssertEqual(refs?.first?.algorithm, "sha256")
     }
 
+    func testParseClaimV1AssertionReferences() throws {
+        // Sony's in-camera C2PA uses a v1 claim that lists assertion references
+        // under "assertions" (not the v2 created/gathered split).
+        let jumbfData = buildManifestStoreWithV1AssertionRefs()
+        let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+        let claim = c2pa?.activeManifest?.claim
+
+        XCTAssertEqual(claim?.claimGenerator, "SONY_CAMERA")
+        XCTAssertEqual(claim?.assertionReferences.count, 1)
+        XCTAssertEqual(claim?.assertionReferences.first?.url, "self#jumbf=c2pa.assertions/c2pa.hash.data")
+        XCTAssertEqual(claim?.assertionReferences.first?.algorithm, "sha256")
+    }
+
     // MARK: - Signature Parsing
 
     func testParseSignature() throws {
@@ -67,6 +80,19 @@ final class C2PAReaderTests: XCTestCase {
 
         XCTAssertNotNil(sig)
         XCTAssertEqual(sig?.algorithm?.description, "ES256")
+    }
+
+    func testParseSignatureTextX5Chain() throws {
+        // Sony's in-camera signer stores x5chain under the text label "x5chain"
+        // rather than the registered COSE integer label 33.
+        let cert = Data(repeating: 0xA5, count: 48)
+        let jumbfData = buildManifestStoreWithTextX5Chain(cert: cert)
+        let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+        let sig = c2pa?.activeManifest?.signature
+
+        XCTAssertEqual(sig?.algorithm?.description, "ES256")
+        XCTAssertEqual(sig?.certificateChain.count, 1)
+        XCTAssertEqual(sig?.certificateChain.first, cert)
     }
 
     // MARK: - Assertion Parsing
@@ -1058,6 +1084,64 @@ final class C2PAReaderTests: XCTestCase {
         return cbor
     }
 
+    /// v1 claim that lists assertion references under the "assertions" key
+    /// (as Sony's in-camera "SONY_CAMERA" generator does) rather than the v2
+    /// created_assertions / gathered_assertions split.
+    private func buildClaimWithV1AssertionRefs() -> Data {
+        var cbor = Data()
+        cbor.append(cborMap(2))
+        cbor.append(cborTextString("claim_generator"))
+        cbor.append(cborTextString("SONY_CAMERA"))
+        cbor.append(cborTextString("assertions"))
+        cbor.append(cborArray(1))
+        cbor.append(cborMap(3))
+        cbor.append(cborTextString("url"))
+        cbor.append(cborTextString("self#jumbf=c2pa.assertions/c2pa.hash.data"))
+        cbor.append(cborTextString("alg"))
+        cbor.append(cborTextString("sha256"))
+        cbor.append(cborTextString("hash"))
+        cbor.append(cborByteString(Data(repeating: 0xCD, count: 32)))
+        return cbor
+    }
+
+    private func buildManifestStoreWithV1AssertionRefs() -> Data {
+        let claim = buildClaimWithV1AssertionRefs()
+        let manifest = buildManifest(label: "urn:c2pa:sony-v1", claimCBOR: claim)
+        return wrapInManifestStore(manifest)
+    }
+
+    /// COSE_Sign1 whose protected header carries x5chain under the non-standard
+    /// text label "x5chain" instead of the registered integer label 33 — the
+    /// convention Sony's in-camera signer uses.
+    private func buildSignatureWithTextX5Chain(cert: Data) -> Data {
+        var cbor = Data()
+        cbor.append(0xD2) // tag 18
+        cbor.append(cborArray(4))
+
+        // [0] protected: bstr containing {1: -7, "x5chain": bstr(cert)}
+        var protectedMap = Data()
+        protectedMap.append(cborMap(2))
+        protectedMap.append(cborUInt(1))
+        protectedMap.append(cborNegInt(-7))
+        protectedMap.append(cborTextString("x5chain"))
+        protectedMap.append(cborByteString(cert))
+        cbor.append(cborByteString(protectedMap))
+
+        cbor.append(cborMap(0))                                   // [1] unprotected
+        cbor.append(cborNull())                                  // [2] payload
+        cbor.append(cborByteString(Data(repeating: 0xFF, count: 64))) // [3] signature
+        return cbor
+    }
+
+    private func buildManifestStoreWithTextX5Chain(cert: Data) -> Data {
+        let claim = buildClaim(generator: "SONY_CAMERA")
+        let manifest = buildManifest(
+            label: "urn:c2pa:sony-sig", claimCBOR: claim,
+            signatureCBOR: buildSignatureWithTextX5Chain(cert: cert)
+        )
+        return wrapInManifestStore(manifest)
+    }
+
     private func buildMinimalSignature() -> Data {
         // COSE_Sign1_Tagged: tag(18) [protected, unprotected, nil, signature]
         var cbor = Data()
@@ -1084,7 +1168,7 @@ final class C2PAReaderTests: XCTestCase {
         return cbor
     }
 
-    private func buildManifest(label: String, claimCBOR: Data, assertionBoxes: [Data] = []) -> Data {
+    private func buildManifest(label: String, claimCBOR: Data, assertionBoxes: [Data] = [], signatureCBOR: Data? = nil) -> Data {
         var manifestPayload = Data()
 
         // jumd for manifest
@@ -1102,7 +1186,7 @@ final class C2PAReaderTests: XCTestCase {
         var sigSuperPayload = Data()
         let sigJumd = buildJUMDPayload(prefix: "c2cs", label: "c2pa.signature")
         appendBox(to: &sigSuperPayload, type: "jumd", data: sigJumd)
-        appendBox(to: &sigSuperPayload, type: "cbor", data: buildMinimalSignature())
+        appendBox(to: &sigSuperPayload, type: "cbor", data: signatureCBOR ?? buildMinimalSignature())
         appendBox(to: &manifestPayload, type: "jumb", data: sigSuperPayload)
 
         // Assertion store

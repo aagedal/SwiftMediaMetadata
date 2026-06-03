@@ -83,6 +83,38 @@ final class MakerNoteRelocatorTests: XCTestCase {
         XCTAssertEqual(r.bytes, Data([0x05, 0x00, 0x01]))
     }
 
+    func testSonyNoteGetsAbsoluteFixUp() {
+        // Sony5 (modern Alpha/RX/FX) notes store TIFF-absolute value pointers, so
+        // a move must shift the out-of-line value-offset field by delta — a
+        // verbatim copy would leave it dangling and drop the whole MakerNote.
+        let valuePtr: UInt32 = 5018
+        var note = Data()
+        note += le16(1)                                              // 1 entry
+        note += le16(0xB020) + le16(2) + le32(8) + le32(valuePtr)    // CreativeStyle, ASCII[8], absolute offset
+        note += le32(0)                                              // next-IFD = 0
+        note += Data("Standard".utf8)                               // 8-byte value
+        let delta = 2048
+        let r = MakerNoteRelocator.relocate(data: note, make: "SONY", endian: .littleEndian, delta: delta)
+        XCTAssertTrue(r.didFixUp)
+        XCTAssertTrue(r.isSafe)
+        XCTAssertEqual(readLE32(r.bytes, at: 2 + 8), valuePtr + UInt32(delta), "value offset shifted by delta")
+        XCTAssertEqual(r.bytes.count, note.count, "fix-up patches in place, never resizes")
+    }
+
+    func testSonyPrefixedNoteWarnsVerbatim() {
+        // Older "SONY DSC"-prefixed notes use an offset base we can't confirm, so
+        // they fall back to a verbatim copy + warning — never a wrong patch.
+        var note = Data("SONY DSC \u{0}\u{0}\u{0}".utf8)             // 12-byte prefix
+        note += le16(1)
+        note += le16(0xB020) + le16(2) + le32(8) + le32(9999)
+        note += le32(0)
+        note += Data("Standard".utf8)
+        let r = MakerNoteRelocator.relocate(data: note, make: "SONY", endian: .littleEndian, delta: 100)
+        XCTAssertFalse(r.didFixUp)
+        XCTAssertFalse(r.isSafe)
+        XCTAssertEqual(r.bytes, note)
+    }
+
     // MARK: - Relative (safe verbatim) manufacturers
 
     func testNikonNoteIsSafeVerbatim() {

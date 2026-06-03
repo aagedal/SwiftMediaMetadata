@@ -29,8 +29,10 @@ struct SonyMakerNote: Sendable {
     private static let wbRGBLevels:                 UInt16 = 0x2014
 
     // 0xB0xx — Alpha / RX / FX top-level block
-    private static let serialNumber:           UInt16 = 0xB020
-    private static let colorReproduction:      UInt16 = 0xB020 // ASCII; same tag, different cameras
+    // 0xB020 is an ASCII string holding the creative-style / color-reproduction
+    // preset ("Standard", "Vivid", "AdobeRGB", …) per ExifTool's Sony.pm. It is
+    // NOT a serial number — the body serial lives in ExifIFD tag 0xA431.
+    private static let creativeStyle:          UInt16 = 0xB020
     private static let sceneMode:              UInt16 = 0xB023
     private static let zoneMatching:           UInt16 = 0xB024
     private static let dynamicRangeOptimizer:  UInt16 = 0xB025
@@ -56,7 +58,18 @@ struct SonyMakerNote: Sendable {
     private static let sonyDSCPrefix = Data("SONY DSC \0\0\0".utf8)
     private static let sonyCAMPrefix = Data("SONY CAM \0\0\0".utf8)
 
-    static func parse(data: Data, byteOrder: ByteOrder) -> [String: MakerNoteValue] {
+    /// Parse a Sony MakerNote.
+    /// - Parameters:
+    ///   - data: the verbatim MakerNote value bytes (the 0x927C entry value).
+    ///   - byteOrder: the parent TIFF byte order.
+    ///   - makerNoteTIFFOffset: the TIFF-relative offset at which `data` begins in
+    ///     the originating file (i.e. the MakerNote entry's value offset). Modern
+    ///     Sony ("Sony5") MakerNotes store out-of-line value pointers as offsets
+    ///     from the TIFF header, not from the start of the MakerNote block. Passing
+    ///     the block's own TIFF-relative offset lets us rebase those pointers back
+    ///     into `data`. Defaults to 0 for callers that hand us a self-contained,
+    ///     block-relative MakerNote.
+    static func parse(data: Data, byteOrder: ByteOrder, makerNoteTIFFOffset: Int = 0) -> [String: MakerNoteValue] {
         var tags: [String: MakerNoteValue] = [:]
 
         // Detect prefix and determine IFD start
@@ -69,18 +82,28 @@ struct SonyMakerNote: Sendable {
 
         guard ifdStart < data.count else { return tags }
 
+        // Resolve the offset base. Out-of-line value pointers are either
+        // block-relative (some older notes, and our synthetic test fixtures) or
+        // TIFF-absolute (modern Sony5 bodies). For the absolute case, the correct
+        // index into `data` is `pointer - makerNoteTIFFOffset`, which we model by
+        // parsing with a negative `tiffStart`. We pick whichever base keeps every
+        // out-of-line value in bounds, preferring block-relative.
+        let tiffStart = resolveOffsetBase(
+            data: data, ifdStart: ifdStart, endian: byteOrder,
+            makerNoteTIFFOffset: makerNoteTIFFOffset
+        )
+
         guard let (ifd, _) = try? IFDParser.parseIFD(
-            data: data, tiffStart: 0, offset: ifdStart, endian: byteOrder
+            data: data, tiffStart: tiffStart, offset: ifdStart, endian: byteOrder
         ) else { return tags }
 
-        // ---- Identifiers ---------------------------------------------------------------
-        if let entry = ifd.entry(for: serialNumber) {
-            if let value = entry.stringValue(endian: byteOrder) {
-                tags["SerialNumber"] = .string(value)
-            } else if entry.type == .undefined, entry.valueData.count >= 4 {
-                let hex = entry.valueData.prefix(8).map { String(format: "%02X", $0) }.joined()
-                tags["SerialNumber"] = .string(hex)
-            }
+        // ---- Creative style ------------------------------------------------------------
+        if let entry = ifd.entry(for: creativeStyle),
+           let value = entry.stringValue(endian: byteOrder) {
+            let trimmed = value.trimmingCharacters(
+                in: CharacterSet(charactersIn: "\0").union(.whitespaces)
+            )
+            if !trimmed.isEmpty { tags["CreativeStyle"] = .string(trimmed) }
         }
 
         // ---- Lens info -----------------------------------------------------------------
@@ -173,6 +196,52 @@ struct SonyMakerNote: Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Determine the `tiffStart` to feed `IFDParser` so that out-of-line value
+    /// pointers land inside `data`. Returns 0 for block-relative pointers, or
+    /// `-makerNoteTIFFOffset` for TIFF-absolute pointers (Sony5). Walks the IFD
+    /// header (always readable inline) and checks which base keeps every
+    /// out-of-line value within bounds, preferring block-relative on a tie.
+    private static func resolveOffsetBase(
+        data: Data, ifdStart: Int, endian: ByteOrder, makerNoteTIFFOffset: Int
+    ) -> Int {
+        // Without a base offset, the two interpretations coincide.
+        guard makerNoteTIFFOffset > 0 else { return 0 }
+
+        var reader = BinaryReader(data: data)
+        guard (try? reader.seek(to: ifdStart)) != nil,
+              let count = try? reader.readUInt16(endian: endian) else { return 0 }
+
+        let blobLen = data.count
+        var blockRelativeOK = true
+        var absoluteOK = true
+        var sawOutOfLine = false
+
+        for _ in 0..<count {
+            guard let _ = try? reader.readUInt16(endian: endian),          // tag
+                  let typeRaw = try? reader.readUInt16(endian: endian),
+                  let valueCount = try? reader.readUInt32(endian: endian),
+                  let valueOrOffset = try? reader.readBytes(4) else { return 0 }
+
+            guard let type = TIFFDataType(rawValue: typeRaw) else { continue }
+            let totalSize = Int(valueCount) * type.unitSize
+            guard totalSize > 4 else { continue }   // inline — base-independent
+
+            sawOutOfLine = true
+            var offsetReader = BinaryReader(data: valueOrOffset)
+            guard let pointer = try? offsetReader.readUInt32(endian: endian) else { return 0 }
+            let ptr = Int(pointer)
+
+            if ptr < 0 || ptr + totalSize > blobLen { blockRelativeOK = false }
+            let absIdx = ptr - makerNoteTIFFOffset
+            if absIdx < 0 || absIdx + totalSize > blobLen { absoluteOK = false }
+        }
+
+        if !sawOutOfLine { return 0 }
+        if blockRelativeOK { return 0 }
+        if absoluteOK { return -makerNoteTIFFOffset }
+        return 0
+    }
 
     private static func readUInt16(_ ifd: IFD, _ tag: UInt16, byteOrder: ByteOrder,
                                    into tags: inout [String: MakerNoteValue], as name: String) {
