@@ -410,6 +410,13 @@ public struct CRMReader: Sendable {
 
     // MARK: - Sample-table parsers
 
+    /// Upper bound on a sample/entry count we will materialize from a sample
+    /// table, guarding against a fabricated `count` driving an OOM allocation.
+    /// 2^24 ≈ 16.8 M samples covers any realistic CTMD track (one metadata
+    /// sample per video frame — over 70 hours at 60 fps) while capping the
+    /// worst-case array at ~64 MB.
+    private static let maxSampleTableEntries: UInt32 = 1 << 24
+
     /// `stsz`: FullBox(4) + sample_size(4) + sample_count(4) + (per-sample u32 sizes when sample_size==0).
     /// Returns one entry per sample.
     private static func parseSTSZ(_ data: Data) -> [UInt32]? {
@@ -419,10 +426,15 @@ public struct CRMReader: Sendable {
         guard let sampleSize = try? reader.readUInt32BigEndian(),
               let count = try? reader.readUInt32BigEndian() else { return nil }
         if sampleSize > 0 {
-            return Array(repeating: sampleSize, count: Int(count))
+            // `count` is attacker-controlled and, with sample_size > 0, has no
+            // per-sample payload to bound it against — a fabricated 0xFFFFFFFF
+            // would materialize a ~17 GB array and abort. Cap it; the sample
+            // walk is bounded by the chunk/stsc tables downstream anyway.
+            return Array(repeating: sampleSize, count: Int(min(count, maxSampleTableEntries)))
         }
         var sizes: [UInt32] = []
-        sizes.reserveCapacity(Int(count))
+        // Each entry is 4 bytes; never reserve more than the payload can hold.
+        sizes.reserveCapacity(min(Int(count), reader.remainingCount / 4))
         for _ in 0..<Int(count) {
             guard let s = try? reader.readUInt32BigEndian() else { break }
             sizes.append(s)
@@ -443,7 +455,8 @@ public struct CRMReader: Sendable {
         _ = try? reader.readBytes(4)
         guard let entryCount = try? reader.readUInt32BigEndian() else { return nil }
         var entries: [STSCEntry] = []
-        entries.reserveCapacity(Int(entryCount))
+        // Each entry is 12 bytes; never reserve more than the payload can hold.
+        entries.reserveCapacity(min(Int(entryCount), reader.remainingCount / 12))
         for _ in 0..<Int(entryCount) {
             guard let fc = try? reader.readUInt32BigEndian(),
                   let spc = try? reader.readUInt32BigEndian(),
@@ -460,7 +473,8 @@ public struct CRMReader: Sendable {
         _ = try? reader.readBytes(4)
         guard let count = try? reader.readUInt32BigEndian() else { return nil }
         var offsets: [UInt32] = []
-        offsets.reserveCapacity(Int(count))
+        // Each entry is 4 bytes; never reserve more than the payload can hold.
+        offsets.reserveCapacity(min(Int(count), reader.remainingCount / 4))
         for _ in 0..<Int(count) {
             guard let off = try? reader.readUInt32BigEndian() else { break }
             offsets.append(off)
@@ -475,7 +489,8 @@ public struct CRMReader: Sendable {
         _ = try? reader.readBytes(4)
         guard let count = try? reader.readUInt32BigEndian() else { return nil }
         var offsets: [UInt64] = []
-        offsets.reserveCapacity(Int(count))
+        // Each entry is 8 bytes; never reserve more than the payload can hold.
+        offsets.reserveCapacity(min(Int(count), reader.remainingCount / 8))
         for _ in 0..<Int(count) {
             guard let off = try? reader.readUInt64BigEndian() else { break }
             offsets.append(off)

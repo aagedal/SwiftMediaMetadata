@@ -131,6 +131,36 @@ final class CRMReaderTests: XCTestCase {
         XCTAssertTrue(metadata.cameraTimeline.isEmpty)
     }
 
+    // Regression for an OOM/abort from a fabricated sample count. `stsz` (and
+    // stsc/stco/co64) carry an attacker-controlled count that the parsers used
+    // to feed straight into `reserveCapacity(Int(count))` / `Array(repeating:)`.
+    // A tiny file declaring sample_count == 0xFFFFFFFF forced a ~17 GB
+    // allocation and aborted the process. The count is now capped against the
+    // bytes actually present (and a hard ceiling for the size-less `stsz` form),
+    // so the read completes promptly with at most the real samples decoded.
+    func testCTMDRejectsFabricatedSampleCount() throws {
+        let s1 = makeCTMDRecord(type: 0x0005, payload: makeExposurePayload(fNum: 4, fDen: 1, expNum: 1, expDen: 50, iso: 800))
+        let trak = buildCTMDTrakPoisonedStsz(realSampleSizes: [UInt32(s1.count)],
+                                             declaredSampleCount: 0xFFFF_FFFF)
+
+        var mvhd = Data([0, 0, 0, 0])
+        mvhd.append(Data(repeating: 0, count: 96))
+        var moovChildren = writeBoxRaw("mvhd", payload: mvhd)
+        var uuidPayload = Data(CanonUUID.canonMetadata)
+        uuidPayload.append(writeBoxRaw("CNCV", payload: Data("CanonCRM0001/02.10.00/00.00.00".utf8)))
+        moovChildren.append(writeBoxRaw("uuid", payload: uuidPayload))
+        moovChildren.append(trak)
+
+        var data = Data()
+        data.append(writeBoxRaw("ftyp", payload: Data("crx ".utf8) + Data([0, 0, 0, 0])))
+        data.append(writeBoxRaw("moov", payload: moovChildren))
+        data.append(writeBoxRaw("mdat", payload: s1))
+
+        // Must complete without a multi-GB reservation / abort.
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertLessThanOrEqual(metadata.cameraTimeline.count, 1)
+    }
+
     // MARK: - Thumb / preview
 
     func testTHMBExtractedAsEmbeddedThumbnail() throws {
@@ -359,6 +389,55 @@ final class CRMReaderTests: XCTestCase {
         stbl.append(writeBoxRaw("stsz", payload: stsz))
         stbl.append(writeBoxRaw("stsc", payload: stsc))
         stbl.append(writeBoxRaw("co64", payload: co64))
+
+        let minf = writeBoxRaw("stbl", payload: stbl)
+        var mdia = writeBoxRaw("hdlr", payload: hdlr)
+        mdia.append(writeBoxRaw("minf", payload: minf))
+        return writeBoxRaw("trak", payload: writeBoxRaw("mdia", payload: mdia))
+    }
+
+    /// Like `buildCTMDTrak`, but the `stsz` advertises `declaredSampleCount`
+    /// (an attacker-controlled value) while only `realSampleSizes.count` entries
+    /// actually follow — used to prove the parser caps its allocation instead of
+    /// reserving capacity for the fabricated count.
+    private func buildCTMDTrakPoisonedStsz(realSampleSizes: [UInt32],
+                                           declaredSampleCount: UInt32,
+                                           chunkOffset: UInt32 = 0) -> Data {
+        var hdlr = Data(repeating: 0, count: 4 + 4)
+        hdlr.append(Data("meta".utf8))
+        hdlr.append(Data(repeating: 0, count: 12))
+        hdlr.append(0x00)
+
+        var stsd = Data(repeating: 0, count: 4)
+        stsd.append(uint32BE(1))
+        var sampleEntry = uint32BE(16)
+        sampleEntry.append(Data("CTMD".utf8))
+        sampleEntry.append(Data(repeating: 0, count: 6))
+        sampleEntry.append(uint16BE(1))
+        stsd.append(sampleEntry)
+
+        // sample_size = 0 → per-sample table, but the declared count lies.
+        var stsz = Data(repeating: 0, count: 4)
+        stsz.append(uint32BE(0))
+        stsz.append(uint32BE(declaredSampleCount))
+        for size in realSampleSizes {
+            stsz.append(uint32BE(size))
+        }
+
+        var stsc = Data(repeating: 0, count: 4)
+        stsc.append(uint32BE(1))
+        stsc.append(uint32BE(1)) // first_chunk
+        stsc.append(uint32BE(UInt32(realSampleSizes.count))) // samples_per_chunk
+        stsc.append(uint32BE(1))
+
+        var stco = Data(repeating: 0, count: 4)
+        stco.append(uint32BE(1))
+        stco.append(uint32BE(chunkOffset))
+
+        var stbl = writeBoxRaw("stsd", payload: stsd)
+        stbl.append(writeBoxRaw("stsz", payload: stsz))
+        stbl.append(writeBoxRaw("stsc", payload: stsc))
+        stbl.append(writeBoxRaw("stco", payload: stco))
 
         let minf = writeBoxRaw("stbl", payload: stbl)
         var mdia = writeBoxRaw("hdlr", payload: hdlr)

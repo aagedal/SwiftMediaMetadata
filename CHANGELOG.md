@@ -48,6 +48,16 @@ the CLI; the library target follows the same numbering.
   chunk is dropped gracefully. Regression test
   `testCTMDRejectsOverflowingCo64ChunkOffset`.
   ([`Sources/SwiftExif/Video/CRMReader.swift`](Sources/SwiftExif/Video/CRMReader.swift))
+- **Out-of-memory abort from a fabricated CRM sample-table count** is fixed. The
+  `stsz`/`stsc`/`stco`/`co64` parsers fed the file's 32-bit entry count straight
+  into `reserveCapacity(Int(count))` / `Array(repeating:count:)`, so a tiny file
+  declaring `sample_count == 0xFFFFFFFF` forced a ~17 GB allocation and aborted
+  the process. Each count is now capped against the bytes actually present
+  (`min(Int(count), remainingCount / entrySize)`), with a 2^24 hard ceiling for
+  the size-less `stsz` form that has no payload to bound against — matching the
+  count-capping convention already used in `MP4Chapters`, `MXFMCAReader`, and
+  `MPEGBitstream`. Regression test `testCTMDRejectsFabricatedSampleCount`.
+  ([`Sources/SwiftExif/Video/CRMReader.swift`](Sources/SwiftExif/Video/CRMReader.swift))
 - **Relocated MakerNote (0x927C) internal offsets are now fixed up** on every
   write path that rebuilds a TIFF block — `TIFFWriter` (TIFF/DNG) **and**
   `ExifWriter` (embedded EXIF in JPEG/PNG/AVIF/HEIF/JPEG XL/WebP). Modeled on
