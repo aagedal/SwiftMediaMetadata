@@ -304,6 +304,12 @@ public struct DNGMetadataReader: Sendable {
         let total = Int(entry.count)
         guard total > 0 else { return nil }
         if let c = count, total != c { return nil }
+        // Validate the value bytes back the declared element count before
+        // reserving — `entry.count` is an attacker-controlled UInt32, and
+        // `reserveCapacity` allocates eagerly, so an oversized count would
+        // otherwise force a huge allocation before the per-element reads bail.
+        // Mirrors the guard in `srationals`/`rationals`/`longArray`/`doubleArray`.
+        guard entry.valueData.count >= total * entry.type.unitSize else { return nil }
         var reader = BinaryReader(data: entry.valueData)
         var result: [Double] = []
         result.reserveCapacity(total)
