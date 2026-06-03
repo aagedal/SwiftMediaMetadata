@@ -150,6 +150,24 @@ the CLI; the library target follows the same numbering.
   in `Double`, which saturates instead of trapping). Regression test
   `testCommChunkRejectsOutOfRangeSampleRate` traps (signal 5) without the fix.
   ([`Sources/SwiftExif/Audio/AIFFParser.swift`](Sources/SwiftExif/Audio/AIFFParser.swift))
+- **Int64-overflow trap deriving an MXF aspect ratio** is fixed.
+  `parsePictureDescriptor` computed DAR/SAR by multiplying four
+  attacker-controlled, `UInt32`-derived values (`StoredWidth`/`StoredHeight` and
+  the `AspectRatio` numerator/denominator); two operands near `2^32` multiply to
+  `~2^64`, overflowing `Int64` and trapping the process — the existing `Int64`
+  cast guarded 32-bit `Int` but not `Int64` overflow itself. The multiplications
+  now use `multipliedReportingOverflow`, and the non-essential DAR/SAR derivation
+  is skipped on absurd values, matching the keep-what-parsed degradation posture
+  used elsewhere. Regression test in `MXFReaderTests`.
+  ([`Sources/SwiftExif/Video/MXFReader.swift`](Sources/SwiftExif/Video/MXFReader.swift))
+- **Eager over-allocation from a DNG `numericArray` element count** is fixed.
+  `numericArray` called `reserveCapacity(entry.count)` from the
+  attacker-controlled `UInt32` count before validating that the value bytes
+  actually back that many elements, so a crafted DNG/TIFF entry with an oversized
+  count could force a huge allocation ahead of the per-element reads bailing out.
+  It now applies the same `valueData.count >= total * unitSize` guard its sibling
+  decoders (`srationals`/`rationals`/`longArray`/`doubleArray`) already use.
+  ([`Sources/SwiftExif/RAW/DNGMetadata.swift`](Sources/SwiftExif/RAW/DNGMetadata.swift))
 - **ID3 frame decoders now index relative to `startIndex`.** `decodeTextFrame`,
   `decodeCommentFrame`, and `extractAPIC` indexed their `Data` parameter with
   zero-based offsets and bounded against `data.count`, which would trap on any
