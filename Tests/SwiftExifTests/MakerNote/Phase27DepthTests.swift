@@ -140,7 +140,7 @@ final class Phase27DepthTests: XCTestCase {
         XCTAssertEqual(result["AFAreaMode"], .int(0))
         XCTAssertEqual(result["LongExposureNoiseReduction"], .int(2))
         XCTAssertEqual(result["WhiteBalance"], .int(4))
-        XCTAssertEqual(result["DynamicRangeOptimizer"], .uint(1))
+        XCTAssertEqual(result["DynamicRangeOptimizer"], .int(1))
     }
 
     // MARK: - Sony LensType lookup
@@ -173,14 +173,18 @@ final class Phase27DepthTests: XCTestCase {
         XCTAssertNil(result["CameraTemperature"])
     }
 
-    // MARK: - Sony WB_RGBLevels (tag 0x2014)
+    // MARK: - Sony WBShiftAB_GM (tag 0x2014)
 
-    func testSonyWBRGBLevels() {
+    func testSonyWBShiftABGM() {
+        // ExifTool's Sony.pm Main table defines 0x2014 as WBShiftAB_GM (a 2-element
+        // amber-blue / green-magenta shift), not WB_RGBLevels. Only the first two
+        // elements are kept.
         let values: [UInt16] = [3500, 1024, 2200]
         let mn = makeSonyMakerNote(uint16Arrays: [0x2014: values], byteOrder: .bigEndian)
         let result = parseSony(mn, byteOrder: .bigEndian)
 
-        XCTAssertEqual(result["WB_RGBLevels"], .intArray([3500, 1024, 2200]))
+        XCTAssertEqual(result["WBShiftAB_GM"], .intArray([3500, 1024]))
+        XCTAssertNil(result["WB_RGBLevels"], "old mislabel must not appear")
     }
 
     // MARK: - Sony FullImageSize (tag 0xB02B) — height/width pair

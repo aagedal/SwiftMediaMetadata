@@ -19,24 +19,51 @@ struct SonyMakerNote: Sendable {
     private static let multiBurstImageHeight:  UInt16 = 0x1002
     private static let panorama:               UInt16 = 0x1003
 
-    // 0x2xxx — modern shooting-settings block
-    private static let sonyImageSize:               UInt16 = 0x2002
-    private static let imageStabilization:          UInt16 = 0x2003
-    private static let highISONoiseReduction:       UInt16 = 0x2009
-    private static let multiFrameNoiseReduction:    UInt16 = 0x200B
-    private static let pictureEffect:               UInt16 = 0x200C
-    private static let softSkinEffect:              UInt16 = 0x200D
-    private static let wbRGBLevels:                 UInt16 = 0x2014
+    // 0x2xxx — modern shooting-settings block. Tag IDs and names verified against
+    // ExifTool's Sony.pm Main table (directly-readable scalar entries only;
+    // SubDirectory blocks like 0x2010 / 0x9xxx are not decoded here).
+    private static let rating:                        UInt16 = 0x2002
+    private static let contrast:                      UInt16 = 0x2004
+    private static let saturation:                    UInt16 = 0x2005
+    private static let sharpness:                     UInt16 = 0x2006
+    private static let brightness:                    UInt16 = 0x2007
+    private static let longExposureNR2:               UInt16 = 0x2008
+    private static let highISONoiseReduction:         UInt16 = 0x2009
+    private static let hdr:                           UInt16 = 0x200A
+    private static let multiFrameNoiseReduction:      UInt16 = 0x200B
+    private static let pictureEffect:                 UInt16 = 0x200E
+    private static let softSkinEffect:                UInt16 = 0x200F
+    private static let vignettingCorrection:          UInt16 = 0x2011
+    private static let lateralChromaticAberration:    UInt16 = 0x2012
+    private static let distortionCorrectionSetting:   UInt16 = 0x2013
+    private static let wbShiftABGM:                   UInt16 = 0x2014
+    private static let autoPortraitFramed:            UInt16 = 0x2016
+    private static let flashAction:                   UInt16 = 0x2017
+    private static let electronicFrontCurtainShutter: UInt16 = 0x201A
+    private static let multiFrameNREffect:            UInt16 = 0x2023
+    private static let focusLocation:                 UInt16 = 0x2027
+    private static let rawFileType:                   UInt16 = 0x2029
+    private static let prioritySetInAWB:              UInt16 = 0x202B
+    private static let meteringMode2:                 UInt16 = 0x202C
+    private static let shadows:                       UInt16 = 0x2032
+    private static let highlights:                    UInt16 = 0x2033
+    private static let fade:                          UInt16 = 0x2034
+    private static let sharpnessRange:                UInt16 = 0x2035
+    private static let clarity:                       UInt16 = 0x2036
+    private static let jpegHEIFSwitch:                UInt16 = 0x2039
+    private static let focusLocation2:                UInt16 = 0x204A
 
-    // 0xB0xx — Alpha / RX / FX top-level block
+    // 0xB0xx — Alpha / RX / FX top-level block.
     // 0xB020 is an ASCII string holding the creative-style / color-reproduction
     // preset ("Standard", "Vivid", "AdobeRGB", …) per ExifTool's Sony.pm. It is
     // NOT a serial number — the body serial lives in ExifIFD tag 0xA431.
     private static let creativeStyle:          UInt16 = 0xB020
+    private static let colorTemperature:       UInt16 = 0xB021
+    private static let colorCompensationFilter: UInt16 = 0xB022
     private static let sceneMode:              UInt16 = 0xB023
     private static let zoneMatching:           UInt16 = 0xB024
     private static let dynamicRangeOptimizer:  UInt16 = 0xB025
-    private static let imageStabilizationOld:  UInt16 = 0xB026
+    private static let imageStabilization:     UInt16 = 0xB026
     private static let lensType:               UInt16 = 0xB027
     private static let colorMode:              UInt16 = 0xB029
     private static let fullImageSize:          UInt16 = 0xB02B
@@ -107,65 +134,72 @@ struct SonyMakerNote: Sendable {
         }
 
         // ---- Lens info -----------------------------------------------------------------
-        if let entry = ifd.entry(for: lensType) {
-            var resolved: UInt32?
-            if let value = entry.uint32Value(endian: byteOrder) {
-                resolved = value
-            } else if let value = entry.uint16Value(endian: byteOrder) {
-                resolved = UInt32(value)
-            }
-            if let value = resolved {
-                tags["LensType"] = .int(Int(value))
-                if let name = sonyLensTypeNames[UInt16(clamping: value)] {
-                    tags["LensTypeName"] = .string(name)
-                }
+        if let value = scalar(ifd, lensType, endian: byteOrder) {
+            tags["LensType"] = .int(value)
+            if let name = sonyLensTypeNames[UInt16(clamping: value)] {
+                tags["LensTypeName"] = .string(name)
             }
         }
 
         // ---- 0x01xx range --------------------------------------------------------------
-        readUInt16(ifd, quality, byteOrder: byteOrder, into: &tags, as: "Quality")
+        if let v = scalar(ifd, quality, endian: byteOrder) { tags["Quality"] = .int(v) }
         if let entry = ifd.entry(for: flashExposureComp), entry.type == .srational,
            let (num, den) = entry.srationalValue(endian: byteOrder), den != 0 {
             tags["FlashExposureComp"] = .double(Double(num) / Double(den))
         }
-        readUInt16(ifd, teleconverter, byteOrder: byteOrder, into: &tags, as: "Teleconverter")
-        if let entry = ifd.entry(for: whiteBalanceFineTune), entry.type == .srational,
-           let (num, den) = entry.srationalValue(endian: byteOrder), den != 0 {
-            tags["WhiteBalanceFineTune"] = .double(Double(num) / Double(den))
-        }
-        readUInt16(ifd, multiBurstMode, byteOrder: byteOrder, into: &tags, as: "MultiBurstMode")
-        readUInt16(ifd, multiBurstImageWidth, byteOrder: byteOrder, into: &tags, as: "MultiBurstImageWidth")
-        readUInt16(ifd, multiBurstImageHeight, byteOrder: byteOrder, into: &tags, as: "MultiBurstImageHeight")
-        readUInt16(ifd, panorama, byteOrder: byteOrder, into: &tags, as: "Panorama")
+        if let v = scalar(ifd, teleconverter, endian: byteOrder) { tags["Teleconverter"] = .int(v) }
+        if let v = scalar(ifd, whiteBalanceFineTune, endian: byteOrder) { tags["WhiteBalanceFineTune"] = .int(v) }
+        if let v = scalar(ifd, multiBurstMode, endian: byteOrder) { tags["MultiBurstMode"] = .int(v) }
+        if let v = scalar(ifd, multiBurstImageWidth, endian: byteOrder) { tags["MultiBurstImageWidth"] = .int(v) }
+        if let v = scalar(ifd, multiBurstImageHeight, endian: byteOrder) { tags["MultiBurstImageHeight"] = .int(v) }
+        if let v = scalar(ifd, panorama, endian: byteOrder) { tags["Panorama"] = .int(v) }
 
         // ---- 0x2xxx range --------------------------------------------------------------
-        readUInt32(ifd, sonyImageSize, byteOrder: byteOrder, into: &tags, as: "SonyImageSize")
-        readUInt32(ifd, imageStabilization, byteOrder: byteOrder, into: &tags, as: "ImageStabilization")
-        readUInt32(ifd, highISONoiseReduction, byteOrder: byteOrder, into: &tags, as: "HighISONoiseReduction")
-        readUInt32(ifd, multiFrameNoiseReduction, byteOrder: byteOrder, into: &tags, as: "MultiFrameNoiseReduction")
-        readUInt32(ifd, pictureEffect, byteOrder: byteOrder, into: &tags, as: "PictureEffect")
-        readUInt32(ifd, softSkinEffect, byteOrder: byteOrder, into: &tags, as: "SoftSkinEffect")
-        if let entry = ifd.entry(for: wbRGBLevels), entry.type == .short {
-            let v = entry.uint16Values(endian: byteOrder)
-            if v.count >= 3 {
-                tags["WB_RGBLevels"] = .intArray([Int(v[0]), Int(v[1]), Int(v[2])])
-            }
+        if let v = scalar(ifd, rating, endian: byteOrder) { tags["Rating"] = .int(v) }
+        if let v = scalar(ifd, contrast, endian: byteOrder) { tags["Contrast"] = .int(v) }
+        if let v = scalar(ifd, saturation, endian: byteOrder) { tags["Saturation"] = .int(v) }
+        if let v = scalar(ifd, sharpness, endian: byteOrder) { tags["Sharpness"] = .int(v) }
+        if let v = scalar(ifd, brightness, endian: byteOrder) { tags["Brightness"] = .int(v) }
+        if let v = scalar(ifd, longExposureNR2, endian: byteOrder) { tags["LongExposureNoiseReduction"] = .int(v) }
+        if let v = scalar(ifd, highISONoiseReduction, endian: byteOrder) { tags["HighISONoiseReduction"] = .int(v) }
+        if let v = scalar(ifd, hdr, endian: byteOrder) { tags["HDR"] = .int(v) }
+        if let v = scalar(ifd, multiFrameNoiseReduction, endian: byteOrder) { tags["MultiFrameNoiseReduction"] = .int(v) }
+        if let v = scalar(ifd, pictureEffect, endian: byteOrder) { tags["PictureEffect"] = .int(v) }
+        if let v = scalar(ifd, softSkinEffect, endian: byteOrder) { tags["SoftSkinEffect"] = .int(v) }
+        if let v = scalar(ifd, vignettingCorrection, endian: byteOrder) { tags["VignettingCorrection"] = .int(v) }
+        if let v = scalar(ifd, lateralChromaticAberration, endian: byteOrder) { tags["LateralChromaticAberration"] = .int(v) }
+        if let v = scalar(ifd, distortionCorrectionSetting, endian: byteOrder) { tags["DistortionCorrectionSetting"] = .int(v) }
+        if let v = signedArray(ifd, wbShiftABGM, endian: byteOrder), v.count >= 2 {
+            tags["WBShiftAB_GM"] = .intArray(Array(v.prefix(2)))
+        }
+        if let v = scalar(ifd, autoPortraitFramed, endian: byteOrder) { tags["AutoPortraitFramed"] = .int(v) }
+        if let v = scalar(ifd, flashAction, endian: byteOrder) { tags["FlashAction"] = .int(v) }
+        if let v = scalar(ifd, electronicFrontCurtainShutter, endian: byteOrder) { tags["ElectronicFrontCurtainShutter"] = .int(v) }
+        if let v = scalar(ifd, multiFrameNREffect, endian: byteOrder) { tags["MultiFrameNREffect"] = .int(v) }
+        if let v = signedArray(ifd, focusLocation, endian: byteOrder), v.count >= 4 {
+            tags["FocusLocation"] = .intArray(Array(v.prefix(4)))
+        }
+        if let v = scalar(ifd, rawFileType, endian: byteOrder) { tags["RAWFileType"] = .int(v) }
+        if let v = scalar(ifd, prioritySetInAWB, endian: byteOrder) { tags["PrioritySetInAWB"] = .int(v) }
+        if let v = scalar(ifd, meteringMode2, endian: byteOrder) { tags["MeteringMode2"] = .int(v) }
+        if let v = scalar(ifd, shadows, endian: byteOrder) { tags["Shadows"] = .int(v) }
+        if let v = scalar(ifd, highlights, endian: byteOrder) { tags["Highlights"] = .int(v) }
+        if let v = scalar(ifd, fade, endian: byteOrder) { tags["Fade"] = .int(v) }
+        if let v = scalar(ifd, sharpnessRange, endian: byteOrder) { tags["SharpnessRange"] = .int(v) }
+        if let v = scalar(ifd, clarity, endian: byteOrder) { tags["Clarity"] = .int(v) }
+        if let v = scalar(ifd, jpegHEIFSwitch, endian: byteOrder) { tags["JPEG-HEIFSwitch"] = .int(v) }
+        if let v = signedArray(ifd, focusLocation2, endian: byteOrder), v.count >= 4 {
+            tags["FocusLocation2"] = .intArray(Array(v.prefix(4)))
         }
 
         // ---- 0xB0xx range --------------------------------------------------------------
-        // SceneMode is documented as UInt32 on modern bodies; older Cyber-shots returned UInt16
-        // as a different field, so accept either width.
-        if let entry = ifd.entry(for: sceneMode) {
-            if let v = entry.uint32Value(endian: byteOrder) {
-                tags["SceneMode"] = .int(Int(v))
-            } else if let v = entry.uint16Value(endian: byteOrder) {
-                tags["SceneMode"] = .int(Int(v))
-            }
-        }
-        readUInt32(ifd, zoneMatching, byteOrder: byteOrder, into: &tags, as: "ZoneMatching")
-        readUInt32(ifd, dynamicRangeOptimizer, byteOrder: byteOrder, into: &tags, as: "DynamicRangeOptimizer")
-        readUInt16(ifd, imageStabilizationOld, byteOrder: byteOrder, into: &tags, as: "ImageStabilizationOld")
-        readUInt32(ifd, colorMode, byteOrder: byteOrder, into: &tags, as: "ColorMode")
+        if let v = scalar(ifd, sceneMode, endian: byteOrder) { tags["SceneMode"] = .int(v) }
+        if let v = scalar(ifd, colorTemperature, endian: byteOrder) { tags["ColorTemperature"] = .int(v) }
+        if let v = scalar(ifd, colorCompensationFilter, endian: byteOrder) { tags["ColorCompensationFilter"] = .int(v) }
+        if let v = scalar(ifd, zoneMatching, endian: byteOrder) { tags["ZoneMatching"] = .int(v) }
+        if let v = scalar(ifd, dynamicRangeOptimizer, endian: byteOrder) { tags["DynamicRangeOptimizer"] = .int(v) }
+        if let v = scalar(ifd, imageStabilization, endian: byteOrder) { tags["ImageStabilization"] = .int(v) }
+        if let v = scalar(ifd, colorMode, endian: byteOrder) { tags["ColorMode"] = .int(v) }
         if let entry = ifd.entry(for: fullImageSize), entry.type == .short {
             let v = entry.uint16Values(endian: byteOrder)
             if v.count >= 2 { tags["FullImageSize"] = .string("\(v[1])x\(v[0])") }
@@ -174,28 +208,68 @@ struct SonyMakerNote: Sendable {
             let v = entry.uint16Values(endian: byteOrder)
             if v.count >= 2 { tags["PreviewImageSize"] = .string("\(v[1])x\(v[0])") }
         }
-        readUInt16(ifd, macro, byteOrder: byteOrder, into: &tags, as: "Macro")
-        readUInt16(ifd, exposureMode, byteOrder: byteOrder, into: &tags, as: "ExposureMode")
-        readUInt16(ifd, focusMode, byteOrder: byteOrder, into: &tags, as: "FocusMode")
-        readUInt16(ifd, afAreaMode, byteOrder: byteOrder, into: &tags, as: "AFAreaMode")
-        readUInt16(ifd, afIlluminator, byteOrder: byteOrder, into: &tags, as: "AFIlluminator")
-        readUInt16(ifd, quality16, byteOrder: byteOrder, into: &tags, as: "Quality")
-        if let entry = ifd.entry(for: flashLevel),
-           let value = entry.uint16Value(endian: byteOrder) {
-            // Stored as Int16 (negative = subtract); store the signed view.
-            tags["FlashLevel"] = .int(Int(Int16(bitPattern: value)))
-        }
-        readUInt16(ifd, releaseMode, byteOrder: byteOrder, into: &tags, as: "ReleaseMode")
-        readUInt16(ifd, antiBlur, byteOrder: byteOrder, into: &tags, as: "AntiBlur")
-        readUInt16(ifd, longExposureNR, byteOrder: byteOrder, into: &tags, as: "LongExposureNoiseReduction")
-        readUInt16(ifd, dynamicRangeOptimizer2, byteOrder: byteOrder, into: &tags, as: "DynamicRangeOptimizerSetting")
-        readUInt16(ifd, intelligentAuto, byteOrder: byteOrder, into: &tags, as: "IntelligentAuto")
-        readUInt16(ifd, whiteBalance, byteOrder: byteOrder, into: &tags, as: "WhiteBalance")
+        if let v = scalar(ifd, macro, endian: byteOrder) { tags["Macro"] = .int(v) }
+        if let v = scalar(ifd, exposureMode, endian: byteOrder) { tags["ExposureMode"] = .int(v) }
+        if let v = scalar(ifd, focusMode, endian: byteOrder) { tags["FocusMode"] = .int(v) }
+        if let v = scalar(ifd, afAreaMode, endian: byteOrder) { tags["AFAreaMode"] = .int(v) }
+        if let v = scalar(ifd, afIlluminator, endian: byteOrder) { tags["AFIlluminator"] = .int(v) }
+        if let v = scalar(ifd, quality16, endian: byteOrder) { tags["Quality"] = .int(v) }
+        if let v = scalar(ifd, flashLevel, endian: byteOrder) { tags["FlashLevel"] = .int(v) }
+        if let v = scalar(ifd, releaseMode, endian: byteOrder) { tags["ReleaseMode"] = .int(v) }
+        if let v = scalar(ifd, antiBlur, endian: byteOrder) { tags["AntiBlur"] = .int(v) }
+        // 0xB04E is an older alias; don't let it clobber the 0x2008 reading above.
+        if tags["LongExposureNoiseReduction"] == nil,
+           let v = scalar(ifd, longExposureNR, endian: byteOrder) { tags["LongExposureNoiseReduction"] = .int(v) }
+        if let v = scalar(ifd, dynamicRangeOptimizer2, endian: byteOrder) { tags["DynamicRangeOptimizerSetting"] = .int(v) }
+        if let v = scalar(ifd, intelligentAuto, endian: byteOrder) { tags["IntelligentAuto"] = .int(v) }
+        if let v = scalar(ifd, whiteBalance, endian: byteOrder) { tags["WhiteBalance"] = .int(v) }
 
         return tags
     }
 
     // MARK: - Helpers
+
+    /// Read a scalar integer from a Sony tag regardless of its declared integer
+    /// width or signedness (byte/short/long, signed or unsigned). Returns nil for
+    /// absent or non-integer (string/rational/undefined) entries. Tolerating the
+    /// width matters: e.g. `HighISONoiseReduction` is int16u while many siblings
+    /// are int32u, and a fixed-width read would silently drop the mismatched ones.
+    private static func scalar(_ ifd: IFD, _ tag: UInt16, endian: ByteOrder) -> Int? {
+        guard let e = ifd.entry(for: tag) else { return nil }
+        var r = BinaryReader(data: e.valueData)
+        switch e.type {
+        case .byte:   return (try? r.readUInt8()).map { Int($0) }
+        case .sbyte:  return (try? r.readUInt8()).map { Int(Int8(bitPattern: $0)) }
+        case .short:  return (try? r.readUInt16(endian: endian)).map { Int($0) }
+        case .sshort: return (try? r.readInt16(endian: endian)).map { Int($0) }
+        case .long:   return (try? r.readUInt32(endian: endian)).map { Int($0) }
+        case .slong:  return (try? r.readInt32(endian: endian)).map { Int($0) }
+        default:      return nil
+        }
+    }
+
+    /// Read every element of an integer array tag, per the entry's declared width
+    /// and signedness. Returns nil for absent or non-integer entries.
+    private static func signedArray(_ ifd: IFD, _ tag: UInt16, endian: ByteOrder) -> [Int]? {
+        guard let e = ifd.entry(for: tag) else { return nil }
+        var r = BinaryReader(data: e.valueData)
+        var out: [Int] = []
+        for _ in 0..<Int(e.count) {
+            let v: Int?
+            switch e.type {
+            case .byte:   v = (try? r.readUInt8()).map { Int($0) }
+            case .sbyte:  v = (try? r.readUInt8()).map { Int(Int8(bitPattern: $0)) }
+            case .short:  v = (try? r.readUInt16(endian: endian)).map { Int($0) }
+            case .sshort: v = (try? r.readInt16(endian: endian)).map { Int($0) }
+            case .long:   v = (try? r.readUInt32(endian: endian)).map { Int($0) }
+            case .slong:  v = (try? r.readInt32(endian: endian)).map { Int($0) }
+            default:      return nil
+            }
+            guard let vv = v else { break }
+            out.append(vv)
+        }
+        return out.isEmpty ? nil : out
+    }
 
     /// Determine the `tiffStart` to feed `IFDParser` so that out-of-line value
     /// pointers land inside `data`. Returns 0 for block-relative pointers, or
@@ -241,20 +315,6 @@ struct SonyMakerNote: Sendable {
         if blockRelativeOK { return 0 }
         if absoluteOK { return -makerNoteTIFFOffset }
         return 0
-    }
-
-    private static func readUInt16(_ ifd: IFD, _ tag: UInt16, byteOrder: ByteOrder,
-                                   into tags: inout [String: MakerNoteValue], as name: String) {
-        guard let entry = ifd.entry(for: tag),
-              let value = entry.uint16Value(endian: byteOrder) else { return }
-        tags[name] = .int(Int(value))
-    }
-
-    private static func readUInt32(_ ifd: IFD, _ tag: UInt16, byteOrder: ByteOrder,
-                                   into tags: inout [String: MakerNoteValue], as name: String) {
-        guard let entry = ifd.entry(for: tag),
-              let value = entry.uint32Value(endian: byteOrder) else { return }
-        tags[name] = .uint(UInt(value))
     }
 
     /// Human-readable names for common Sony LensType IDs. Curated from ExifTool's table —

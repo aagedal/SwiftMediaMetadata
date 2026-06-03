@@ -108,6 +108,45 @@ public struct MetadataExporter: Sendable {
             }
         }
 
+        // C2PA / Content Credentials
+        if let c2pa = metadata.c2pa {
+            dict["C2PA:ManifestCount"] = c2pa.manifests.count
+            if let manifest = c2pa.activeManifest {
+                dict["C2PA:ActiveManifest"] = manifest.label
+                dict["C2PA:ClaimGenerator"] = manifest.claim.claimGenerator
+                if let info = manifest.claim.claimGeneratorInfo {
+                    dict["C2PA:ClaimGeneratorName"] = info.name
+                    if let v = info.version { dict["C2PA:ClaimGeneratorVersion"] = v }
+                }
+                if let title = manifest.claim.title { dict["C2PA:Title"] = title }
+                if let format = manifest.claim.format { dict["C2PA:Format"] = format }
+                if let instanceID = manifest.claim.instanceID { dict["C2PA:InstanceID"] = instanceID }
+                if let alg = manifest.signature.algorithm {
+                    dict["C2PA:SignatureAlgorithm"] = String(describing: alg)
+                }
+                let chain = manifest.signature.certificateChain
+                if !chain.isEmpty {
+                    dict["C2PA:CertificateCount"] = chain.count
+                    // Surface the signer/issuer identity from the leaf certificate.
+                    if let cert = chain.first.flatMap(X509Parser.parse) {
+                        if let cn = cert.subjectCommonName { dict["C2PA:SignerCommonName"] = cn }
+                        if let issuer = cert.issuerCommonName { dict["C2PA:IssuerCommonName"] = issuer }
+                    }
+                }
+                if !manifest.assertions.isEmpty {
+                    dict["C2PA:Assertions"] = manifest.assertions.map(\.label).joined(separator: ", ")
+                }
+                // First c2pa.actions assertion records how the asset was produced.
+                if let actionsAssertion = manifest.assertions.first(where: { $0.label.hasPrefix("c2pa.actions") }),
+                   case .actions(let actions) = actionsAssertion.content,
+                   let firstAction = actions.actions.first {
+                    dict["C2PA:Action"] = firstAction.action
+                    if let digital = firstAction.digitalSourceType { dict["C2PA:DigitalSourceType"] = digital }
+                    if let agent = firstAction.softwareAgent { dict["C2PA:SoftwareAgent"] = agent }
+                }
+            }
+        }
+
         // Composite Tags
         if let exif = metadata.exif {
             let composites = CompositeTagCalculator.calculate(from: exif)

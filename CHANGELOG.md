@@ -20,6 +20,32 @@ the CLI; the library target follows the same numbering.
   ARW and the data-only API routes through the RAW reader instead of labeling
   the file a generic TIFF.
   ([`Sources/SwiftExif/API/FormatDetector.swift`](Sources/SwiftExif/API/FormatDetector.swift))
+- **Expanded Sony MakerNote tag coverage** from ~15 to ~50 directly-readable
+  tags, verified against ExifTool's `Sony.pm` Main table on a real ILCE-1 ARW.
+  New tags include `Contrast`, `Saturation`, `Sharpness`, `Brightness`, `HDR`,
+  `VignettingCorrection`, `LateralChromaticAberration`, `DistortionCorrectionSetting`,
+  `RAWFileType`, `MeteringMode2`, `FlashAction`, `ElectronicFrontCurtainShutter`,
+  `Shadows`, `Highlights`, `Fade`, `SharpnessRange`, `Clarity`, `JPEG-HEIFSwitch`,
+  `FocusLocation`/`FocusLocation2`, `ColorTemperature`, `Rating`, and more. A
+  width-tolerant scalar reader replaces the fixed-width helpers, so tags whose
+  declared int width differs from a sibling's (e.g. `HighISONoiseReduction`,
+  `ImageStabilization`) and signed values (`Highlights: -3`) are no longer
+  silently dropped. Several long-standing mislabels are corrected in passing:
+  `0x2002` is `Rating` (was `SonyImageSize`), `0x2014` is `WBShiftAB_GM` (was
+  `WB_RGBLevels`), `PictureEffect` is `0x200E` (was `0x200C`), `SoftSkinEffect`
+  is `0x200F` (was `0x200D`), and `0xB026` `ImageStabilization` (was an
+  unreachable `ImageStabilizationOld`). Scalar tags now emit `.int` uniformly
+  (previously a mix of `.int`/`.uint`).
+  ([`Sources/SwiftExif/MakerNote/SonyMakerNote.swift`](Sources/SwiftExif/MakerNote/SonyMakerNote.swift))
+- **C2PA / Content Credentials are now surfaced in `read` output** under the
+  `C2PA:` group (the `read --group c2pa` filter previously matched nothing). The
+  exporter emits manifest count, active-manifest label, claim generator,
+  title/format/instanceID, signature algorithm, certificate count, the signer
+  and issuer common names (decoded from the leaf certificate via the X.509
+  parser), the assertion labels, and the first `c2pa.actions` action with its
+  digital-source type and software agent — mirroring the existing video
+  exporter's keys. Regression test `testC2PASurfacedInExportedDictionary`.
+  ([`Sources/SwiftExif/API/MetadataExporter.swift`](Sources/SwiftExif/API/MetadataExporter.swift))
 - **Expanded DNG structural-tag extraction**, benefiting all DNG/RAW files.
   New tags: `BlackLevel`, `WhiteLevel`, `ActiveArea`, `DefaultScale`,
   `DefaultUserCrop`, `LocalizedCameraModel`, `AnalogBalance`, `BayerGreenSplit`,

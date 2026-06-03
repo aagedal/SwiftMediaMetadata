@@ -4,6 +4,21 @@ import CryptoKit
 
 final class C2PAReaderTests: XCTestCase {
 
+    // MARK: - Exporter Surfacing
+
+    func testC2PASurfacedInExportedDictionary() throws {
+        let jumbfData = buildManifestStoreWithActions()
+        let c2pa = try C2PAReader.parseManifestStore(from: jumbfData)
+        let metadata = ImageMetadata(container: .jpeg(JPEGFile()), format: .jpeg, c2pa: c2pa)
+
+        let dict = MetadataExporter.buildDictionary(metadata)
+        XCTAssertEqual(dict["C2PA:ManifestCount"] as? Int, 1)
+        XCTAssertEqual(dict["C2PA:ClaimGenerator"] as? String, "test")
+        XCTAssertEqual(dict["C2PA:SignatureAlgorithm"] as? String, "ES256")
+        XCTAssertEqual(dict["C2PA:Action"] as? String, "c2pa.created")
+        XCTAssertEqual((dict["C2PA:Assertions"] as? String)?.contains("c2pa.actions"), true)
+    }
+
     // MARK: - Manifest Store Parsing
 
     func testParseManifestStore() throws {
