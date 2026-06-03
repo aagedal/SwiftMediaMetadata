@@ -15,7 +15,7 @@ final class Phase27DepthTests: XCTestCase {
         values[3]  = UInt16(bitPattern: Int16(4))   // Quality = 4 (Fine)
         values[5]  = UInt16(bitPattern: Int16(2))   // ContinuousDrive
         values[17] = UInt16(bitPattern: Int16(5))   // MeteringMode
-        values[22] = UInt16(bitPattern: Int16(-1))   // LensType (sentinel: unknown lens)
+        values[22] = 0xFFFF                          // LensType (0xFFFF = unsigned 65535 = "n/a")
         values[23] = 200                             // MaxFocalLength * units
         values[24] = 24                              // MinFocalLength * units
         values[25] = 1                               // FocalUnits
@@ -28,11 +28,52 @@ final class Phase27DepthTests: XCTestCase {
         XCTAssertEqual(result["Quality"], .int(4))
         XCTAssertEqual(result["ContinuousDrive"], .int(2))
         XCTAssertEqual(result["MeteringMode"], .int(5))
-        XCTAssertEqual(result["LensType"], .int(-1))
+        // LensType is the *unsigned* 16-bit Canon ID; 65535 is the "n/a" sentinel.
+        XCTAssertEqual(result["LensType"], .int(65535))
+        XCTAssertEqual(result["LensTypeName"], .string("n/a"))
         XCTAssertEqual(result["MaxFocalLength"], .double(200.0))
         XCTAssertEqual(result["MinFocalLength"], .double(24.0))
         XCTAssertEqual(result["FocalUnits"], .int(1))
         XCTAssertEqual(result["ImageStabilization"], .int(1))
+    }
+
+    func testCanonLensTypeUnsignedRFMarker() {
+        // RF lenses report the shared marker 61182 (0xEEFE), which a naive signed read
+        // would mangle to -4354. Verify we surface the unsigned ID and its name.
+        var values = [UInt16](repeating: 0, count: 28)
+        values[22] = 0xEEFE                           // 61182 — Canon RF lens marker
+        values[26] = 96                               // MaxAperture EV code -> f/2.8
+        values[27] = 288                              // MinAperture EV code -> f/22.6
+
+        let mn = makeCanonMakerNote(cameraSettings: values, byteOrder: .bigEndian)
+        let result = parseCanon(mn, byteOrder: .bigEndian)
+
+        XCTAssertEqual(result["LensType"], .int(61182))
+        XCTAssertEqual(result["LensTypeName"], .string("Canon RF 50mm F1.2L USM or other Canon RF Lens"))
+        // Apertures are Canon hex-EV codes: f-number = 2^(CanonEv(code)/2).
+        if case .double(let maxAp) = result["MaxAperture"] {
+            XCTAssertEqual(maxAp, 2.8284271247, accuracy: 1e-4)
+        } else { XCTFail("MaxAperture missing") }
+        if case .double(let minAp) = result["MinAperture"] {
+            XCTAssertEqual(minAp, 22.627416997, accuracy: 1e-3)
+        } else { XCTFail("MinAperture missing") }
+    }
+
+    func testCanonCameraISOSentinelAndFlag() {
+        // 0x7fff is "n/a" (suppressed); the 0x4000 flag means the low 14 bits are the ISO.
+        var naValues = [UInt16](repeating: 0, count: 20)
+        naValues[15] = 0x7fff                         // Sharpness n/a — suppressed
+        naValues[16] = 0x7fff                         // CameraISO n/a — suppressed
+        let naResult = parseCanon(makeCanonMakerNote(cameraSettings: naValues, byteOrder: .bigEndian),
+                                  byteOrder: .bigEndian)
+        XCTAssertNil(naResult["Sharpness"])
+        XCTAssertNil(naResult["CameraISO"])
+
+        var isoValues = [UInt16](repeating: 0, count: 20)
+        isoValues[16] = 0x4000 | 1600                 // flagged ISO speed 1600
+        let isoResult = parseCanon(makeCanonMakerNote(cameraSettings: isoValues, byteOrder: .bigEndian),
+                                   byteOrder: .bigEndian)
+        XCTAssertEqual(isoResult["CameraISO"], .int(1600))
     }
 
     // MARK: - Canon FileInfo (tag 0x0093) — modern shutter count
@@ -75,20 +116,68 @@ final class Phase27DepthTests: XCTestCase {
     // MARK: - Canon AFInfo2 (tag 0x0026)
 
     func testCanonAFInfo2() {
+        // ProcessSerialData layout: index 0 is AFInfoSize, fields start at 1.
         var values = [UInt16](repeating: 0, count: 8)
-        values[2] = 1     // AFAreaMode
-        values[3] = 9     // NumAFPoints
-        values[4] = 1     // ValidAFPoints
-        values[5] = 6720  // AFImageWidth
-        values[6] = 4480  // AFImageHeight
+        values[0] = 16    // AFInfoSize (not surfaced)
+        values[1] = 7     // AFAreaMode (= Zone AF)
+        values[2] = 9     // NumAFPoints
+        values[3] = 1     // ValidAFPoints
+        values[4] = 6000  // CanonImageWidth
+        values[5] = 4000  // CanonImageHeight
+        values[6] = 6720  // AFImageWidth
+        values[7] = 4480  // AFImageHeight
 
         let mn = makeCanonMakerNote(afInfo2: values, byteOrder: .bigEndian)
         let result = parseCanon(mn, byteOrder: .bigEndian)
 
-        XCTAssertEqual(result["AFAreaMode"], .int(1))
+        XCTAssertEqual(result["AFAreaMode"], .int(7))
         XCTAssertEqual(result["NumAFPoints"], .int(9))
+        XCTAssertEqual(result["ValidAFPoints"], .int(1))
+        XCTAssertEqual(result["CanonImageWidth"], .int(6000))
+        XCTAssertEqual(result["CanonImageHeight"], .int(4000))
         XCTAssertEqual(result["AFImageWidth"], .int(6720))
         XCTAssertEqual(result["AFImageHeight"], .int(4480))
+    }
+
+    // MARK: - Canon ShotInfo ISO log-encoding + focus distance
+
+    func testCanonShotInfoLogISOAndMeasuredEV() {
+        // Raw values from a real EOS R1 frame: AutoISO 0 -> 100, BaseISO 268 -> 1037,
+        // MeasuredEV 140 -> 9.375. These are log/offset-encoded in Canon.pm, not raw.
+        var values = [UInt16](repeating: 0, count: 22)
+        values[1] = 0                                 // AutoISO code -> ISO 100
+        values[2] = 268                               // BaseISO code -> ISO 1037
+        values[3] = 140                               // MeasuredEV code -> 9.375
+        values[19] = 113                              // FocusDistanceUpper (cm) -> 1.13 m
+        values[20] = 122                              // FocusDistanceLower (cm) -> 1.22 m
+
+        let mn = makeCanonMakerNote(shotInfo: values, byteOrder: .bigEndian)
+        let result = parseCanon(mn, byteOrder: .bigEndian)
+
+        XCTAssertEqual(result["AutoISO"], .int(100))
+        XCTAssertEqual(result["BaseISO"], .int(1037))
+        if case .double(let ev) = result["MeasuredEV"] {
+            XCTAssertEqual(ev, 9.375, accuracy: 1e-6)
+        } else { XCTFail("MeasuredEV missing") }
+        XCTAssertEqual(result["FocusDistanceUpper"], .double(1.13))
+        XCTAssertEqual(result["FocusDistanceLower"], .double(1.22))
+    }
+
+    func testCanonFileInfoFocusDistanceOverridesShotInfo() {
+        // FileInfo (parsed after ShotInfo) is the higher-priority focus-distance source,
+        // and on this body it carries the values swapped relative to ShotInfo.
+        var shot = [UInt16](repeating: 0, count: 22)
+        shot[19] = 113   // ShotInfo Upper 1.13
+        shot[20] = 122   // ShotInfo Lower 1.22
+        var file = [UInt16](repeating: 0, count: 22)
+        file[20] = 122   // FileInfo Upper 1.22  (wins)
+        file[21] = 113   // FileInfo Lower 1.13  (wins)
+
+        let mn = makeCanonMakerNote(shotInfo: shot, fileInfo: file, byteOrder: .bigEndian)
+        let result = parseCanon(mn, byteOrder: .bigEndian)
+
+        XCTAssertEqual(result["FocusDistanceUpper"], .double(1.22))
+        XCTAssertEqual(result["FocusDistanceLower"], .double(1.13))
     }
 
     // MARK: - Canon SensorInfo (tag 0x00E0)
