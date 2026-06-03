@@ -88,13 +88,23 @@ public struct AIFFParser: Sendable {
 
         meta.channels = Int(channels)
         meta.bitDepth = Int(sampleSize)
-        if let rate = sampleRate, rate > 0 {
-            meta.sampleRate = Int(rate.rounded())
+        if let rate = sampleRate, rate > 0, rate.isFinite {
+            // `rate` comes from an attacker-controlled 80-bit float; a value above
+            // `Int.max` would trap on `Int(rate)`. Guard the range before each
+            // narrowing conversion.
+            if rate < Double(Int.max) {
+                meta.sampleRate = Int(rate.rounded())
+            }
             if sampleFrames > 0 {
                 meta.duration = Double(sampleFrames) / rate
             }
             if sampleSize > 0 && channels > 0 {
-                meta.bitrate = Int(rate) * Int(channels) * Int(sampleSize)
+                // Multiply in Double (which saturates to +inf instead of trapping
+                // like Int overflow would) and narrow only when the result fits.
+                let bitrate = rate * Double(channels) * Double(sampleSize)
+                if bitrate.isFinite, bitrate < Double(Int.max) {
+                    meta.bitrate = Int(bitrate)
+                }
             }
         }
 
@@ -134,7 +144,10 @@ public struct AIFFParser: Sendable {
         if exponent == 0 && mantissa == 0 { return 0 }
         if exponent == 0x7FFF { return nil }  // Inf / NaN
         let unbiasedExponent = exponent - 16383 - 63
-        return sign * Double(mantissa) * pow(2.0, Double(unbiasedExponent))
+        // A large (but non-0x7FFF) exponent overflows `pow` to +inf; reject any
+        // non-finite result so the caller never narrows it to Int and traps.
+        let result = sign * Double(mantissa) * pow(2.0, Double(unbiasedExponent))
+        return result.isFinite ? result : nil
     }
 
     private static func aifcCompressionLabel(_ tag: String) -> String {

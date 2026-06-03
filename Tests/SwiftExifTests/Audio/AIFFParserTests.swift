@@ -36,6 +36,34 @@ final class AIFFParserTests: XCTestCase {
         XCTAssertEqual(meta.codecName, "AIFF-C / PCM (float 32-bit)")
     }
 
+    // Regression for a trap narrowing an attacker-controlled 80-bit sample rate
+    // to Int. A COMM chunk can encode a rate whose (non-0x7FFF) exponent
+    // overflows `pow` to +inf — or a finite value above Int.max — and
+    // `Int(rate.rounded())` / the bitrate multiply used to trap on it. The
+    // parser must ignore an out-of-range rate and still return.
+    func testCommChunkRejectsOutOfRangeSampleRate() throws {
+        // 80-bit float: exponent 0x7000 (huge, but not the 0x7FFF Inf/NaN
+        // sentinel) with a nonzero mantissa → decodes to +inf.
+        var rate = Data()
+        rate.append(uint16BE(0x7000)) // sign(0) | exponent
+        rate.append(0x80)             // mantissa MSB set
+        rate.append(Data(repeating: 0, count: 7))
+
+        var p = Data()
+        p.append(uint16BE(2))       // channels
+        p.append(uint32BE(48_000))  // sampleFrames
+        p.append(uint16BE(24))      // sampleSize
+        p.append(rate)
+        let comm = makeChunk(id: "COMM", payload: p)
+
+        // Must not trap; the unusable rate leaves sampleRate/bitrate unset.
+        let meta = try AIFFParser.parse(makeAIFF(form: "AIFF", chunks: [comm]))
+        XCTAssertEqual(meta.channels, 2)
+        XCTAssertEqual(meta.bitDepth, 24)
+        XCTAssertNil(meta.sampleRate)
+        XCTAssertNil(meta.bitrate)
+    }
+
     // MARK: - Metadata chunks
 
     func testParseNameAuthCopyrightChunks() throws {

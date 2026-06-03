@@ -139,6 +139,17 @@ the CLI; the library target follows the same numbering.
   for the common `startIndex == 0` case, correct for slices. Regression test
   traps (signal 5) without the fix.
   ([`Sources/SwiftExif/Video/ARRIJSONParser.swift`](Sources/SwiftExif/Video/ARRIJSONParser.swift))
+- **Trap converting an out-of-range AIFF sample rate to `Int`** is fixed. A
+  `COMM` chunk carries the sample rate as an 80-bit IEEE-754 extended float; an
+  exponent below the `0x7FFF` Inf/NaN sentinel can still overflow `pow` to
+  `+inf`, and a finite value can exceed `Int.max`. `Int(rate.rounded())` and the
+  `Int(rate) * channels * sampleSize` bitrate then trapped (SIGTRAP — "Double
+  value cannot be converted to Int because it is either infinite or NaN").
+  `readExtendedFloat80` now returns `nil` for any non-finite result, and the
+  caller range-checks `rate` before each narrowing conversion (computing bitrate
+  in `Double`, which saturates instead of trapping). Regression test
+  `testCommChunkRejectsOutOfRangeSampleRate` traps (signal 5) without the fix.
+  ([`Sources/SwiftExif/Audio/AIFFParser.swift`](Sources/SwiftExif/Audio/AIFFParser.swift))
 - **ID3 frame decoders now index relative to `startIndex`.** `decodeTextFrame`,
   `decodeCommentFrame`, and `extractAPIC` indexed their `Data` parameter with
   zero-based offsets and bounded against `data.count`, which would trap on any
