@@ -99,8 +99,18 @@ public struct CanonUUIDExtractor: Sendable {
             data.ifd0 = ifd0
             data.exifIFD = exifIFD
             data.gpsIFD = gpsIFD
-            if let makerNote = makerNoteIFD {
-                data.makerNoteIFD = makerNote
+            if let makerNoteIFD {
+                data.makerNoteIFD = makerNoteIFD
+                // CMT3 is the Canon MakerNotes IFD with its values already
+                // resolved. Interpret it into named tags here — the normal
+                // MakerNoteReader path only fires on a JPEG/TIFF 0x927C blob,
+                // which CR3/CRM don't have.
+                let tags = CanonMakerNote.interpret(ifd: makerNoteIFD, byteOrder: byteOrder)
+                if !tags.isEmpty {
+                    data.makerNote = MakerNoteData(
+                        manufacturer: .canon, tags: tags, rawData: Data()
+                    )
+                }
             }
             exif = data
         }
@@ -110,28 +120,56 @@ public struct CanonUUIDExtractor: Sendable {
 
     /// Walk the inside of the Canon preview UUID payload (caller must strip
     /// the leading 16-byte UUID first). Returns the JPEG data of the `PRVW` box.
+    ///
+    /// The preview container prefixes the `PRVW` box with an 8-byte
+    /// version/count header (`00000000 00000001` on current bodies), so the box
+    /// is not the first child — locate it by its 4CC rather than assuming
+    /// position.
     public static func parsePreview(_ payload: Data) throws -> Data? {
-        let children = try ISOBMFFBoxReader.parseBoxes(from: payload)
-        guard let prvw = children.first(where: { $0.type == "PRVW" }) else { return nil }
-        return extractEmbeddedJPEG(from: prvw.data)
+        guard let typeRange = payload.range(of: Data("PRVW".utf8)),
+              payload.distance(from: payload.startIndex, to: typeRange.lowerBound) >= 4 else {
+            return nil
+        }
+        // The PRVW body begins right after the 4CC type. extractEmbeddedJPEG
+        // tolerates the (longer) PRVW header by scanning for the SOI marker.
+        let body = payload.subdata(in: typeRange.upperBound ..< payload.endIndex)
+        return extractEmbeddedJPEG(from: body)
     }
 
-    /// Strip the version(4) + width(2) + height(2) + jpegSize(4) + padding(2)
-    /// header that prefixes both `THMB` and `PRVW` box bodies, returning the
-    /// embedded JPEG payload.
+    /// Extract the embedded JPEG from a `THMB` or `PRVW` box body. Both prefix
+    /// the JPEG with a small header — version(4) + width(2) + height(2) +
+    /// jpegSize(4) — but the padding between `jpegSize` and the JPEG varies by
+    /// firmware (2 bytes on older bodies, 4+ on newer ones such as the EOS R1).
+    /// Rather than assume a fixed header length, read the declared `jpegSize`
+    /// and then locate the actual `0xFFD8` SOI marker.
     public static func extractEmbeddedJPEG(from data: Data) -> Data? {
-        guard data.count > 14 else { return nil }
+        guard data.count > 12 else { return nil }
         var reader = BinaryReader(data: data)
+        let jpegSize: Int
         do {
             _ = try reader.readUInt32BigEndian() // version
             _ = try reader.readUInt16BigEndian() // width
             _ = try reader.readUInt16BigEndian() // height
-            let jpegSize = try reader.readUInt32BigEndian()
-            _ = try reader.readUInt16BigEndian() // padding
-            guard Int(jpegSize) > 0 && reader.offset + Int(jpegSize) <= data.count else { return nil }
-            return try reader.readBytes(Int(jpegSize))
+            jpegSize = Int(try reader.readUInt32BigEndian())
         } catch {
             return nil
         }
+
+        // Find the SOI marker at/after the fixed 12-byte prefix.
+        let soi = Data([0xFF, 0xD8])
+        guard let range = data.range(of: soi, in: (data.startIndex + 12) ..< data.endIndex) else {
+            return nil
+        }
+        let start = range.lowerBound
+        // Trust the declared size when it's plausible; otherwise take the rest
+        // of the box up to (and including) the EOI marker.
+        if jpegSize > 0, start + jpegSize <= data.endIndex {
+            return data.subdata(in: start ..< (start + jpegSize))
+        }
+        if let eoi = data.range(of: Data([0xFF, 0xD9]), options: .backwards,
+                                in: start ..< data.endIndex) {
+            return data.subdata(in: start ..< eoi.upperBound)
+        }
+        return data.subdata(in: start ..< data.endIndex)
     }
 }

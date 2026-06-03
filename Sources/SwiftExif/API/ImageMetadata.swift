@@ -703,6 +703,12 @@ public struct ImageMetadata: Sendable {
     /// Extract the embedded JPEG thumbnail from Exif IFD1, if present.
     /// Returns the raw JPEG data of the thumbnail image.
     public func extractThumbnail() -> Data? {
+        // CR3 stores its thumbnail in the Canon `THMB` box, extracted at parse
+        // time — there is no Exif IFD1 to consult.
+        if case .cr3(let file) = container {
+            return file.thumbnailData
+        }
+
         guard let exif = exif,
               let ifd1 = exif.ifd1 else { return nil }
 

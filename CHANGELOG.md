@@ -61,6 +61,39 @@ the CLI; the library target follows the same numbering.
 
 ### Fixed
 
+- **Writing metadata to a CR3 no longer corrupts the file.** CR3 stores
+  absolute file offsets in each track's `co64`/`stco` chunk table and in the
+  Canon `CTBO` box. Rebuilding `moov` (re-serialized `CMT1`/`CMT2`/`CMT4`) or
+  the XMP `uuid` box changes their size and relocates `mdat`, but the writer
+  copied those offset tables verbatim — so after any edit the embedded
+  full-resolution JPEG (`JpgFromRaw`), preview, and `CTMD` timed-metadata track
+  pointed at stale locations and became unreadable (ExifTool reported "Error
+  reading meta data"). The writer now rebuilds in two passes: measure the new
+  `moov`, recompute the top-level layout, then rewrite every `co64`/`stco`
+  entry and remap each `CTBO` entry to its relocated offset and size. Verified
+  on a real EOS R1 CR3 (ExifTool `Validate: OK`, `JpgFromRaw` intact, stable
+  across repeated writes); offset fix-up mirrors ExifTool's `QuickTime.pm`
+  CR3 handling. Regression test `testWriteFixesChunkAndCTBOOffsets` builds a
+  CR3 with real `co64`/`CTBO` tables and asserts both track the relocated
+  `mdat` after writing.
+  ([`Sources/SwiftExif/CR3/CR3Writer.swift`](Sources/SwiftExif/CR3/CR3Writer.swift))
+- **Canon MakerNotes are now read from CR3 files.** CR3 carries the Canon
+  MakerNotes as the `CMT3` IFD, not as a JPEG/TIFF `0x927C` blob, so the
+  `MakerNoteReader` dispatch never fired and `read --group makernote` returned
+  nothing on a CR3. The CR3 pipeline now interprets the resolved `CMT3` IFD via
+  `CanonMakerNote` (refactored to expose an IFD entry point), surfacing
+  `FirmwareVersion`, `LensModel`, body/internal serial numbers, `ShutterCount`,
+  `CameraTemperature`, AF info, focal-length data, and more.
+  ([`Sources/SwiftExif/Canon/CanonUUIDBoxes.swift`](Sources/SwiftExif/Canon/CanonUUIDBoxes.swift))
+- **CR3 thumbnail/preview extraction now works on current Canon bodies.**
+  `extractThumbnail()` returned `nil` for CR3 because it required an Exif IFD1
+  (which CR3 has not), short-circuiting before the `THMB` box was ever consulted;
+  it now returns the parsed `THMB` JPEG directly. The embedded-JPEG reader also
+  no longer assumes a fixed 14-byte `THMB`/`PRVW` header (newer bodies such as
+  the EOS R1 use 16) — it locates the `0xFFD8` SOI marker instead — and the
+  preview `uuid`, which sits at the top level rather than inside `moov` in real
+  files, is now scanned there too.
+  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
 - **Wrong DNG tag constants above `0xC630`** are corrected. ~17 `DNGTag`
   constants pointed at the wrong tag IDs (sourced from a bad table), so the
   corresponding fields silently parsed to `nil` on every DNG file — e.g.

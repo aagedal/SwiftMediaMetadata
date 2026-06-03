@@ -33,12 +33,16 @@ public struct CR3Parser: Sendable {
             }
         }
 
-        // Process top-level uuid boxes for XMP
+        // Process top-level uuid boxes for XMP and the preview container. The
+        // preview uuid (eaf42b5e…) sits at the top level in real Canon files —
+        // not inside moov — so it must be scanned here too.
         for box in topBoxes where box.type == "uuid" && box.data.count >= 16 {
             let uuid = box.data.prefix(16)
             if uuid == CanonUUID.xmpUUID {
                 let xmpData = Data(box.data.dropFirst(16))
                 xmp = try? XMPReader.readFromXML(xmpData)
+            } else if uuid == CanonUUID.canonPreview, previewData == nil {
+                previewData = try? CanonUUIDExtractor.parsePreview(Data(box.data.dropFirst(16)))
             }
         }
 

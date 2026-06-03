@@ -25,12 +25,20 @@ struct CanonMakerNote: Sendable {
     private static let internalSerial: UInt16   = 0x0096
     private static let sensorInfo: UInt16       = 0x00E0
 
+    /// Parse a raw Canon MakerNote blob (e.g. the JPEG/TIFF `0x927C` value),
+    /// whose IFD starts immediately with offsets relative to the blob start.
     static func parse(data: Data, byteOrder: ByteOrder) -> [String: MakerNoteValue] {
-        var tags: [String: MakerNoteValue] = [:]
-
         guard let (ifd, _) = try? IFDParser.parseIFD(
             data: data, tiffStart: 0, offset: 0, endian: byteOrder
-        ) else { return tags }
+        ) else { return [:] }
+        return interpret(ifd: ifd, byteOrder: byteOrder)
+    }
+
+    /// Interpret an already-parsed Canon MakerNote IFD into named tags. Used by
+    /// the CR3/CRM pipeline, where the MakerNotes arrive as the `CMT3` IFD with
+    /// its out-of-line values already resolved, rather than as a raw blob.
+    static func interpret(ifd: IFD, byteOrder: ByteOrder) -> [String: MakerNoteValue] {
+        var tags: [String: MakerNoteValue] = [:]
 
         // ---- Scalar / string tags ------------------------------------------------------
         if let entry = ifd.entry(for: serialNumber),
