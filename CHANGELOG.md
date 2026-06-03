@@ -108,6 +108,27 @@ the CLI; the library target follows the same numbering.
   with `0 ..< data.count` — identical for the common `startIndex == 0` case,
   correct for slices. Regression test traps (signal 5) without the fix.
   ([`Sources/SwiftExif/Video/GPMFReader.swift`](Sources/SwiftExif/Video/GPMFReader.swift))
+- **Integer-overflow traps in `MP4Parser`'s top-level box walker** are fixed —
+  the same extended-size flaw already hardened in `ISOBMFFBoxReader`, but in the
+  parallel `parseTopLevelBoxes` behind the public `MP4Parser.parse` that the
+  earlier pass missed. A box using extended size (`size32 == 1`) could declare a
+  64-bit `largesize` beyond `Int.max` (so the `Int(size64)` cast trapped) or
+  near `Int.max` (so the following `reader.offset + payloadSize <= data.count`
+  and `boxStart + boxSize` checks overflowed and trapped). The cast is now
+  guarded (`size64 >= 16, size64 <= UInt64(Int.max)`) and both bounds checks are
+  rewritten in overflow-safe subtraction form; the oversized box is dropped
+  gracefully. Regression test `testParseRejectsOverflowingExtendedSize` traps
+  (signal 5) without the fix.
+  ([`Sources/SwiftExif/Video/MP4Parser.swift`](Sources/SwiftExif/Video/MP4Parser.swift))
+- **`ARRIJSONParser` out-of-bounds trap on a sliced `Data` input** is fixed. The
+  public `findEmbeddedJSONBlobs(in:)` scanned with a zero-based cursor
+  (`data[i]`, `data.subdata(in: payloadStart..<payloadEnd)`), so a caller passing
+  a `Data` slice with non-zero `startIndex` indexed outside the slice and trapped
+  on the first byte read. Both the discovery loop and `findFollowingSchema` now
+  rebase every subscript and `subdata` range onto `data.startIndex` — identical
+  for the common `startIndex == 0` case, correct for slices. Regression test
+  traps (signal 5) without the fix.
+  ([`Sources/SwiftExif/Video/ARRIJSONParser.swift`](Sources/SwiftExif/Video/ARRIJSONParser.swift))
 - **ID3 frame decoders now index relative to `startIndex`.** `decodeTextFrame`,
   `decodeCommentFrame`, and `extractAPIC` indexed their `Data` parameter with
   zero-based offsets and bounded against `data.count`, which would trap on any

@@ -1332,6 +1332,37 @@ final class MP4ParserTests: XCTestCase {
         return buildBoxRaw(key, data: dataBox)
     }
 
+    // MARK: - Malformed-input hardening
+
+    // Regression for integer-overflow traps in `parseTopLevelBoxes`, the
+    // sibling box walker behind the public `MP4Parser.parse`. A box using
+    // extended size (size32 == 1) can declare a 64-bit largesize that either
+    // exceeds Int.max (so `Int(size64)` itself traps) or sits near Int.max (so
+    // the later `reader.offset + payloadSize` bounds check overflows and traps).
+    // The same hardening already landed for `ISOBMFFBoxReader`; this path was
+    // missed. The parser must reject the file gracefully (no `moov` → thrown
+    // error) instead of crashing the process.
+    func testParseRejectsOverflowingExtendedSize() {
+        // Case 1: largesize beyond Int.max → the `Int(size64)` cast would trap.
+        var beyondMax = BinaryWriter(capacity: 32)
+        beyondMax.writeUInt32BigEndian(8) // leading 8-byte box pushes offset off 0
+        beyondMax.writeString("free", encoding: .ascii)
+        beyondMax.writeUInt32BigEndian(1) // extended size marker
+        beyondMax.writeString("ext ", encoding: .ascii)
+        beyondMax.writeUInt64BigEndian(0x8000_0000_0000_0000) // > Int.max
+        XCTAssertThrowsError(try MP4Parser.parse(beyondMax.data))
+
+        // Case 2: largesize == Int.max → cast succeeds but `offset + payloadSize`
+        // would overflow in the old additive bounds check.
+        var nearMax = BinaryWriter(capacity: 32)
+        nearMax.writeUInt32BigEndian(8)
+        nearMax.writeString("free", encoding: .ascii)
+        nearMax.writeUInt32BigEndian(1)
+        nearMax.writeString("ext ", encoding: .ascii)
+        nearMax.writeUInt64BigEndian(UInt64(Int.max))
+        XCTAssertThrowsError(try MP4Parser.parse(nearMax.data))
+    }
+
     private func writeFtyp(_ writer: inout BinaryWriter, brand: String) {
         let payload = Data(brand.utf8) + Data([0x00, 0x00, 0x00, 0x00])
         writer.writeUInt32BigEndian(UInt32(8 + payload.count))

@@ -393,6 +393,9 @@ public struct MP4Parser: Sendable {
             if size32 == 1 {
                 guard reader.remainingCount >= 8 else { break }
                 let size64 = try reader.readUInt64BigEndian()
+                // `Int(size64)` traps when a malformed largesize exceeds Int.max.
+                // Guard the cast and require room for the 16-byte extended header.
+                guard size64 >= 16, size64 <= UInt64(Int.max) else { break }
                 boxSize = Int(size64)
             } else if size32 == 0 {
                 boxSize = data.count - boxStart
@@ -405,16 +408,17 @@ public struct MP4Parser: Sendable {
             guard payloadSize >= 0 else { break }
 
             if type == "mdat" {
-                // Skip mdat payload — can be gigabytes of media data
-                let endPos = boxStart + boxSize
-                if endPos <= data.count {
-                    try reader.seek(to: endPos)
-                } else {
-                    break // mdat extends to EOF
-                }
+                // Skip mdat payload — can be gigabytes of media data. Compare via
+                // subtraction, not `boxStart + boxSize`: a largesize near Int.max
+                // would overflow that addition and trap. `boxStart <= data.count`
+                // always holds, so `data.count - boxStart` is non-negative.
+                guard boxSize <= data.count - boxStart else { break } // mdat extends past EOF
+                try reader.seek(to: boxStart + boxSize)
                 boxes.append(ISOBMFFBox(type: "mdat", data: Data()))
             } else {
-                guard reader.offset + payloadSize <= data.count else { break }
+                // Subtraction form, not `reader.offset + payloadSize`: avoids an
+                // Int-overflow trap when payloadSize is near Int.max.
+                guard payloadSize <= data.count - reader.offset else { break }
                 let payload = try reader.readBytes(payloadSize)
                 boxes.append(ISOBMFFBox(type: type, data: payload))
             }

@@ -74,17 +74,22 @@ public struct ARRIJSONParser: Sendable {
         guard limit >= 5 else { return [] }
         var results: [Blob] = []
 
+        // `data` may be a slice with a non-zero `startIndex` — this is public
+        // API. Keep the scan cursor `i` relative to `base` and convert to the
+        // Data's absolute index space at every subscript / `subdata` call; a
+        // bare `data[i]` would read past the slice and trap.
+        let base = data.startIndex
         var i = 0
         while i + 4 <= limit {
             // Cheap byte-by-byte scan for the JSON-tag prefix. `Data.range`
             // would be marginally faster on large windows but the constant
             // overhead per call dominates at our scale (<100 hits per file).
-            guard data[i] == jsonTagPrefix[0], data[i + 1] == jsonTagPrefix[1] else {
+            guard data[base + i] == jsonTagPrefix[0], data[base + i + 1] == jsonTagPrefix[1] else {
                 i += 1
                 continue
             }
-            let lenHi = data[i + 2]
-            let lenLo = data[i + 3]
+            let lenHi = data[base + i + 2]
+            let lenLo = data[base + i + 3]
             let length = Int(lenHi) << 8 | Int(lenLo)
             let payloadStart = i + 4
             let payloadEnd = payloadStart + length
@@ -92,7 +97,7 @@ public struct ARRIJSONParser: Sendable {
                 i += 1
                 continue
             }
-            let payload = data.subdata(in: payloadStart..<payloadEnd)
+            let payload = data.subdata(in: (base + payloadStart)..<(base + payloadEnd))
 
             // Cheap content sniff: skip whitespace, the next byte must look
             // like a JSON document. This rules out the many KLV values that
@@ -133,14 +138,17 @@ public struct ARRIJSONParser: Sendable {
     private static func findFollowingSchema(in data: Data, afterOffset: Int, limit: Int) -> String {
         let scanEnd = min(limit - 4, afterOffset + schemaLookahead)
         guard afterOffset >= 0, scanEnd >= afterOffset else { return "" }
+        // Offsets here are relative; rebase onto the slice's `startIndex` (see
+        // `findEmbeddedJSONBlobs`) so subscripts land inside a sliced `Data`.
+        let base = data.startIndex
         var i = afterOffset
         while i <= scanEnd {
-            if data[i] == schemaTagPrefix[0], data[i + 1] == schemaTagPrefix[1] {
-                let length = Int(data[i + 2]) << 8 | Int(data[i + 3])
+            if data[base + i] == schemaTagPrefix[0], data[base + i + 1] == schemaTagPrefix[1] {
+                let length = Int(data[base + i + 2]) << 8 | Int(data[base + i + 3])
                 let valueStart = i + 4
                 let valueEnd = valueStart + length
                 if length > 0, valueEnd <= limit {
-                    let bytes = data.subdata(in: valueStart..<valueEnd)
+                    let bytes = data.subdata(in: (base + valueStart)..<(base + valueEnd))
                     if let url = String(data: bytes, encoding: .utf16BigEndian) {
                         return shortSchemaName(from: url)
                     }

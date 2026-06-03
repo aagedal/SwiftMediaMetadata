@@ -228,6 +228,26 @@ final class ARRIJSONParserTests: XCTestCase {
         XCTAssertEqual(s, #"{"max":-1,"min":1800}"#)
     }
 
+    func testFindEmbeddedJSONBlobsHandlesSlicedDataWithNonZeroStartIndex() {
+        // `findEmbeddedJSONBlobs` is public API; a caller may hand it a `Data`
+        // slice whose `startIndex` is non-zero (e.g. `parse(buffer[prefix...])`).
+        // The scan cursor and `subdata` ranges are zero-based, so without
+        // rebasing onto `startIndex` the very first `data[i]` reads outside the
+        // slice and traps (signal 5). Build a valid blob, prepend junk, slice it
+        // off, and confirm decoding still works without crashing.
+        let blob = makeBlob(schema: "https://www.arri.com/schema/json/camera/camera_device/v1-0-0",
+                            json: #"{"cameraModel":"ARRI ALEXA 35"}"#)
+        var buffer = Data(repeating: 0xAB, count: 100)
+        buffer.append(blob)
+        let slice = buffer[(buffer.startIndex + 100)...]
+        XCTAssertNotEqual(slice.startIndex, 0)
+
+        let blobs = ARRIJSONParser.findEmbeddedJSONBlobs(in: slice)
+        XCTAssertEqual(blobs.count, 1)
+        XCTAssertEqual(blobs[0].schema, "camera_device")
+        XCTAssertEqual(blobs[0].json["cameraModel"] as? String, "ARRI ALEXA 35")
+    }
+
     // MARK: - Helpers
 
     /// Build a minimal `\x80\x7B <JSON UTF-8>` + `\x80\x7C <schema URL UTF-16BE>`
