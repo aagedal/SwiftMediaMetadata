@@ -312,6 +312,24 @@ final class MXFReaderTests: XCTestCase {
         }
     }
 
+    func testParsePictureDescriptorSurvivesOverflowingDimensionsAndAspectRatio() {
+        // Regression: a crafted descriptor declaring near-UInt32.max StoredWidth/
+        // Height and AspectRatio numerator/denominator drives the DAR/SAR
+        // multiplies (height × aspectRatioNum, etc.) past Int64.max. Swift traps
+        // on Int overflow, so the parser must not perform these multiplies
+        // unguarded — it should degrade gracefully rather than crash.
+        var body = Data()
+        body.append(localTagLV(0x3203, value: uint32BE(0xFFFFFFFF)))  // StoredWidth
+        body.append(localTagLV(0x3202, value: uint32BE(0xFFFFFFFF)))  // StoredHeight
+        body.append(localTagLV(0x320E, value: rational(0xFFFFFFFF, 0xFFFFFFFF)))
+
+        var stream = VideoStream(index: 0)
+        var duration: TimeInterval? = nil
+        // Must return without trapping; the absurd PAR is simply not derived.
+        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+        XCTAssertNil(stream.pixelAspectRatio)
+    }
+
     func testParsePictureDescriptorSkipsAspectRatioOverrideWhenZero() {
         var body = Data()
         body.append(localTagLV(0x3203, value: uint32BE(1920)))

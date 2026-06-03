@@ -797,16 +797,27 @@ public struct MXFReader: Sendable {
         // reader's DAR reflects the authoritative anamorphic flag.
         if aspectRatioDen > 0, aspectRatioNum > 0,
            let w = stream.width, let h = stream.height, w > 0, h > 0 {
-            let dw = Int((Int64(h) * Int64(aspectRatioNum)) / Int64(aspectRatioDen))
-            stream.displayWidth = dw
-            stream.displayHeight = h
+            // `aspectRatioNum/Den` (UInt32) and `w`/`h` (UInt32-derived, with `h`
+            // possibly doubled above) are all attacker-controlled. Two ~2^32
+            // operands multiply to ~2^64, which overflows Int64 and *traps* — a
+            // crafted descriptor declaring 0xFFFFFFFF dimensions and aspect ratio
+            // would crash the parser. Multiply with overflow reporting and skip
+            // this (non-essential) DAR/SAR derivation on absurd values instead.
+            let arNum = Int64(aspectRatioNum), arDen = Int64(aspectRatioDen)
+            let (darNumerator, darOvf) = Int64(h).multipliedReportingOverflow(by: arNum)
+            if !darOvf {
+                stream.displayWidth = Int(darNumerator / arDen)
+                stream.displayHeight = h
+            }
             // SAR = (DAR × height) / (pixel_width). The denominator folds in
             // DAR_den because the RHS is (DAR_num/DAR_den × height / width).
-            let sarNum = Int(aspectRatioNum) * h
-            let sarDen = Int(aspectRatioDen) * w
-            let g = gcdMXFInt(sarNum, sarDen)
-            if g > 0 {
-                stream.pixelAspectRatio = (sarNum / g, sarDen / g)
+            let (sarNum, sarOvf1) = arNum.multipliedReportingOverflow(by: Int64(h))
+            let (sarDen, sarOvf2) = arDen.multipliedReportingOverflow(by: Int64(w))
+            if !sarOvf1, !sarOvf2 {
+                let g = gcdMXFInt(Int(sarNum), Int(sarDen))
+                if g > 0 {
+                    stream.pixelAspectRatio = (Int(sarNum) / g, Int(sarDen) / g)
+                }
             }
         }
     }
