@@ -188,8 +188,12 @@ extension MP4Parser {
         for i in 0..<sampleCount {
             let fileOff = sampleOffsets[i]
             let size = sizes[i]
+            // `sampleFileOffsets` accumulates with wrapping `&+`, so `fileOff`
+            // can reach anywhere in UInt64. Compare with subtraction so the
+            // bounds check itself can't overflow-trap on `fileOff + size`.
             guard size >= 2,
-                  fileOff + UInt64(size) <= UInt64(fullData.count) else { continue }
+                  UInt64(size) <= UInt64(fullData.count),
+                  fileOff <= UInt64(fullData.count) - UInt64(size) else { continue }
             let base = fullData.startIndex + Int(fileOff)
             let titleLen = (Int(fullData[base]) << 8) | Int(fullData[base + 1])
             guard titleLen >= 0, 2 + titleLen <= size else { continue }

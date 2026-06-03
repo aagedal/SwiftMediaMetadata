@@ -325,14 +325,19 @@ public enum BRAWFrameReader {
         var out: [BRAWMotionSample] = []
         out.reserveCapacity(sampleCount)
         for i in 0..<sampleCount {
+            // `sampleOffsets[i]` is a raw 64-bit value from a `co64` box, so a
+            // crafted file can set it past Int.max where `Int(...)` traps. Bound
+            // it in UInt64 space first (mirrors MP4Parser.brawFrameWindow).
+            guard sampleOffsets[i] <= UInt64(Int.max) else { break }
             let off = Int(sampleOffsets[i])
             let size = sizes[i]
             // Each sample is `[uint32 BE size=20][4-byte key id][3× float32 LE]`.
             // Anything else means we're misaligned — bail rather than emit
             // garbage. (A clean partial read is more useful than a corrupt
             // full read for time-series analysis.)
+            // Subtraction, not `off + 20`: off can reach Int.max and overflow.
             guard size >= 20,
-                  off >= 0, off + 20 <= fullData.count else { break }
+                  off >= 0, off <= fullData.count - 20 else { break }
             let base = fullData.startIndex + off
             // Validate sample key id.
             let keyStart = base + 4

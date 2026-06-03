@@ -221,6 +221,33 @@ final class BRAWFrameReaderTests: XCTestCase {
         XCTAssertEqual(result[1].y, 5.0, accuracy: 1e-6)
     }
 
+    /// A `co64` chunk offset past Int.max must not trap the mebx motion
+    /// walker. Regression: `readMotionSamples` did `Int(sampleOffsets[i])`
+    /// before any bound check, so a crafted 64-bit offset crashed the parser.
+    /// (Commit 46faf13 fixed the sibling `brawFrameWindow` path but not this.)
+    func testReadMotionSamplesRejectsOutOfRangeCo64OffsetWithoutTrapping() throws {
+        let mdatBox = buildBox("mdat", data: makeMebxSample(keyID: "mogy", x: 0, y: 0, z: 0))
+        let trakBox = makeMebxTrak(
+            namespace: "com.blackmagicdesign.motiondata.gyroscope",
+            firstChunkOffset: 0,
+            sampleCount: 1,
+            sampleSize: 20,
+            mdhdTimescale: 1000,
+            sttsDelta: 1,
+            co64Offset: UInt64(Int.max) + 1
+        )
+        let moovBox = buildBox("moov", data: makeMvhdBox(timescale: 1000, duration: 1) + trakBox)
+        var file = BinaryWriter(capacity: 128 + mdatBox.count + moovBox.count)
+        let ftyp = Data("isom".utf8) + Data([0, 0, 0, 0])
+        file.writeUInt32BigEndian(UInt32(8 + ftyp.count))
+        file.writeString("ftyp", encoding: .ascii); file.writeBytes(ftyp)
+        file.writeBytes(mdatBox); file.writeBytes(moovBox)
+
+        // Must not trap — the out-of-range offset yields no samples.
+        let result = try BRAWFrameReader.readMotionSamples(from: file.data, stream: .gyroscope)
+        XCTAssertEqual(result, [])
+    }
+
     // MARK: - Synthetic-fixture builders
 
     private func makeBmdfBox(iso: UInt32, kelvin: UInt32, tint: Int16) -> Data {
@@ -257,7 +284,8 @@ final class BRAWFrameReaderTests: XCTestCase {
         sampleCount: UInt32,
         sampleSize: UInt32,
         mdhdTimescale: UInt32,
-        sttsDelta: UInt32
+        sttsDelta: UInt32,
+        co64Offset: UInt64? = nil
     ) -> Data {
         // mebx sample entry payload: 8-byte SampleEntry header + a `keys`
         // child wrapping a `keyd` declaration with the BMD namespace.
@@ -294,13 +322,23 @@ final class BRAWFrameReaderTests: XCTestCase {
         stscW.writeUInt32BigEndian(1)
         let stscBox = buildBox("stsc", data: stscW.data)
 
-        // stco: one chunk at firstChunkOffset.
-        var stcoW = BinaryWriter(capacity: 12)
-        stcoW.writeBytes([0, 0, 0, 0]); stcoW.writeUInt32BigEndian(1)
-        stcoW.writeUInt32BigEndian(firstChunkOffset)
-        let stcoBox = buildBox("stco", data: stcoW.data)
+        // Chunk-offset table: a 64-bit `co64` when an explicit offset is
+        // requested (used to exercise the out-of-range guard), else a 32-bit
+        // `stco` at firstChunkOffset.
+        let chunkOffsetBox: Data
+        if let co64Offset {
+            var co64W = BinaryWriter(capacity: 16)
+            co64W.writeBytes([0, 0, 0, 0]); co64W.writeUInt32BigEndian(1)
+            co64W.writeUInt64BigEndian(co64Offset)
+            chunkOffsetBox = buildBox("co64", data: co64W.data)
+        } else {
+            var stcoW = BinaryWriter(capacity: 12)
+            stcoW.writeBytes([0, 0, 0, 0]); stcoW.writeUInt32BigEndian(1)
+            stcoW.writeUInt32BigEndian(firstChunkOffset)
+            chunkOffsetBox = buildBox("stco", data: stcoW.data)
+        }
 
-        let stblBox = buildBox("stbl", data: stsdBox + sttsBox + stszBox + stscBox + stcoBox)
+        let stblBox = buildBox("stbl", data: stsdBox + sttsBox + stszBox + stscBox + chunkOffsetBox)
         let minfBox = buildBox("minf", data: stblBox)
 
         let mdhdBox = makeMdhdBox(timescale: mdhdTimescale, duration: UInt32(sampleCount))

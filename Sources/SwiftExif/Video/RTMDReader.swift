@@ -122,10 +122,9 @@ public enum RTMDReader {
         var out: [RTMDFrameAttribute] = []
         out.reserveCapacity(layout.offsets.count)
         for i in 0..<layout.offsets.count {
-            let off = Int(layout.offsets[i])
-            let size = Int(layout.sizes[i])
-            guard off >= 0, off + size <= data.count else { break }
-            let payload = data.subdata(in: off..<(off + size))
+            guard let range = sampleByteRange(offset: layout.offsets[i], size: layout.sizes[i], in: data)
+            else { break }
+            let payload = data.subdata(in: range)
             let ts = Double(layout.starts[i]) / layout.timescale
             out.append(decodeFrameAttributes(payload: payload, frameIndex: i, timestamp: ts))
         }
@@ -151,10 +150,9 @@ public enum RTMDReader {
         let imuTag: UInt16 = (stream == .gyroscope) ? 0xe43b : 0xe44b
         var out: [RTMDMotionSample] = []
         for i in 0..<count {
-            let off = Int(layout.offsets[i])
-            let size = Int(layout.sizes[i])
-            guard off >= 0, off + size <= data.count else { break }
-            let payload = data.subdata(in: off..<(off + size))
+            guard let range = sampleByteRange(offset: layout.offsets[i], size: layout.sizes[i], in: data)
+            else { break }
+            let payload = data.subdata(in: range)
             let frameStart = Double(layout.starts[i]) / layout.timescale
             let frameEnd: Double
             if i + 1 < count {
@@ -188,10 +186,9 @@ public enum RTMDReader {
         guard let trakData = (try? findRTMDTrack(in: data)) ?? nil,
               let layout = sampleLayout(trakData: trakData, fullData: data),
               !layout.offsets.isEmpty else { return nil }
-        let off = Int(layout.offsets[0])
-        let size = Int(layout.sizes[0])
-        guard off >= 0, off + size <= data.count else { return nil }
-        let payload = data.subdata(in: off..<(off + size))
+        guard let range = sampleByteRange(offset: layout.offsets[0], size: layout.sizes[0], in: data)
+        else { return nil }
+        let payload = data.subdata(in: range)
         let ts = layout.starts.first.map { Double($0) / layout.timescale } ?? 0
         return decodeFrameAttributes(payload: payload, frameIndex: 0, timestamp: ts)
     }
@@ -207,10 +204,9 @@ public enum RTMDReader {
         guard let trakData = (try? findRTMDTrack(in: data)) ?? nil,
               let layout = sampleLayout(trakData: trakData, fullData: data),
               layout.starts.count >= 2 else { return nil }
-        let off = Int(layout.offsets[0])
-        let size = Int(layout.sizes[0])
-        guard off >= 0, off + size <= data.count else { return nil }
-        let payload = data.subdata(in: off..<(off + size))
+        guard let range = sampleByteRange(offset: layout.offsets[0], size: layout.sizes[0], in: data)
+        else { return nil }
+        let payload = data.subdata(in: range)
         guard let raw = findFlatTagValue(payload, tag: 0xe44b), raw.count >= 8 else {
             return nil
         }
@@ -263,6 +259,23 @@ public enum RTMDReader {
         let starts: [UInt64]
         let sizes: [Int]
         let offsets: [UInt64]
+    }
+
+    /// Validate a file-absolute sample window before slicing `data`.
+    ///
+    /// `offset` comes verbatim from a `co64`/`stco` chunk table, so a crafted
+    /// file can push it past `Int.max` — where `Int(offset)` traps and crashes
+    /// the parser — or, after the wrapping accumulation in `sampleFileOffsets`,
+    /// anywhere in `UInt64`. Bound it in `UInt64` space first, then use
+    /// subtraction so the `Int` math can't overflow either (mirrors
+    /// `MP4Parser.brawFrameWindow`). Returns nil if the window escapes `data`.
+    private static func sampleByteRange(
+        offset: UInt64, size: Int, in data: Data
+    ) -> Range<Int>? {
+        guard size >= 0, offset <= UInt64(Int.max) else { return nil }
+        let off = Int(offset)
+        guard off <= data.count - size else { return nil }
+        return off..<(off + size)
     }
 
     private static func sampleLayout(trakData: Data, fullData: Data) -> SampleLayout? {
