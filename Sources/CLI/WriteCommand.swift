@@ -54,7 +54,10 @@ struct WriteCommand: ParsableCommand {
                     metadata.syncIPTCToXMP()
                 }
 
-                try metadata.write(to: url, options: options)
+                let writeWarnings = try metadata.write(to: url, options: options)
+                for warning in writeWarnings {
+                    printError("Warning: \(url.lastPathComponent): \(warning)")
+                }
                 succeeded += 1
             } catch {
                 printError("Error writing \(url.lastPathComponent): \(error.localizedDescription)")
@@ -107,6 +110,15 @@ func applyTags(_ tags: [ParsedTag], to metadata: inout ImageMetadata) {
         let key = tag.key
         let value = tag.value
         let op = tag.operation
+
+        // Friendly aliases for common scalar XMP tags that don't carry an
+        // explicit prefix:Property form. `Rating` is the star rating
+        // (xmp:Rating); photo apps write it on every star action.
+        if key == "Rating" || key.caseInsensitiveCompare("XMP:Rating") == .orderedSame
+            || key.caseInsensitiveCompare("XMP-xmp:Rating") == .orderedSame {
+            applyXMPTag(key: "XMP-xmp:Rating", value: value, operation: .set, to: &metadata)
+            continue
+        }
 
         // For += and -= on IPTC repeatable tags, resolve the IPTC tag type
         if let iptcListTag = iptcRepeatableTag(for: key) {

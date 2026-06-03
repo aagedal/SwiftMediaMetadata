@@ -31,6 +31,35 @@ final class ImageMetadataTests: XCTestCase {
         XCTAssertEqual(reparsed.iptc.keywords, ["new", "keywords"])
     }
 
+    /// Regression: star-rating a JPEG whose IPTC By-line was authored over the
+    /// 32-byte spec limit (common in agency/wire photos) must succeed. The write
+    /// re-serializes the whole IPTC block, so an over-length pre-existing field
+    /// used to abort the unrelated rating edit. It must now round-trip intact
+    /// and surface a non-fatal warning instead.
+    func testWritePreservesOverLengthIPTCWhenSettingRating() throws {
+        var iptc = IPTCData()
+        let overLongByline = "Alessandro Bremec / ipa-agency.net" // 34 bytes > 32
+        iptc.byline = overLongByline
+        let jpeg = TestFixtures.jpegWithIPTC(datasets: iptc.datasets)
+
+        var metadata = try ImageMetadata.read(from: jpeg)
+        XCTAssertEqual(metadata.iptc.byline, overLongByline)
+
+        // Set an XMP star rating, exactly as a photo app would.
+        if metadata.xmp == nil { metadata.xmp = XMPData() }
+        metadata.xmp?.setValue(.simple("4"),
+                               namespace: "http://ns.adobe.com/xap/1.0/", property: "Rating")
+
+        let (data, warnings) = try metadata.writeToDataWithWarnings()
+        let reparsed = try ImageMetadata.read(from: data)
+
+        XCTAssertEqual(reparsed.iptc.byline, overLongByline, "Over-length By-line must be preserved")
+        XCTAssertEqual(reparsed.xmp?.simpleValue(namespace: "http://ns.adobe.com/xap/1.0/",
+                                                 property: "Rating"), "4")
+        XCTAssertTrue(warnings.contains { $0.contains("By-line") },
+                      "Expected a non-fatal over-length warning, got \(warnings)")
+    }
+
     func testAddIPTCToJPEGWithNone() throws {
         let jpeg = TestFixtures.minimalJPEG()
         var metadata = try ImageMetadata.read(from: jpeg)

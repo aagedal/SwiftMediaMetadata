@@ -115,35 +115,36 @@ final class IPTCWriterTests: XCTestCase {
 
     // MARK: - Max Length Validation
 
-    func testWriteThrowsWhenBylineExceedsMaxLength() {
+    func testWritePreservesBylineExceedingMaxLength() throws {
         var iptc = IPTCData()
-        // byline maxLength = 32
-        iptc.byline = String(repeating: "A", count: 33)
+        // byline maxLength = 32 — an over-spec value (common in agency/wire
+        // JPEGs) must round-trip intact rather than aborting the write.
+        let overLong = String(repeating: "A", count: 33)
+        iptc.byline = overLong
 
-        XCTAssertThrowsError(try IPTCWriter.write(iptc)) { error in
-            guard case MetadataError.dataExceedsMaxLength(let tag, let max, let actual) = error else {
-                XCTFail("Expected dataExceedsMaxLength, got \(error)")
-                return
-            }
-            XCTAssertEqual(tag, "By-line")
-            XCTAssertEqual(max, 32)
-            XCTAssertEqual(actual, 33)
-        }
+        var warnings: [String] = []
+        let data = try IPTCWriter.write(iptc, warnings: &warnings)
+        let parsed = try IPTCReader.read(from: data)
+        XCTAssertEqual(parsed.byline, overLong)
+        XCTAssertTrue(warnings.contains { $0.contains("By-line") },
+                      "Expected an over-length warning for By-line, got \(warnings)")
+
+        // The strict validator still rejects it for callers that opt in.
+        XCTAssertThrowsError(try iptc.validate())
     }
 
-    func testWriteThrowsWhenKeywordExceedsMaxLength() {
+    func testWritePreservesKeywordExceedingMaxLength() throws {
         var iptc = IPTCData()
         // keywords maxLength = 64
-        iptc.keywords = ["OK", String(repeating: "B", count: 65)]
+        let overLong = String(repeating: "B", count: 65)
+        iptc.keywords = ["OK", overLong]
 
-        XCTAssertThrowsError(try IPTCWriter.write(iptc)) { error in
-            guard case MetadataError.dataExceedsMaxLength(_, let max, let actual) = error else {
-                XCTFail("Expected dataExceedsMaxLength, got \(error)")
-                return
-            }
-            XCTAssertEqual(max, 64)
-            XCTAssertEqual(actual, 65)
-        }
+        var warnings: [String] = []
+        let data = try IPTCWriter.write(iptc, warnings: &warnings)
+        let parsed = try IPTCReader.read(from: data)
+        XCTAssertEqual(parsed.keywords, ["OK", overLong])
+        XCTAssertTrue(warnings.contains { $0.contains("Keywords") },
+                      "Expected an over-length warning for Keywords, got \(warnings)")
     }
 
     func testWriteAllowsValueAtExactMaxLength() throws {
@@ -170,19 +171,18 @@ final class IPTCWriterTests: XCTestCase {
         }
     }
 
-    func testWriteThrowsForMultibyteUTF8ExceedingMaxLength() {
+    func testWritePreservesMultibyteUTF8ExceedingMaxLength() throws {
         var iptc = IPTCData()
         // city maxLength = 32 bytes. Nordic chars are multi-byte in UTF-8.
         // "Ø" is 2 bytes in UTF-8, so 17 of them = 34 bytes > 32
-        iptc.city = String(repeating: "Ø", count: 17)
+        let overLong = String(repeating: "Ø", count: 17)
+        iptc.city = overLong
 
-        XCTAssertThrowsError(try IPTCWriter.write(iptc)) { error in
-            guard case MetadataError.dataExceedsMaxLength(_, let max, let actual) = error else {
-                XCTFail("Expected dataExceedsMaxLength, got \(error)")
-                return
-            }
-            XCTAssertEqual(max, 32)
-            XCTAssertEqual(actual, 34) // 17 × 2 bytes
-        }
+        var warnings: [String] = []
+        let data = try IPTCWriter.write(iptc, warnings: &warnings)
+        let parsed = try IPTCReader.read(from: data)
+        XCTAssertEqual(parsed.city, overLong)
+        XCTAssertTrue(warnings.contains { $0.contains("City") },
+                      "Expected an over-length warning for City, got \(warnings)")
     }
 }

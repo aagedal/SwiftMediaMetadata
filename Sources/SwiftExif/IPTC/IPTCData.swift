@@ -84,6 +84,24 @@ public struct IPTCData: Equatable, Sendable {
         }
     }
 
+    /// Non-throwing counterpart of `validate()`: returns a human-readable warning
+    /// for every field that exceeds its IPTC spec max length, without failing.
+    ///
+    /// The write path uses this so that re-serializing a file whose IPTC was
+    /// authored over-spec by some upstream tool (common in agency/wire JPEGs)
+    /// succeeds — preserving the original value — rather than aborting an
+    /// unrelated edit. This mirrors ExifTool, which only warns on such fields.
+    public func maxLengthWarnings() -> [String] {
+        var warnings: [String] = []
+        for ds in datasets {
+            if let max = ds.tag.maxLength, ds.rawValue.count > max {
+                warnings.append(
+                    "IPTC \(ds.tag.name) exceeds spec max length (\(ds.rawValue.count) > \(max)); writing value as-is")
+            }
+        }
+        return warnings
+    }
+
     // MARK: - Convenience Properties (Journalism Fields)
 
     public var headline: String? {

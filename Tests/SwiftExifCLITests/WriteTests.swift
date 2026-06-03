@@ -46,6 +46,25 @@ final class WriteTests: CLITestCase {
         }
     }
 
+    func testWriteRatingTagMapsToXMP() throws {
+        let dir = try makeTempDir()
+        let url = try writeMinimalJPEG(in: dir)
+
+        let write = try CLITestHarness.run([
+            "write", "--tag", "Rating=4", url.path,
+        ])
+        XCTAssertEqual(write.exitCode, 0, "stderr: \(write.stderr)")
+        XCTAssertFalse(write.stderr.contains("Unknown tag"),
+                       "Rating should be recognized, got: \(write.stderr)")
+
+        let read = try CLITestHarness.run(["read", "--format", "json", url.path])
+        XCTAssertEqual(read.exitCode, 0, "stderr: \(read.stderr)")
+        XCTAssertTrue(
+            read.stdout.contains("Rating"),
+            "expected Rating in read output, got:\n\(read.stdout)"
+        )
+    }
+
     func testWriteWithoutTagFails() throws {
         let dir = try makeTempDir()
         let url = try writeMinimalJPEG(in: dir)

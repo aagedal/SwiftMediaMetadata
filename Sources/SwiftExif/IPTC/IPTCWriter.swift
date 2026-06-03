@@ -5,8 +5,19 @@ public struct IPTCWriter: Sendable {
 
     /// Serialize IPTCData to raw IPTC binary data.
     /// Always outputs UTF-8 encoded data, converting from legacy encodings if needed.
-    /// Throws `MetadataError.dataExceedsMaxLength` if any field exceeds its IPTC spec limit.
+    /// Fields exceeding their IPTC spec max length are preserved as-is (any over-length
+    /// warnings produced internally are discarded). Use the `warnings:` overload to
+    /// surface them, or call `IPTCData.validate()` to reject them up front.
     public static func write(_ iptcData: IPTCData) throws -> Data {
+        var warnings: [String] = []
+        return try write(iptcData, warnings: &warnings)
+    }
+
+    /// Serialize IPTCData to raw IPTC binary data, collecting non-fatal warnings.
+    /// Always outputs UTF-8 encoded data, converting from legacy encodings if needed.
+    /// Over-length fields are written as-is and reported via `warnings` rather than
+    /// throwing, so re-serializing an already-over-spec file does not fail.
+    public static func write(_ iptcData: IPTCData, warnings: inout [String]) throws -> Data {
         // Convert to UTF-8 if the source data is in a legacy encoding
         let outputData: IPTCData
         if iptcData.encoding != .utf8 {
@@ -15,7 +26,7 @@ public struct IPTCWriter: Sendable {
             outputData = iptcData
         }
 
-        try outputData.validate()
+        warnings.append(contentsOf: outputData.maxLengthWarnings())
 
         var writer = BinaryWriter(capacity: 1024)
 
@@ -75,7 +86,14 @@ public struct IPTCWriter: Sendable {
     /// Write IPTCData into an APP13 segment payload.
     /// If existingAPP13 is provided, replaces the IPTC resource while preserving others.
     public static func writeToAPP13(_ iptcData: IPTCData, existingAPP13: Data? = nil) throws -> Data {
-        let iptcBinary = try write(iptcData)
+        var warnings: [String] = []
+        return try writeToAPP13(iptcData, existingAPP13: existingAPP13, warnings: &warnings)
+    }
+
+    /// Write IPTCData into an APP13 segment payload, collecting non-fatal warnings.
+    public static func writeToAPP13(_ iptcData: IPTCData, existingAPP13: Data? = nil,
+                                    warnings: inout [String]) throws -> Data {
+        let iptcBinary = try write(iptcData, warnings: &warnings)
 
         if let existing = existingAPP13 {
             return try PhotoshopIRB.replaceIPTCData(in: existing, with: iptcBinary)

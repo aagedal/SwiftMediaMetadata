@@ -1168,7 +1168,7 @@ public struct ImageMetadata: Sendable {
     private func writeJPEG(_ file: inout JPEGFile, warnings: inout [String]) throws -> Data {
         // Write IPTC
         let existingAPP13 = file.iptcSegment()?.data
-        let app13Data = try IPTCWriter.writeToAPP13(iptc, existingAPP13: existingAPP13)
+        let app13Data = try IPTCWriter.writeToAPP13(iptc, existingAPP13: existingAPP13, warnings: &warnings)
         file.replaceOrAddIPTCSegment(JPEGSegment(marker: .app13, data: app13Data))
 
         // Write Exif
