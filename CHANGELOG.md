@@ -6,10 +6,37 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
-## [Unreleased]
+## [1.9.0] — 2026-06-03
+
+### Added
+
+- **GoPro `.GPR` files are now recognized** as a DNG/TIFF-based RAW format. A
+  new `RawFormat.gpr` case is detected via the `.gpr` extension or a GoPro
+  `Make` (so the data-only API works too), and `FileFormat` now reports GPR.
+  ([`Sources/SwiftExif/RAW`](Sources/SwiftExif))
+- **Expanded DNG structural-tag extraction**, benefiting all DNG/RAW files.
+  New tags: `BlackLevel`, `WhiteLevel`, `ActiveArea`, `DefaultScale`,
+  `DefaultUserCrop`, `LocalizedCameraModel`, `AnalogBalance`, `BayerGreenSplit`,
+  `LinearResponseLimit`, `AntiAliasStrength`, `ShadowScale`, `BestQualityScale`,
+  `CFAPlaneColor`, `CFALayout`, `CFARepeatPatternDim`, plus standard TIFF
+  structural tags (`BitsPerSample`, `PhotometricInterpretation`,
+  `SamplesPerPixel`, `PlanarConfiguration`, `SubfileType`). The count==2-only
+  `numericPair` helper is generalized to `numericArray(count:)` (which had been
+  dropping `ActiveArea`, count 4). New print conversions: Compression 9 →
+  "JBIG B&W", `CalibrationIlluminant` via the existing LightSource table, and
+  `PhotometricInterpretation`, `SubfileType`, `ProfileEmbedPolicy`, `CFALayout`.
+  Coverage on the sample GPR rises from 49 to 76 tags.
 
 ### Fixed
 
+- **Wrong DNG tag constants above `0xC630`** are corrected. ~17 `DNGTag`
+  constants pointed at the wrong tag IDs (sourced from a bad table), so the
+  corresponding fields silently parsed to `nil` on every DNG file — e.g.
+  `profileName` read `0xC698` instead of `0xC6F8`, `defaultCropOrigin` read
+  `0xC68D` (actually `ActiveArea`), and all three `OpcodeList` tags were wrong.
+  Constants are now verified against ExifTool's `Exif.pm` table; the bogus
+  `lensInfo` (an EXIF tag) is dropped. New tests build fixtures from literal
+  on-disk tag IDs so a constant regression fails the suite.
 - **Integer-overflow trap walking a Canon CRM `CTMD` sample table** is fixed. A
   crafted file with a 64-bit `co64` chunk offset near `UInt64.max` made the
   per-sample `chunkBaseOffset + sampleOffsetInChunk` addition — and the
@@ -43,6 +70,50 @@ the CLI; the library target follows the same numbering.
   [`Sources/SwiftExif/Exif/ExifWriter.swift`](Sources/SwiftExif/Exif/ExifWriter.swift),
   [`Sources/SwiftExif/Exif/IFDParser.swift`](Sources/SwiftExif/Exif/IFDParser.swift),
   [`Sources/SwiftExif/Exif/IFDEntry.swift`](Sources/SwiftExif/Exif/IFDEntry.swift))
+- **`co64` chunk offsets are bounded before `Int` conversion in the RTMD, BRAW,
+  and MP4 chapter readers.** `Int(offset)` traps when a `co64` chunk offset
+  exceeds `Int64.max`, and `sampleFileOffsets` accumulates with wrapping `&+`,
+  so a crafted MP4/MXF could push per-sample offsets anywhere in `UInt64` and
+  crash the parser. A prior fix covered only `brawFrameWindow`; three sibling
+  consumers were left unguarded — `RTMDReader` (4 sites), the BRAW `mebx`
+  motion walker (`walkMebxSamples`), and `MP4Chapters`. All now bound in
+  `UInt64` space then use subtraction-form comparisons so the `Int` math can't
+  overflow (a new `RTMDReader.sampleByteRange` helper also closes a pre-existing
+  `off + size` overflow in the old guard). Regression test drives an
+  out-of-range `co64` offset through the BRAW `mebx` motion path.
+  ([`Sources/SwiftExif/Video/RTMDReader.swift`](Sources/SwiftExif/Video/RTMDReader.swift),
+  [`Sources/SwiftExif/Video/BRAWFrameReader.swift`](Sources/SwiftExif/Video/BRAWFrameReader.swift),
+  [`Sources/SwiftExif/Video/MP4Chapters.swift`](Sources/SwiftExif/Video/MP4Chapters.swift))
+- **`co64` chunk offset bounded before `Int` conversion in `brawFrameWindow`.**
+  The function did `Int(chunkOffset)` before any bounds check on a raw 64-bit
+  `co64` value, so a crafted BRAW-codec MP4 with an offset ≥ 2⁶³ trapped on the
+  conversion. The offset is now bounded in `UInt64` space first, then compared
+  with subtraction so the `Int` math can't overflow.
+- **Integer-overflow trap in the ISOBMFF extended-size bounds checks** is fixed.
+  A box using extended size (`size32 == 1`) can declare a 64-bit `largesize`
+  near `Int.max`; the `Int(size64)` cast was guarded, but the following
+  `reader.offset + payloadSize <= endOffset` check overflowed and trapped
+  (SIGTRAP) whenever the box did not start at offset 0 — a malformed file with
+  a small leading box followed by an oversized extended box crashed the parser.
+  The same flaw existed in `parseTopLevelBoxesSkippingMdat`. Both checks are
+  rewritten in overflow-safe subtraction form, and the same hardening is applied
+  to `BinaryReader.readBytes`/`skip`/`slice` (which also now rejects a negative
+  `count` in `slice` rather than forming an invalid `Range` and trapping).
+- **`GPMFReader` out-of-bounds trap on a sliced `Data` input** is fixed. The
+  public `parse()`/`telemetry()` seeded the walk with absolute indices
+  (`data.startIndex ..< data.endIndex`) while `parseEntries` treats offsets as
+  relative to `startIndex`, so a caller passing a slice with non-zero
+  `startIndex` (e.g. `GPMFReader.parse(buffer[100...])`) double-counted
+  `startIndex` and indexed past `endIndex`, trapping. The walk is now seeded
+  with `0 ..< data.count` — identical for the common `startIndex == 0` case,
+  correct for slices. Regression test traps (signal 5) without the fix.
+  ([`Sources/SwiftExif/Video/GPMFReader.swift`](Sources/SwiftExif/Video/GPMFReader.swift))
+- **ID3 frame decoders now index relative to `startIndex`.** `decodeTextFrame`,
+  `decodeCommentFrame`, and `extractAPIC` indexed their `Data` parameter with
+  zero-based offsets and bounded against `data.count`, which would trap on any
+  non-zero-based slice. They now base offsets on `data.startIndex` and bound
+  against `data.endIndex`, matching every other decoder in the file. (Safe
+  today since callers re-base via `Data(...)`, but fragile against refactors.)
 
 ## [1.8.2] — 2026-06-02
 
@@ -979,6 +1050,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
+[1.9.0]: https://github.com/aagedal/SwiftExif/compare/1.8.2...1.9.0
 [1.8.2]: https://github.com/aagedal/SwiftExif/compare/1.8.1...1.8.2
 [1.8.1]: https://github.com/aagedal/SwiftExif/compare/1.8.0...1.8.1
 [1.8.0]: https://github.com/aagedal/SwiftExif/compare/1.7.0...1.8.0
