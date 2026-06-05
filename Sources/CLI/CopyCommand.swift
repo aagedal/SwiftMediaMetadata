@@ -96,7 +96,10 @@ struct CopyCommand: ParsableCommand {
                     }
                     applyTags(synthesized, to: &dest)
                 }
-                try dest.write(to: url, options: options)
+                let warnings = try dest.write(to: url, options: options)
+                for warning in warnings {
+                    printError("Warning [\(url.lastPathComponent)]: \(warning)")
+                }
                 succeeded += 1
             } catch {
                 printError("Error copying to \(url.lastPathComponent): \(error.localizedDescription)")

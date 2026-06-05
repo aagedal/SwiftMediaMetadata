@@ -1171,9 +1171,13 @@ public struct ImageMetadata: Sendable {
         let app13Data = try IPTCWriter.writeToAPP13(iptc, existingAPP13: existingAPP13, warnings: &warnings)
         file.replaceOrAddIPTCSegment(JPEGSegment(marker: .app13, data: app13Data))
 
-        // Write Exif
+        // Write Exif — size-capped to JPEG's per-segment ceiling. EXIF copied
+        // from a RAW can carry oversized proprietary blobs (e.g. a Sony A1's
+        // ~1.5 MB C2PA manifest in IFD0 tag 0xCD41) that overflow APP1; the
+        // capped writer drops the largest droppable tags rather than letting a
+        // single tag abort the whole metadata write. See ExifWriter.write(_:maxPayload:warnings:).
         if let exif = exif {
-            let exifData = ExifWriter.write(exif, warnings: &warnings)
+            let exifData = ExifWriter.write(exif, maxPayload: JPEGWriter.maxSegmentPayload, warnings: &warnings)
             file.replaceOrAddExifSegment(JPEGSegment(marker: .app1, data: exifData))
         }
 
@@ -1191,7 +1195,36 @@ public struct ImageMetadata: Sendable {
             file.segments.removeAll { $0.isICCProfile }
         }
 
+        // Final safety net: a single oversized metadata segment must never abort
+        // the whole write and drop all the *other* good metadata. Exif is already
+        // size-capped above and ICC profiles are chunked, so the realistic
+        // remaining offenders are an unusually large XMP packet (APP1) or IPTC
+        // block (APP13). Drop the offending segment with a warning rather than
+        // throwing. (Their proper oversize homes — ExtendedXMP / multi-segment
+        // IPTC — are a separate, larger feature.)
+        Self.dropOversizedMetadataSegments(&file, warnings: &warnings)
+
         return try JPEGWriter.write(file)
+    }
+
+    /// Drop any metadata APP segment whose payload exceeds JPEG's per-segment
+    /// ceiling, recording a non-fatal warning. Only touches the metadata
+    /// segments this writer authors (Exif/XMP/IPTC); anything else oversized
+    /// still surfaces as `JPEGWriter.write`'s hard error.
+    private static func dropOversizedMetadataSegments(_ file: inout JPEGFile, warnings: inout [String]) {
+        file.segments.removeAll { segment in
+            guard segment.data.count > JPEGWriter.maxSegmentPayload else { return false }
+            let kind: String
+            if segment.isExif { kind = "Exif" }
+            else if segment.isXMP { kind = "XMP" }
+            else if segment.isPhotoshop { kind = "IPTC" }
+            else { return false } // not ours to drop — let JPEGWriter flag it
+            warnings.append(
+                "Dropped oversized \(kind) segment: \(segment.data.count) bytes exceeds "
+                + "JPEG's \(JPEGWriter.maxSegmentPayload)-byte per-segment limit."
+            )
+            return true
+        }
     }
 
     private func writePNG(_ file: inout PNGFile, warnings: inout [String]) -> Data {

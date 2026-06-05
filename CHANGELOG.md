@@ -6,6 +6,36 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.9.1] — 2026-06-05
+
+### Fixed
+
+- **An oversized Exif tag no longer aborts the whole JPEG write.** JPEG's Exif
+  APP1 segment has a hard ~64 KB ceiling (`JPEGWriter.maxSegmentPayload`,
+  65,533 bytes), and `JPEGWriter` threw `MetadataError.invalidSegmentLength` for
+  any segment over it. Copying EXIF wholesale from a camera RAW could blow past
+  that limit — a Sony A1 (ILCE-1) `.ARW` embeds a ~1.5 MB C2PA / Content
+  Credentials manifest (JUMBF) in IFD0 tag `0xCD41` — so `copy`-ing its metadata
+  onto a rendered JPEG failed outright and silently dropped *all* the copied
+  EXIF/IPTC/XMP, even though only one tag was the problem. The JPEG write path
+  now caps the Exif APP1 gracefully: when the serialized payload would overflow,
+  it progressively drops the largest droppable values and re-serializes until it
+  fits — priority **IFD1 thumbnail → large proprietary external-value blobs
+  (largest first, e.g. the C2PA manifest) → MakerNote (dropped last)** — and
+  records a non-fatal warning through the existing `writeToDataWithWarnings()`
+  channel (now also printed by the `copy` command). Standard tags
+  (Make/Model/LensModel/exposure) and, in practice, the MakerNote survive.
+  (Copying a source C2PA manifest into a re-encoded derivative is semantically
+  invalid anyway — its content-binding hash covers the original pixels — so
+  dropping it on JPEG write is correct, not lossy; C2PA's real JPEG home is an
+  APP11 JUMBF box, never the Exif IFD.) An equivalent final guard drops an
+  unusually large XMP (APP1) or IPTC (APP13) segment with a warning rather than
+  aborting. Verified end-to-end on two real ILCE-1 C2PA ARWs (Exif APP1 shrank
+  from ~1.6 MB to 43,786 bytes, MakerNote retained). Regression tests in
+  `OversizedExifTests`.
+  ([`Sources/SwiftExif/Exif/ExifWriter.swift`](Sources/SwiftExif/Exif/ExifWriter.swift),
+  [`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
+
 ## [1.9.0] — 2026-06-03
 
 ### Added
