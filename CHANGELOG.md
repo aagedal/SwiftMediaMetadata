@@ -10,6 +10,19 @@ the CLI; the library target follows the same numbering.
 
 ### Added
 
+- **IVF (On2 IVF) containers are now read** as a video format, with first-class
+  support for the experimental **AV2** codec (FourCC `AV02`) alongside VP8/VP9/
+  AV1. A new `VideoFormat.ivf` case is detected by the `DKIF` signature or the
+  `.ivf` extension. The reader takes everything from the 32-byte container
+  header and the frame table — codec, dimensions, frame rate (from the time
+  base), frame count, duration, and overall bit rate — and never decodes the
+  payload (AV2's bitstream syntax is still unstable, so reading its sequence
+  header for bit depth / chroma / profile would risk reporting wrong metadata).
+  Because IVF muxers routinely leave the header `frameCount` at 0, the count is
+  recovered by walking the frame table; a stream that ends in an incomplete
+  frame (a file that is truncated or still being encoded) is tolerated and
+  flagged via `VideoMetadata.warnings` rather than rejected.
+  ([`Sources/SwiftExif/Video/IVFReader.swift`](Sources/SwiftExif/Video/IVFReader.swift))
 - **GoPro `.GPR` files are now recognized** as a DNG/TIFF-based RAW format. A
   new `RawFormat.gpr` case is detected via the `.gpr` extension or a GoPro
   `Make` (so the data-only API works too), and `FileFormat` now reports GPR.

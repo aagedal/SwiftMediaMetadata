@@ -74,6 +74,7 @@ let supportedVideoExtensions: Set<String> = [
     "braw",
     "r3d",
     "crm", "crl",
+    "ivf",
 ]
 
 let supportedAudioExtensions: Set<String> = [

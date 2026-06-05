@@ -349,6 +349,11 @@ public struct FormatDetector: Sendable {
             return .r3d
         }
 
+        // IVF (On2 IVF): "DKIF" signature. VP8/VP9/AV1/AV2 elementary streams.
+        if IVFReader.isIVF(data) {
+            return .ivf
+        }
+
         let bytes = [UInt8](data.prefix(12))
 
         // ISOBMFF: check for ftyp box at offset 4
@@ -390,6 +395,7 @@ public struct FormatDetector: Sendable {
         case "r3d":  return .r3d
         case "crm":  return .crm
         case "crl":  return .crl
+        case "ivf":  return .ivf
         default:     return nil
         }
     }

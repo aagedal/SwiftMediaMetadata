@@ -205,7 +205,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl, .ivf:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil {
@@ -261,7 +261,7 @@ public struct VideoMetadata: Sendable {
         switch metadata.format {
         case .mp4, .mov, .m4v:
             metadata.originalData = data
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl, .ivf:
             metadata.originalData = nil
         }
         if metadata.fileSize == nil { metadata.fileSize = Int64(data.count) }
@@ -346,6 +346,7 @@ public struct VideoMetadata: Sendable {
         case .xocn: return "Sony X-OCN (MXF)"
         case .crm: return "Canon Cinema RAW Light"
         case .crl: return "Canon Cinema RAW Light Proxy"
+        case .ivf: return "On2 IVF"
         }
     }
 
@@ -365,6 +366,9 @@ public struct VideoMetadata: Sendable {
         if R3DReader.isR3D(data) {
             return try R3DReader.parse(data)
         }
+        if IVFReader.isIVF(data) {
+            return try IVFReader.parse(data)
+        }
         return try MP4Parser.parse(data)
     }
 
@@ -381,7 +385,7 @@ public struct VideoMetadata: Sendable {
         switch format {
         case .mp4, .mov, .m4v:
             return try MP4Writer.write(self, to: original)
-        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl:
+        case .mxf, .mkv, .webm, .avi, .mpg, .braw, .arriraw, .r3d, .nikonRaw, .xocn, .crm, .crl, .ivf:
             throw MetadataError.writeNotSupported("Writing is not supported for \(format.rawValue.uppercased()) containers")
         }
     }
