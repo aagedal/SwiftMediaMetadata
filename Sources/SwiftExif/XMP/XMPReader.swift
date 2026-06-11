@@ -337,16 +337,31 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             inSeq = true
             inPendingProperty = false
             currentArrayItems = []
+            isStructuredBag = false
+            currentStructuredArrayItems = []
         } else if elementName == "Alt" {
             inAlt = true
             inPendingProperty = false
             currentArrayItems = []
         } else if elementName == "li" {
             currentText = ""
-            // If inside a Bag, prepare for potential structured item
-            if inBag {
+            // Inside a Bag or Seq, prepare for a potential structured item. ACR writes
+            // structured arrays as rdf:Seq, and an item's fields may be attribute-form
+            // directly on the li (<rdf:li crs:Top="..."/>) with no Description child.
+            if inBag || inSeq {
                 inStructuredItem = true
                 currentStructureFields = [:]
+                for (key, value) in attributeDict {
+                    if Self.isMetaAttribute(key) { continue }
+                    let parts = key.split(separator: ":", maxSplits: 1)
+                    if parts.count == 2 {
+                        let prefix = String(parts[0])
+                        let prop = String(parts[1])
+                        if let ns = resolvePrefix(prefix) {
+                            currentStructureFields["\(ns)\(prop)"] = .simple(value)
+                        }
+                    }
+                }
             }
         } else if inDescription && !inBag && !inSeq && !inAlt {
             // This is a property element — remember it for potential child arrays

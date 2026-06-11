@@ -303,6 +303,61 @@ final class XMPNestedStructureTests: XCTestCase {
         XCTAssertNil(flat?["\(crsNS)Inner"], "Nested struct fields must be dropped from flat view")
     }
 
+    /// Adobe Camera Raw (18.x) writes MaskGroupBasedCorrections as rdf:Seq (not Bag),
+    /// with the correction struct as an attribute-bearing rdf:Description inside li and
+    /// the inner mask items as attribute-form rdf:li with no Description child.
+    /// Regression: this exact shape parsed as an empty array, silently dropping all masks.
+    func testACRSeqAttributeFormMaskParsing() throws {
+        let xml = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+         <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasSettings="True">
+           <crs:MaskGroupBasedCorrections>
+            <rdf:Seq>
+             <rdf:li>
+              <rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:CorrectionActive="true" crs:CorrectionName="Mask 1" crs:LocalExposure2012="-0.4875">
+               <crs:CorrectionMasks>
+                <rdf:Seq>
+                 <rdf:li crs:What="Mask/CircularGradient" crs:MaskActive="true" crs:MaskName="Radial Gradient 1" crs:MaskValue="1" crs:Top="0.130294" crs:Left="0.249030" crs:Bottom="0.942355" crs:Right="0.790404" crs:Angle="15.5" crs:Midpoint="50" crs:Roundness="0" crs:Feather="0" crs:Flipped="true" crs:Version="2"/>
+                </rdf:Seq>
+               </crs:CorrectionMasks>
+              </rdf:Description>
+             </rdf:li>
+            </rdf:Seq>
+           </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+         </rdf:RDF>
+        </x:xmpmeta>
+        """
+        let decoded = try XMPReader.readFromXML(Data(xml.utf8))
+
+        guard let outer = decoded.structuredArrayValue(namespace: crsNS, property: "MaskGroupBasedCorrections") else {
+            XCTFail("MaskGroupBasedCorrections did not parse as a structured array")
+            return
+        }
+        XCTAssertEqual(outer.count, 1)
+        let correction = outer[0]
+        XCTAssertEqual(correction["\(crsNS)What"], .simple("Correction"))
+        XCTAssertEqual(correction["\(crsNS)LocalExposure2012"], .simple("-0.4875"))
+        XCTAssertEqual(correction["\(crsNS)CorrectionName"], .simple("Mask 1"))
+
+        guard case .structuredArray(let masks)? = correction["\(crsNS)CorrectionMasks"] else {
+            XCTFail("CorrectionMasks missing or wrong shape: \(String(describing: correction["\(crsNS)CorrectionMasks"]))")
+            return
+        }
+        XCTAssertEqual(masks.count, 1)
+        XCTAssertEqual(masks[0]["\(crsNS)What"], .simple("Mask/CircularGradient"))
+        XCTAssertEqual(masks[0]["\(crsNS)Top"], .simple("0.130294"))
+        XCTAssertEqual(masks[0]["\(crsNS)Left"], .simple("0.249030"))
+        XCTAssertEqual(masks[0]["\(crsNS)Bottom"], .simple("0.942355"))
+        XCTAssertEqual(masks[0]["\(crsNS)Right"], .simple("0.790404"))
+        XCTAssertEqual(masks[0]["\(crsNS)Angle"], .simple("15.5"))
+        XCTAssertEqual(masks[0]["\(crsNS)Flipped"], .simple("true"))
+
+        // Sibling attribute-form simple property still lands top-level.
+        XCTAssertEqual(decoded.simpleValue(namespace: crsNS, property: "HasSettings"), "True")
+    }
+
     func testFlatStructuredArrayValueDropsNonSimple() throws {
         let items: [[String: XMPValue]] = [
             [
