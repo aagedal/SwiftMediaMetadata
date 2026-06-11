@@ -58,6 +58,46 @@ final class XMPNestedStructureTests: XCTestCase {
         XCTAssertEqual(masks[0]["\(crsNS)MaskActive"], .simple("true"))
     }
 
+    /// The namespace-aware field accessors must agree with the raw concatenated
+    /// keys the reader produces — they exist so consumers never hand-build
+    /// `"<namespaceURI><name>"` strings (a bare-name lookup compiles fine but
+    /// silently never matches; that exact mistake shipped in a consumer app).
+    func testFieldAccessorsMatchReaderKeys() throws {
+        let mask: [String: XMPValue] = [
+            "\(crsNS)What": .simple("Mask/CircularGradient"),
+            "\(crsNS)Top": .simple("0.367451"),
+        ]
+        let correction: [String: XMPValue] = [
+            "\(crsNS)CorrectionActive": .simple("true"),
+            "\(crsNS)CorrectionMasks": .structuredArray([mask]),
+        ]
+        var xmp = XMPData()
+        xmp.setValue(.structuredArray([correction]),
+                     namespace: crsNS,
+                     property: "MaskGroupBasedCorrections")
+
+        let decoded = try XMPReader.readFromXML(Data(XMPWriter.generateXML(xmp).utf8))
+        let outer = try XCTUnwrap(
+            decoded.structuredArrayValue(namespace: crsNS, property: "MaskGroupBasedCorrections")
+        ).first ?? [:]
+
+        XCTAssertEqual(outer[namespace: crsNS, property: "CorrectionActive"], .simple("true"))
+        XCTAssertEqual(outer.simpleField(namespace: crsNS, property: "CorrectionActive"), "true")
+        XCTAssertNil(outer["CorrectionActive"], "fields are never keyed by bare local name")
+
+        guard case .structuredArray(let masks)? = outer[namespace: crsNS, property: "CorrectionMasks"] else {
+            XCTFail("Expected nested CorrectionMasks structuredArray")
+            return
+        }
+        XCTAssertEqual(masks.first?.simpleField(namespace: crsNS, property: "What"), "Mask/CircularGradient")
+        XCTAssertEqual(masks.first?.simpleField(namespace: crsNS, property: "Top"), "0.367451")
+
+        // The subscript setter writes the same key shape the reader produces.
+        var fields: [String: XMPValue] = [:]
+        fields[namespace: crsNS, property: "Feather"] = .simple("50")
+        XCTAssertEqual(fields["\(crsNS)Feather"], .simple("50"))
+    }
+
     /// A struct field that holds another struct (single rdf:Description, not a Bag).
     func testNestedStructureRoundTrip() throws {
         let inner: [String: XMPValue] = [

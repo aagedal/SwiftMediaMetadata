@@ -6,12 +6,38 @@ import Foundation
 /// so a struct can contain another struct, an array, or a nested rdf:Bag of structs.
 /// Adobe Camera Raw's MaskGroupBasedCorrections (rdf:Bag of corrections, each holding
 /// its own rdf:Bag of CorrectionMasks) is the canonical case that requires recursion.
+///
+/// Struct fields are keyed `"<namespaceURI><name>"` — the same convention as
+/// `XMPData`'s top-level properties — never the bare local name, because a
+/// struct's fields may come from a different namespace than the property that
+/// holds it (e.g. Iptc4xmpExt structs carrying plus: fields). Use the
+/// `subscript(namespace:property:)` / `simpleField(namespace:property:)`
+/// accessors below instead of concatenating keys by hand.
 public indirect enum XMPValue: Equatable, Sendable {
     case simple(String)
     case array([String])                       // rdf:Bag or rdf:Seq
     case langAlternative(String)               // rdf:Alt with xml:lang="x-default"
     case structure([String: XMPValue])         // Single rdf:Description with fields
     case structuredArray([[String: XMPValue]]) // rdf:Bag of rdf:Description items
+}
+
+public extension Dictionary where Key == String, Value == XMPValue {
+    /// Access a struct field by namespace + local name. Fields are keyed
+    /// `"<namespaceURI><name>"`; this mirrors `XMPData.value(namespace:property:)`
+    /// / `setValue` so callers never hand-concatenate field keys (a bare-name
+    /// lookup compiles fine but silently never matches).
+    subscript(namespace namespace: String, property property: String) -> XMPValue? {
+        get { self["\(namespace)\(property)"] }
+        set { self["\(namespace)\(property)"] = newValue }
+    }
+
+    /// The field's string payload when it is `.simple` or `.langAlternative`, else nil.
+    func simpleField(namespace: String, property: String) -> String? {
+        switch self[namespace: namespace, property: property] {
+        case .simple(let s), .langAlternative(let s): return s
+        default: return nil
+        }
+    }
 }
 
 /// Parsed XMP metadata.
