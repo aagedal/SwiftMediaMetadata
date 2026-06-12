@@ -6,7 +6,28 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
-## [Unreleased]
+## [1.9.3] — 2026-06-12
+
+### Added
+
+- **Namespace-aware field accessors for XMP struct fields.** Struct fields are
+  keyed `"<namespaceURI><name>"` — intentional, since a struct's fields may
+  come from a different namespace than the property holding it — but consumers
+  had to hand-concatenate those keys, and a bare-name lookup compiles fine
+  while silently never matching. Documented the convention on `XMPValue` and
+  added `subscript(namespace:property:)` and `simpleField(namespace:property:)`
+  on `[String: XMPValue]`, mirroring `XMPData.value`/`setValue`.
+  ([`Sources/SwiftExif/XMP/XMPData.swift`](Sources/SwiftExif/XMP/XMPData.swift))
+- **Namespace-block APIs on `XMPData`** for whole-block operations like crs
+  (Camera Raw settings) replacement: `properties(in:)` returns a namespace's
+  properties keyed by local name, `removeAll(namespace:)` drops every property
+  in a namespace, and `replaceAll(namespace:from:)` swaps the entire block for
+  another `XMPData`'s — carrying the parsed rdf:Bag/Seq container forms along
+  so vendor arrays keep their shape on the next write. Matching is
+  namespace-exact, not raw prefix: Adobe URIs nest (`xmpRights`, `xmpMM`,
+  `stEvt` all start with the `xmp` URI), so removing the `xmp` block leaves
+  those untouched.
+  ([`Sources/SwiftExif/XMP/XMPData.swift`](Sources/SwiftExif/XMP/XMPData.swift))
 
 ### Fixed
 
@@ -54,6 +75,23 @@ the CLI; the library target follows the same numbering.
 - **The XMP reader's depth-cap error message is no longer clobbered** by the
   generic "delegate aborted" error that `abortParsing()` reports through the
   same delegate callback.
+
+## [1.9.2] — 2026-06-11
+
+### Fixed
+
+- **ACR-style `rdf:Seq` structured arrays and attribute-form `rdf:li` parse
+  correctly.** Adobe Camera Raw writes `MaskGroupBasedCorrections` as
+  `rdf:Seq` (not Bag), and the nested `CorrectionMasks` items are
+  attribute-form `rdf:li` elements with no `rdf:Description` child. The reader
+  only prepared structured items for Bag and never read attributes off the
+  `li` itself, so the entire mask structure silently parsed as an empty array.
+  `li` now starts a structured item inside Seq as well as Bag and captures
+  namespaced attribute-form fields directly on the element. Plain string Seqs
+  are unaffected. Regression test uses the exact shape Camera Raw 18.3.2
+  writes. *(This section documents the already-pushed `1.9.2` tag, which
+  shipped without a changelog entry.)*
+  ([`Sources/SwiftExif/XMP/XMPReader.swift`](Sources/SwiftExif/XMP/XMPReader.swift))
 
 ## [1.9.1] — 2026-06-05
 

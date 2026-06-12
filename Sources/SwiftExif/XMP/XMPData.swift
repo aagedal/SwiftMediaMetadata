@@ -88,6 +88,56 @@ public struct XMPData: Equatable, Sendable {
         properties.removeValue(forKey: "\(namespace)\(property)")
     }
 
+    // MARK: - Namespace Blocks
+
+    /// All properties in a namespace, keyed by local property name.
+    ///
+    /// Matching is namespace-exact, not raw prefix: Adobe URIs nest (`xmpRights`,
+    /// `xmpMM`, `stEvt` all start with the `xmp` URI), so a key only belongs to
+    /// `namespace` when the remainder after it is a plain local name.
+    public func properties(in namespace: String) -> [String: XMPValue] {
+        var result: [String: XMPValue] = [:]
+        for (key, value) in properties {
+            if let local = Self.localName(of: key, in: namespace) {
+                result[local] = value
+            }
+        }
+        return result
+    }
+
+    /// Remove every property in a namespace — e.g. drop a file's whole `crs:`
+    /// Camera Raw settings block before applying another file's. Also clears the
+    /// parsed rdf container-form records for the removed keys. Namespace-exact,
+    /// see `properties(in:)`.
+    public mutating func removeAll(namespace: String) {
+        properties = properties.filter { Self.localName(of: $0.key, in: namespace) == nil }
+        arrayForms = arrayForms.filter { Self.localName(of: $0.key, in: namespace) == nil }
+    }
+
+    /// Replace this data's entire `namespace` block with `other`'s: every existing
+    /// property in the namespace is removed, then every property `other` carries in
+    /// it is copied over — including the container forms observed when `other` was
+    /// parsed, so arrays keep their rdf:Bag/Seq shape on the next write.
+    public mutating func replaceAll(namespace: String, from other: XMPData) {
+        removeAll(namespace: namespace)
+        for (key, value) in other.properties where Self.localName(of: key, in: namespace) != nil {
+            properties[key] = value
+        }
+        for (key, form) in other.arrayForms where Self.localName(of: key, in: namespace) != nil {
+            arrayForms[key] = form
+        }
+    }
+
+    /// The local property name when `key` belongs to exactly `namespace`, else nil.
+    /// Rejects remainders containing `/` or `#` — those keys belong to a longer
+    /// URI that merely shares this namespace as a prefix.
+    private static func localName(of key: String, in namespace: String) -> String? {
+        guard key.hasPrefix(namespace) else { return nil }
+        let local = key.dropFirst(namespace.count)
+        guard !local.isEmpty, !local.contains("/"), !local.contains("#") else { return nil }
+        return String(local)
+    }
+
     /// Get a simple string value.
     public func simpleValue(namespace: String, property: String) -> String? {
         if case .simple(let s) = value(namespace: namespace, property: property) { return s }
