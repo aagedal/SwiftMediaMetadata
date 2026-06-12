@@ -6,6 +6,55 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [Unreleased]
+
+### Fixed
+
+- **`rdf:Bag` vs `rdf:Seq` container parity with ExifTool.** The writer emitted
+  every array as `rdf:Bag`, so spec-ordered properties (`dc:creator`,
+  `xmpMM:History`, `tiff:BitsPerSample`, the `crs:` tone curves and
+  mask/gradient corrections, …) and vendor Seq arrays (digiKam's `TagsList`)
+  all collapsed to Bag on rewrite. Two mechanisms now pick the container,
+  mirroring ExifTool: a spec table of known-Seq properties
+  (`XMPWriter.seqProperties`) that is normalized to Seq regardless of input,
+  and the container form observed at parse time
+  (`XMPData.arrayForms`) for everything else, so unknown vendor arrays keep
+  whatever container they arrived in. Applies to nested struct fields too
+  (e.g. `crs:CorrectionMasks` inside a correction). `XMPValue` is unchanged —
+  no API break. Verified against ExifTool end-to-end: containers in a
+  `swift-exif write` rewrite now match what ExifTool itself writes for
+  `dc:creator` (Seq), `dc:subject` (Bag), `xmpMM:History` (Seq of structs),
+  and `XMP-digiKam:TagsList` (Seq).
+  ([`Sources/SwiftExif/XMP/XMPWriter.swift`](Sources/SwiftExif/XMP/XMPWriter.swift),
+  [`Sources/SwiftExif/XMP/XMPReader.swift`](Sources/SwiftExif/XMP/XMPReader.swift))
+
+- **XMP properties in unknown namespaces survive a rewrite.** The XMP reader
+  accepts any namespace the document declares (it honors live `xmlns`
+  declarations), but the writer could only serialize namespaces in its
+  hardcoded prefix table — so reading and rewriting a file silently dropped
+  digiKam / ACDSee / MicrosoftPhoto-style vendor properties. `XMPWriter` now
+  assigns generated `ns1`/`ns2`/… prefixes to namespaces outside the known
+  table, splitting the stored `"<namespaceURI><localName>"` key at its last
+  `/` or `#` (stable on round-trip even when the split point differs from the
+  original declaration). Verified end-to-end: `XMP-digiKam:ColorLabel` and
+  `TagsList` written by ExifTool survive a `swift-exif write` rewrite and read
+  back identically in ExifTool.
+  ([`Sources/SwiftExif/XMP/XMPWriter.swift`](Sources/SwiftExif/XMP/XMPWriter.swift))
+- **Newlines and tabs in simple XMP values survive a round-trip.** Simple
+  properties are serialized as XML attributes, and conforming XML parsers
+  normalize literal tab/LF/CR in attribute values to spaces (XML 1.0 §3.3.3) —
+  so a multi-line caption or instructions field came back flattened to one
+  line. `escapeXML` now emits them as character references (`&#xA;` etc.),
+  which ExifTool reads back as real newlines. Remaining C0 control characters
+  — illegal in XML 1.0 in any form, and previously emitted raw, making the
+  packet unparseable — are stripped.
+- **Region `unit` strings are XML-escaped on write.** `stArea:unit` and
+  `stDim:unit` were interpolated into the packet unescaped; a quote or angle
+  bracket in a file-supplied unit string corrupted the rewritten XMP.
+- **The XMP reader's depth-cap error message is no longer clobbered** by the
+  generic "delegate aborted" error that `abortParsing()` reports through the
+  same delegate callback.
+
 ## [1.9.1] — 2026-06-05
 
 ### Fixed

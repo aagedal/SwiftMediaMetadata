@@ -14,24 +14,39 @@ public struct XMPWriter: Sendable {
 
     /// Generate XMP XML string from properties.
     public static func generateXML(_ xmpData: XMPData) -> String {
+        // Gather every namespace referenced by any key (top-level and nested struct
+        // fields). Namespaces outside the known prefix table get a generated
+        // ns1/ns2/… prefix instead of being dropped — the reader accepts any
+        // document-declared namespace, so the writer must round-trip them too.
         var usedNamespaces: Set<String> = []
+        var unknownNamespaces: Set<String> = []
+        for key in xmpData.allKeys {
+            classifyKey(key, known: &usedNamespaces, unknown: &unknownNamespaces)
+            if let value = xmpData.value(forKey: key) {
+                collectNamespacesRecursive(value, known: &usedNamespaces, unknown: &unknownNamespaces)
+            }
+        }
+
+        var dynamicPrefixes: [String: String] = [:]
+        for (index, ns) in unknownNamespaces.sorted().enumerated() {
+            dynamicPrefixes[ns] = "ns\(index + 1)"
+        }
+
+        let context = EmitContext(dynamic: dynamicPrefixes, observed: xmpData.arrayForms)
 
         // Resolve every key once into (prefix, localName, namespace) and keep the value alongside —
         // the writer previously split each key three separate times via hasPrefix scans.
         struct ResolvedProp {
+            let key: String
             let prefix: String
             let localName: String
             let value: XMPValue
         }
 
         let resolved: [ResolvedProp] = xmpData.allKeys.sorted().compactMap { key in
-            guard let parts = resolveKey(key), let value = xmpData.value(forKey: key) else { return nil }
-            usedNamespaces.insert(parts.namespace)
-
-            // Scan nested structure field keys for additional namespaces in the same pass.
-            collectNamespacesRecursive(value, into: &usedNamespaces)
-
-            return ResolvedProp(prefix: parts.prefix, localName: parts.localName, value: value)
+            guard let parts = resolveKey(key, dynamic: dynamicPrefixes),
+                  let value = xmpData.value(forKey: key) else { return nil }
+            return ResolvedProp(key: key, prefix: parts.prefix, localName: parts.localName, value: value)
         }
 
         // Add region namespaces if needed
@@ -48,6 +63,9 @@ public struct XMPWriter: Sendable {
                 nsDeclarations += "\n   xmlns:\(prefix)=\"\(ns)\""
             }
         }
+        for ns in dynamicPrefixes.keys.sorted() {
+            nsDeclarations += "\n   xmlns:\(dynamicPrefixes[ns]!)=\"\(ns)\""
+        }
 
         // Build properties
         var simpleProps = ""
@@ -62,11 +80,12 @@ public struct XMPWriter: Sendable {
                 simpleProps += "\n   \(prefix):\(localName)=\"\(escapeXML(s))\""
 
             case .array(let items):
-                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>\n"
+                let container = containerElement(forKey: prop.key, context: context)
+                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:\(container)>\n"
                 for item in items {
                     complexProps += "    <rdf:li>\(escapeXML(item))</rdf:li>\n"
                 }
-                complexProps += "   </rdf:Bag>\n  </\(prefix):\(localName)>"
+                complexProps += "   </rdf:\(container)>\n  </\(prefix):\(localName)>"
 
             case .langAlternative(let s):
                 complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Alt>\n"
@@ -75,17 +94,18 @@ public struct XMPWriter: Sendable {
 
             case .structure(let fields):
                 complexProps += "\n  <\(prefix):\(localName)>"
-                complexProps += emitStructureBody(fields, indent: "   ")
+                complexProps += emitStructureBody(fields, indent: "   ", context: context)
                 complexProps += "\n  </\(prefix):\(localName)>"
 
             case .structuredArray(let items):
-                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Bag>"
+                let container = containerElement(forKey: prop.key, context: context)
+                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:\(container)>"
                 for item in items {
                     complexProps += "\n    <rdf:li>"
-                    complexProps += emitStructureBody(item, indent: "     ")
+                    complexProps += emitStructureBody(item, indent: "     ", context: context)
                     complexProps += "\n    </rdf:li>"
                 }
-                complexProps += "\n   </rdf:Bag>\n  </\(prefix):\(localName)>"
+                complexProps += "\n   </rdf:\(container)>\n  </\(prefix):\(localName)>"
             }
         }
 
@@ -127,7 +147,7 @@ public struct XMPWriter: Sendable {
         // AppliedToDimensions
         if let w = regionList.appliedToDimensionsW, let h = regionList.appliedToDimensionsH {
             let unit = regionList.appliedToDimensionsUnit ?? "pixel"
-            xml += "\n   <mwg-rs:AppliedToDimensions stDim:w=\"\(w)\" stDim:h=\"\(h)\" stDim:unit=\"\(unit)\"/>"
+            xml += "\n   <mwg-rs:AppliedToDimensions stDim:w=\"\(w)\" stDim:h=\"\(h)\" stDim:unit=\"\(escapeXML(unit))\"/>"
         }
 
         // RegionList
@@ -149,7 +169,7 @@ public struct XMPWriter: Sendable {
             let a = region.area
             xml += "\n       <mwg-rs:Area stArea:x=\"\(formatDouble(a.x))\" stArea:y=\"\(formatDouble(a.y))\""
             xml += " stArea:w=\"\(formatDouble(a.w))\" stArea:h=\"\(formatDouble(a.h))\""
-            xml += " stArea:unit=\"\(a.unit)\"/>"
+            xml += " stArea:unit=\"\(escapeXML(a.unit))\"/>"
             xml += "\n      </rdf:Description>"
             xml += "\n     </rdf:li>"
         }
@@ -172,13 +192,51 @@ public struct XMPWriter: Sendable {
 
     // MARK: - Private
 
+    /// Carried through the recursive emit helpers: generated prefixes for namespaces
+    /// outside the known table, plus the container forms observed when the data was parsed.
+    private struct EmitContext {
+        let dynamic: [String: String]
+        let observed: [String: XMPArrayForm]
+    }
+
+    /// Properties the XMP specification defines as ordered rdf:Seq arrays, keyed
+    /// "<namespaceURI><localName>" like everything else. The writer emits these as Seq
+    /// regardless of the parsed container — matching ExifTool, which normalizes
+    /// container types from its tag tables on write. Includes nested struct-field
+    /// keys (e.g. crs:CorrectionMasks inside a correction struct).
+    static let seqProperties: Set<String> = {
+        var keys: Set<String> = []
+        func add(_ ns: String, _ names: String...) {
+            for name in names { keys.insert("\(ns)\(name)") }
+        }
+        add(XMPNamespace.dc, "creator", "date")
+        add(XMPNamespace.xmpMM, "History", "Versions")
+        add(XMPNamespace.tiff, "BitsPerSample", "PrimaryChromaticities", "ReferenceBlackWhite",
+            "TransferFunction", "WhitePoint", "YCbCrCoefficients", "YCbCrSubSampling")
+        add(XMPNamespace.exif, "ComponentsConfiguration", "ISOSpeedRatings",
+            "SubjectArea", "SubjectLocation")
+        add(XMPNamespace.crs, "ToneCurve", "ToneCurveRed", "ToneCurveGreen", "ToneCurveBlue",
+            "ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue",
+            "GradientBasedCorrections", "PaintBasedCorrections", "CircularGradientBasedCorrections",
+            "MaskGroupBasedCorrections", "RetouchAreas", "CorrectionMasks", "Dabs")
+        add(XMPNamespace.xmpDM, "markers")
+        return keys
+    }()
+
+    /// The rdf container element ("Bag" or "Seq") for an array at `key`: the spec
+    /// table wins, then the form the array was parsed with, then Bag.
+    private static func containerElement(forKey key: String, context: EmitContext) -> String {
+        if seqProperties.contains(key) { return "Seq" }
+        return context.observed[key] == .seq ? "Seq" : "Bag"
+    }
+
     /// Sorted namespace list (longest first) to avoid prefix ambiguity.
     /// e.g. "http://ns.adobe.com/xap/1.0/rights/" must match before "http://ns.adobe.com/xap/1.0/"
     private static let sortedPrefixes: [(ns: String, prefix: String)] = {
         XMPNamespace.prefixes.sorted { $0.key.count > $1.key.count }.map { (ns: $0.key, prefix: $0.value) }
     }()
 
-    private static func resolveKey(_ key: String) -> (prefix: String, localName: String, namespace: String)? {
+    private static func resolveKey(_ key: String, dynamic: [String: String]) -> (prefix: String, localName: String, namespace: String)? {
         for entry in sortedPrefixes {
             if key.hasPrefix(entry.ns) {
                 let localName = String(key.dropFirst(entry.ns.count))
@@ -187,29 +245,62 @@ public struct XMPWriter: Sendable {
                 return (entry.prefix, localName, entry.ns)
             }
         }
+        if let split = splitUnknownKey(key), let prefix = dynamic[split.namespace] {
+            return (prefix, split.localName, split.namespace)
+        }
         return nil
     }
 
-    /// Add the namespace URI for any key that starts with a known prefix.
-    private static func collectNamespaces(from keys: some Sequence<String>, into set: inout Set<String>) {
-        for key in keys {
-            for entry in sortedPrefixes where key.hasPrefix(entry.ns) {
-                set.insert(entry.ns)
-                break
+    /// Split a `"<namespaceURI><localName>"` key from an unknown namespace at its last
+    /// '/' or '#'. XMP namespace URIs conventionally end with one of those, and an XML
+    /// local name can contain neither, so the rightmost split is stable: re-reading the
+    /// rewritten packet concatenates back to the identical key even when the split point
+    /// differs from the original document's declaration.
+    private static func splitUnknownKey(_ key: String) -> (namespace: String, localName: String)? {
+        guard let idx = key.lastIndex(where: { $0 == "/" || $0 == "#" }) else { return nil }
+        let namespace = String(key[...idx])
+        let localName = String(key[key.index(after: idx)...])
+        guard namespace.contains(":"), isValidXMLName(localName) else { return nil }
+        return (namespace, localName)
+    }
+
+    /// Conservative NCName check for generated element/attribute local names.
+    private static func isValidXMLName(_ name: String) -> Bool {
+        guard let first = name.first, first.isLetter || first == "_" else { return false }
+        return name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }
+    }
+
+    /// Record the key's namespace: a known-table match goes to `known`; otherwise, when
+    /// the key splits into a plausible URI + XML name, the URI goes to `unknown` (and
+    /// later gets a generated prefix). Mirrors `resolveKey` so every classified key is
+    /// actually serializable.
+    private static func classifyKey(_ key: String, known: inout Set<String>, unknown: inout Set<String>) {
+        for entry in sortedPrefixes where key.hasPrefix(entry.ns) {
+            let localName = key.dropFirst(entry.ns.count)
+            if !localName.isEmpty && !localName.contains("/") {
+                known.insert(entry.ns)
+                return
             }
+        }
+        if let split = splitUnknownKey(key) {
+            unknown.insert(split.namespace)
         }
     }
 
     /// Recursively collect namespaces referenced by an XMPValue's nested fields.
-    private static func collectNamespacesRecursive(_ value: XMPValue, into set: inout Set<String>) {
+    private static func collectNamespacesRecursive(_ value: XMPValue, known: inout Set<String>, unknown: inout Set<String>) {
         switch value {
         case .structure(let fields):
-            collectNamespaces(from: fields.keys, into: &set)
-            for (_, child) in fields { collectNamespacesRecursive(child, into: &set) }
+            for (key, child) in fields {
+                classifyKey(key, known: &known, unknown: &unknown)
+                collectNamespacesRecursive(child, known: &known, unknown: &unknown)
+            }
         case .structuredArray(let items):
             for item in items {
-                collectNamespaces(from: item.keys, into: &set)
-                for (_, child) in item { collectNamespacesRecursive(child, into: &set) }
+                for (key, child) in item {
+                    classifyKey(key, known: &known, unknown: &unknown)
+                    collectNamespacesRecursive(child, known: &known, unknown: &unknown)
+                }
             }
         case .simple, .array, .langAlternative:
             return
@@ -219,16 +310,16 @@ public struct XMPWriter: Sendable {
     /// Serialize a struct's fields as an `<rdf:Description>` element. `.simple` fields are emitted
     /// as XML attributes (compact form, preserving the existing on-disk shape for flat structures);
     /// any non-simple field becomes a child element so nested arrays/structs round-trip.
-    private static func emitStructureBody(_ fields: [String: XMPValue], indent: String) -> String {
+    private static func emitStructureBody(_ fields: [String: XMPValue], indent: String, context: EmitContext) -> String {
         var attrs: [(prefix: String, localName: String, value: String)] = []
-        var children: [(prefix: String, localName: String, value: XMPValue)] = []
+        var children: [(key: String, prefix: String, localName: String, value: XMPValue)] = []
 
         for (fieldKey, fieldValue) in fields.sorted(by: { $0.key < $1.key }) {
-            guard let parts = resolveKey(fieldKey) else { continue }
+            guard let parts = resolveKey(fieldKey, dynamic: context.dynamic) else { continue }
             if case .simple(let s) = fieldValue {
                 attrs.append((parts.prefix, parts.localName, s))
             } else {
-                children.append((parts.prefix, parts.localName, fieldValue))
+                children.append((fieldKey, parts.prefix, parts.localName, fieldValue))
             }
         }
 
@@ -241,7 +332,7 @@ public struct XMPWriter: Sendable {
         } else {
             xml += ">"
             for child in children {
-                xml += emitFieldElement(prefix: child.prefix, localName: child.localName, value: child.value, indent: indent + " ")
+                xml += emitFieldElement(key: child.key, prefix: child.prefix, localName: child.localName, value: child.value, indent: indent + " ", context: context)
             }
             xml += "\n\(indent)</rdf:Description>"
         }
@@ -249,7 +340,7 @@ public struct XMPWriter: Sendable {
     }
 
     /// Serialize a single field as a child element of an enclosing `<rdf:Description>`.
-    private static func emitFieldElement(prefix: String, localName: String, value: XMPValue, indent: String) -> String {
+    private static func emitFieldElement(key: String, prefix: String, localName: String, value: XMPValue, indent: String, context: EmitContext) -> String {
         var xml = "\n\(indent)<\(prefix):\(localName)>"
         switch value {
         case .simple(let s):
@@ -257,35 +348,54 @@ public struct XMPWriter: Sendable {
             // simple value mixed in among complex children. Round-trips back through the reader.
             xml += escapeXML(s)
         case .array(let items):
-            xml += "\n\(indent) <rdf:Bag>"
+            let container = containerElement(forKey: key, context: context)
+            xml += "\n\(indent) <rdf:\(container)>"
             for item in items {
                 xml += "\n\(indent)  <rdf:li>\(escapeXML(item))</rdf:li>"
             }
-            xml += "\n\(indent) </rdf:Bag>"
+            xml += "\n\(indent) </rdf:\(container)>"
         case .langAlternative(let s):
             xml += "\n\(indent) <rdf:Alt>"
             xml += "\n\(indent)  <rdf:li xml:lang=\"x-default\">\(escapeXML(s))</rdf:li>"
             xml += "\n\(indent) </rdf:Alt>"
         case .structure(let fields):
-            xml += emitStructureBody(fields, indent: indent + " ")
+            xml += emitStructureBody(fields, indent: indent + " ", context: context)
         case .structuredArray(let items):
-            xml += "\n\(indent) <rdf:Bag>"
+            let container = containerElement(forKey: key, context: context)
+            xml += "\n\(indent) <rdf:\(container)>"
             for item in items {
                 xml += "\n\(indent)  <rdf:li>"
-                xml += emitStructureBody(item, indent: indent + "   ")
+                xml += emitStructureBody(item, indent: indent + "   ", context: context)
                 xml += "\n\(indent)  </rdf:li>"
             }
-            xml += "\n\(indent) </rdf:Bag>"
+            xml += "\n\(indent) </rdf:\(container)>"
         }
         xml += "\n\(indent)</\(prefix):\(localName)>"
         return xml
     }
 
+    /// Escape a string for use in XML attribute values or element content.
+    /// Tab/LF/CR become character references — required in attribute values, where a
+    /// conforming parser normalizes the literal characters to spaces (XML 1.0 §3.3.3),
+    /// which would silently flatten multi-line captions on round-trip. Remaining
+    /// C0 control characters are illegal in XML 1.0 in any form and are stripped.
     private static func escapeXML(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
+        var out = String()
+        out.reserveCapacity(string.utf8.count)
+        for scalar in string.unicodeScalars {
+            switch scalar {
+            case "&": out += "&amp;"
+            case "<": out += "&lt;"
+            case ">": out += "&gt;"
+            case "\"": out += "&quot;"
+            case "\n": out += "&#xA;"
+            case "\r": out += "&#xD;"
+            case "\t": out += "&#x9;"
+            default:
+                if scalar.value < 0x20 { continue }
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
 }

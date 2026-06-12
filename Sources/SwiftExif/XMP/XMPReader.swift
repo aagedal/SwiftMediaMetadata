@@ -65,6 +65,8 @@ public struct XMPReader: Sendable {
 private class XMPXMLParser: NSObject, XMLParserDelegate {
     let xmlString: String
     private var properties: [String: XMPValue] = [:]
+    /// Container form (Bag vs Seq) per array key, so the writer can round-trip it.
+    private var arrayForms: [String: XMPArrayForm] = [:]
     private var currentElement = ""
     private var currentNamespace = ""
     private var currentText = ""
@@ -161,7 +163,9 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
             throw error
         }
 
-        return XMPData(xmlString: xmlString, properties: properties, regions: regionList)
+        var result = XMPData(xmlString: xmlString, properties: properties, regions: regionList)
+        result.arrayForms = arrayForms
+        return result
     }
 
     // MARK: - XMLParserDelegate
@@ -533,10 +537,14 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
                 builtValue = .array(currentArrayItems)
             }
 
+            let form: XMPArrayForm = elementName == "Seq" ? .seq : .bag
             if let frame = frameStack.last, frame.triggeringElement == elementName {
+                arrayForms[frame.parentFieldKey] = form
                 ascend(value: builtValue)
             } else if !currentArrayNamespace.isEmpty && !currentArrayProperty.isEmpty {
-                properties["\(currentArrayNamespace)\(currentArrayProperty)"] = builtValue
+                let key = "\(currentArrayNamespace)\(currentArrayProperty)"
+                properties[key] = builtValue
+                arrayForms[key] = form
                 inBag = false
                 inSeq = false
                 isStructuredBag = false
@@ -576,7 +584,11 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
-        self.parseError = MetadataError.invalidXMP(parseError.localizedDescription)
+        // Keep the first error: abortParsing() (frame-depth cap) reports a generic
+        // "delegate aborted" error here that must not clobber the specific message.
+        if self.parseError == nil {
+            self.parseError = MetadataError.invalidXMP(parseError.localizedDescription)
+        }
     }
 
     func parser(_ parser: XMLParser, didStartMappingPrefix prefix: String, toURI namespaceURI: String) {

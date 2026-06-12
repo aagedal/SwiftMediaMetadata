@@ -40,6 +40,15 @@ public extension Dictionary where Key == String, Value == XMPValue {
     }
 }
 
+/// The rdf container element an XMP array was carried in. `XMPValue.array` /
+/// `.structuredArray` deliberately don't distinguish Bag from Seq (consumers
+/// rarely care), so the parsed form is tracked alongside the properties and
+/// consulted on write to round-trip the original container.
+public enum XMPArrayForm: Equatable, Sendable {
+    case bag
+    case seq
+}
+
 /// Parsed XMP metadata.
 public struct XMPData: Equatable, Sendable {
     /// The raw XMP XML string (preserved for round-trip fidelity when possible).
@@ -51,10 +60,18 @@ public struct XMPData: Equatable, Sendable {
     /// Face/object regions (MWG Regions specification).
     public var regions: XMPRegionList?
 
+    /// Container form (Bag vs Seq) observed per array key when this data was parsed
+    /// from a packet, keyed like `properties` — including nested struct-field keys.
+    /// The writer uses this so vendor arrays it has no spec knowledge of keep their
+    /// original container; spec-defined Seq properties are normalized regardless
+    /// (mirroring ExifTool, which writes container types from its tag tables).
+    var arrayForms: [String: XMPArrayForm]
+
     public init(xmlString: String = "", properties: [String: XMPValue] = [:], regions: XMPRegionList? = nil) {
         self.xmlString = xmlString
         self.properties = properties
         self.regions = regions
+        self.arrayForms = [:]
     }
 
     // MARK: - Property Access

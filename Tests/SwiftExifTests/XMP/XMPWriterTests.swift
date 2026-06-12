@@ -114,4 +114,179 @@ final class XMPWriterTests: XCTestCase {
         xmp.rating = nil
         XCTAssertNil(xmp.rating)
     }
+
+    // MARK: - Round-trip fidelity
+
+    func testUnknownNamespacePropertySurvivesRewrite() throws {
+        // digiKam's namespace is not in XMPNamespace.prefixes — the reader stores it
+        // (it honors the document's live xmlns declarations), so the writer must not
+        // silently drop it on rewrite.
+        let source = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+         <rdf:Description rdf:about=""
+            xmlns:digiKam="http://www.digikam.org/ns/1.0/"
+            digiKam:ColorLabel="3">
+          <digiKam:TagsList>
+           <rdf:Seq>
+            <rdf:li>People/Family</rdf:li>
+            <rdf:li>Places/Norway</rdf:li>
+           </rdf:Seq>
+          </digiKam:TagsList>
+         </rdf:Description>
+        </rdf:RDF>
+        </x:xmpmeta>
+        """
+        let parsed = try XMPReader.readFromXML(Data(source.utf8))
+        let ns = "http://www.digikam.org/ns/1.0/"
+        XCTAssertEqual(parsed.simpleValue(namespace: ns, property: "ColorLabel"), "3")
+        XCTAssertEqual(parsed.arrayValue(namespace: ns, property: "TagsList"), ["People/Family", "Places/Norway"])
+
+        let rewritten = XMPWriter.generateXML(parsed)
+        let reparsed = try XMPReader.readFromXML(Data(rewritten.utf8))
+        XCTAssertEqual(reparsed.simpleValue(namespace: ns, property: "ColorLabel"), "3")
+        XCTAssertEqual(reparsed.arrayValue(namespace: ns, property: "TagsList"), ["People/Family", "Places/Norway"])
+    }
+
+    func testNewlinesAndTabsSurviveRoundTrip() throws {
+        // Simple values are serialized as XML attributes; raw newlines/tabs in attribute
+        // values are normalized to spaces by every conforming XML parser, so the writer
+        // must emit them as character references.
+        var xmp = XMPData()
+        xmp.setValue(.simple("line one\nline two\ttabbed\r\nend"),
+                     namespace: XMPNamespace.photoshop, property: "Instructions")
+
+        let xml = XMPWriter.generateXML(xmp)
+        let decoded = try XMPReader.readFromXML(Data(xml.utf8))
+        XCTAssertEqual(
+            decoded.simpleValue(namespace: XMPNamespace.photoshop, property: "Instructions"),
+            "line one\nline two\ttabbed\r\nend"
+        )
+    }
+
+    func testControlCharactersAreStripped() throws {
+        // Chars below U+0020 (other than tab/LF/CR) are illegal in XML 1.0 even as
+        // character references — emitting them raw makes the packet unparseable.
+        var xmp = XMPData()
+        xmp.headline = "bad\u{01}\u{0B}value"
+
+        let xml = XMPWriter.generateXML(xmp)
+        let decoded = try XMPReader.readFromXML(Data(xml.utf8))
+        XCTAssertEqual(decoded.headline, "badvalue")
+    }
+
+    // MARK: - rdf:Bag vs rdf:Seq container parity (ExifTool behavior)
+
+    func testCreatorWrittenAsSeq() {
+        // dc:creator is spec-defined as an ordered rdf:Seq; ExifTool always writes it
+        // as Seq, so a programmatically set value must normalize even though
+        // XMPValue.array carries no container form.
+        var xmp = XMPData()
+        xmp.creator = ["Ansel Adams"]
+
+        let xml = XMPWriter.generateXML(xmp)
+        XCTAssertTrue(xml.contains("<rdf:Seq>"))
+        XCTAssertFalse(xml.contains("<rdf:Bag>"))
+    }
+
+    func testSubjectStaysBag() {
+        var xmp = XMPData()
+        xmp.subject = ["news"]
+
+        let xml = XMPWriter.generateXML(xmp)
+        XCTAssertTrue(xml.contains("<rdf:Bag>"))
+        XCTAssertFalse(xml.contains("<rdf:Seq>"))
+    }
+
+    func testVendorSeqContainerSurvivesRewrite() throws {
+        // For arrays outside the spec table, the container form observed at parse
+        // time must round-trip (digiKam writes TagsList as rdf:Seq).
+        let source = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+         <rdf:Description rdf:about="" xmlns:digiKam="http://www.digikam.org/ns/1.0/">
+          <digiKam:TagsList>
+           <rdf:Seq>
+            <rdf:li>People/Family</rdf:li>
+           </rdf:Seq>
+          </digiKam:TagsList>
+          <digiKam:PickLabel>
+           <rdf:Bag>
+            <rdf:li>2</rdf:li>
+           </rdf:Bag>
+          </digiKam:PickLabel>
+         </rdf:Description>
+        </rdf:RDF>
+        </x:xmpmeta>
+        """
+        let parsed = try XMPReader.readFromXML(Data(source.utf8))
+        let rewritten = XMPWriter.generateXML(parsed)
+
+        XCTAssertNotNil(rewritten.range(of: "<digiKam:TagsList>\\s*<rdf:Seq>", options: .regularExpression)
+            ?? rewritten.range(of: "<ns1:TagsList>\\s*<rdf:Seq>", options: .regularExpression))
+        XCTAssertNotNil(rewritten.range(of: "<ns1:PickLabel>\\s*<rdf:Bag>", options: .regularExpression))
+    }
+
+    func testACRMaskCorrectionsRewrittenAsSeq() throws {
+        // crs:MaskGroupBasedCorrections and the nested crs:CorrectionMasks are both
+        // spec'd as rdf:Seq — the writer must not flatten them to Bag on rewrite.
+        let crsNS = "http://ns.adobe.com/camera-raw-settings/1.0/"
+        let source = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+         <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="\(crsNS)">
+           <crs:MaskGroupBasedCorrections>
+            <rdf:Seq>
+             <rdf:li>
+              <rdf:Description crs:What="Correction" crs:CorrectionName="Mask 1">
+               <crs:CorrectionMasks>
+                <rdf:Seq>
+                 <rdf:li crs:What="Mask/CircularGradient" crs:MaskName="Radial Gradient 1"/>
+                </rdf:Seq>
+               </crs:CorrectionMasks>
+              </rdf:Description>
+             </rdf:li>
+            </rdf:Seq>
+           </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+         </rdf:RDF>
+        </x:xmpmeta>
+        """
+        let parsed = try XMPReader.readFromXML(Data(source.utf8))
+        let rewritten = XMPWriter.generateXML(parsed)
+        XCTAssertFalse(rewritten.contains("<rdf:Bag>"))
+        XCTAssertEqual(rewritten.components(separatedBy: "<rdf:Seq>").count - 1, 2)
+
+        // And the reparse still carries the full nested shape.
+        let reparsed = try XMPReader.readFromXML(Data(rewritten.utf8))
+        let outer = reparsed.structuredArrayValue(namespace: crsNS, property: "MaskGroupBasedCorrections")
+        XCTAssertEqual(outer?.count, 1)
+        guard case .structuredArray(let masks)? = outer?[0]["\(crsNS)CorrectionMasks"] else {
+            XCTFail("nested CorrectionMasks lost on rewrite")
+            return
+        }
+        XCTAssertEqual(masks.first?["\(crsNS)MaskName"], .simple("Radial Gradient 1"))
+    }
+
+    func testRegionUnitWithSpecialCharactersProducesValidXML() throws {
+        // Area/dimension unit strings come straight from the source file; a quote in
+        // them must not break the rewritten packet.
+        var xmp = XMPData()
+        xmp.regions = XMPRegionList(
+            regions: [XMPRegion(
+                name: "Face",
+                type: .face,
+                area: XMPRegionArea(x: 0.5, y: 0.5, w: 0.1, h: 0.1, unit: "norm\"alized"),
+                description: nil
+            )],
+            appliedToDimensionsW: 100,
+            appliedToDimensionsH: 100,
+            appliedToDimensionsUnit: "pix\"el"
+        )
+
+        let xml = XMPWriter.generateXML(xmp)
+        let decoded = try XMPReader.readFromXML(Data(xml.utf8))
+        XCTAssertEqual(decoded.regions?.regions.first?.area.unit, "norm\"alized")
+        XCTAssertEqual(decoded.regions?.appliedToDimensionsUnit, "pix\"el")
+    }
 }
