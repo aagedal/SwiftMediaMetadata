@@ -131,10 +131,21 @@ public struct ImageMetadata: Sendable {
         /// Default: "_original".
         public var backupSuffix: String
 
-        public init(atomic: Bool = true, createBackup: Bool = false, backupSuffix: String = "_original") {
+        /// Allow embedding metadata into a proprietary TIFF-based RAW container
+        /// (Sony ARW, Nikon NEF, Canon CR2, Panasonic RW2, Olympus ORF, …).
+        /// Default: false. These formats are rewritten by `TIFFWriter`, which cannot
+        /// preserve maker-private structures such as Sony's encrypted SR2Private
+        /// white-balance block — so the write corrupts the file (broken decode + bloat).
+        /// RAW metadata belongs in an XMP sidecar. DNG/GPR (Adobe's open, writable TIFF
+        /// spec) and CR3 (ISOBMFF, dedicated writer) are not affected by this guard.
+        /// Only enable if you have verified the specific format round-trips losslessly.
+        public var allowUnsafeRawEmbed: Bool
+
+        public init(atomic: Bool = true, createBackup: Bool = false, backupSuffix: String = "_original", allowUnsafeRawEmbed: Bool = false) {
             self.atomic = atomic
             self.createBackup = createBackup
             self.backupSuffix = backupSuffix
+            self.allowUnsafeRawEmbed = allowUnsafeRawEmbed
         }
 
         /// Default options: atomic write, no backup.
@@ -203,6 +214,13 @@ public struct ImageMetadata: Sendable {
     /// - Returns: non-fatal write warnings (see `writeToDataWithWarnings()`).
     @discardableResult
     public func write(to url: URL, options: WriteOptions) throws -> [String] {
+        // Refuse to overwrite a proprietary TIFF-based RAW: TIFFWriter's full IFD
+        // rebuild can't preserve maker-private blocks (e.g. Sony's encrypted
+        // SR2Private), so the rewrite corrupts the file. RAW metadata belongs in an
+        // XMP sidecar. Callers that have verified a format opt in via WriteOptions.
+        if !options.allowUnsafeRawEmbed, let rawFormat = unsafeRawWriteFormat(url: url) {
+            throw MetadataError.rawWriteUnsupported(rawFormat)
+        }
         let (data, warnings) = try writeToDataWithWarnings()
         let fm = FileManager.default
 
@@ -230,6 +248,31 @@ public struct ImageMetadata: Sendable {
             try data.write(to: url)
         }
         return warnings
+    }
+
+    /// Returns the proprietary RAW format when writing back to `url` would rewrite a
+    /// TIFF-based RAW that cannot safely round-trip its maker-private data — otherwise nil.
+    ///
+    /// Only the `.tiff` container path goes through `TIFFWriter`'s full IFD rebuild (the
+    /// step that breaks Sony's encrypted SR2Private and bloats the raster). The precise
+    /// format is recovered from the parsed bytes — an ARW/NEF/CR2/RW2/ORF/PEF/SRW reports
+    /// as a TIFF container — falling back to the extension if content detection is
+    /// inconclusive. DNG/GPR are Adobe's open, writable TIFF spec and are allowed; CR3
+    /// (ISOBMFF, its own writer) never reaches this path.
+    private func unsafeRawWriteFormat(url: URL) -> ImageFormat.RawFormat? {
+        guard case .tiff(let file) = container else { return nil }
+        // Refuse if EITHER the parsed content OR the target extension says proprietary RAW.
+        // A real ARW/NEF detects by content; the extension is a backstop for odd/truncated
+        // variants where content detection falls back to plain TIFF. DNG/GPR (open, writable)
+        // are never refused.
+        for case .raw(let raw)? in [FormatDetector.detect(file.rawData),
+                                    FormatDetector.detectFromExtension(url.pathExtension)] {
+            switch raw {
+            case .dng, .gpr: continue
+            default: return raw
+            }
+        }
+        return nil
     }
 
     /// Get the backup URL for a given file URL.

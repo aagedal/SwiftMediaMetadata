@@ -6,6 +6,33 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.9.4] — 2026-06-13
+
+### Changed
+
+- **`ImageMetadata.write(to:)` now refuses to embed metadata into proprietary
+  TIFF-based RAW by default.** Rewriting an ARW/NEF/NRW/CR2/RW2/ORF/PEF/SRW via
+  `TIFFWriter`'s full IFD rebuild cannot preserve maker-private structures —
+  notably Sony's encrypted `SR2Private` block, which holds the white-balance
+  calibration. The rewrite corrupted the file: the RAW then decoded with a
+  broken white balance (e.g. CIRAWFilter fell back to a garbage neutral and
+  rendered green) and the raster bloated with orphaned data; `exiftool
+  -validate` reported "SR2Private parsing aborted" alongside an XMP/Photoshop
+  packet embedded into IFD0. Such writes now throw
+  `MetadataError.rawWriteUnsupported`. RAW metadata belongs in an XMP sidecar.
+  DNG/GPR (Adobe's open, writable TIFF spec) and CR3 (ISOBMFF, its own writer)
+  are unaffected. The format is detected from parsed content, with the target
+  extension as a backstop for odd/truncated variants.
+  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
+
+### Added
+
+- **`WriteOptions.allowUnsafeRawEmbed`** (default `false`) to opt back into RAW
+  embedding for callers that have verified a specific format round-trips
+  losslessly, and **`MetadataError.rawWriteUnsupported(ImageFormat.RawFormat)`**
+  to surface the refusal with the offending format.
+  ([`Sources/SwiftExif/API/MetadataError.swift`](Sources/SwiftExif/API/MetadataError.swift))
+
 ## [1.9.3] — 2026-06-12
 
 ### Added

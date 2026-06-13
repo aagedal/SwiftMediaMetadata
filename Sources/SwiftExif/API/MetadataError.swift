@@ -17,6 +17,12 @@ public enum MetadataError: LocalizedError, Sendable, CustomStringConvertible {
     case fileWriteError(String)
     case dataExceedsMaxLength(tag: String, max: Int, actual: Int)
     case unsupportedFormat
+    /// Refused an attempt to embed metadata into a proprietary TIFF-based RAW
+    /// (e.g. Sony ARW, Nikon NEF). Rewriting these containers cannot preserve
+    /// maker-private structures such as Sony's encrypted SR2Private white-balance
+    /// block, so the write would corrupt the file. Write metadata to an XMP
+    /// sidecar instead, or pass `WriteOptions.allowUnsafeRawEmbed` to override.
+    case rawWriteUnsupported(ImageFormat.RawFormat)
     case invalidPNG(String)
     case invalidJPEGXL(String)
     case invalidAVIF(String)
@@ -78,6 +84,8 @@ public enum MetadataError: LocalizedError, Sendable, CustomStringConvertible {
             return "Data for \(tag) exceeds max length (\(actual) > \(max))"
         case .unsupportedFormat:
             return "Unsupported image format"
+        case .rawWriteUnsupported(let format):
+            return "Refusing to embed metadata into proprietary RAW (.\(format.rawValue)) — rewriting it would corrupt maker-private data (e.g. Sony SR2Private). Use an XMP sidecar, or pass WriteOptions.allowUnsafeRawEmbed to override."
         case .invalidPNG(let detail):
             return "Invalid PNG: \(detail)"
         case .invalidJPEGXL(let detail):
