@@ -32,7 +32,11 @@ public struct JXLParser: Sendable {
             // Codestream bytes after the 2-byte signature.
             let csTail = data.suffix(from: data.startIndex + 2)
             let dims = decodeSizeHeader(csTail)
-            return JXLFile(isContainer: false, imageDimensions: dims)
+            // Retain the full codestream (including the FF 0A signature) so the
+            // writer can losslessly wrap it into container format if metadata
+            // boxes need to be added. Copy to drop any slice base-offset.
+            return JXLFile(isContainer: false, imageDimensions: dims,
+                           rawCodestream: Data(data))
         }
 
         throw MetadataError.invalidJPEGXL("Not a valid JPEG XL file")

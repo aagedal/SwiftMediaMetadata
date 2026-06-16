@@ -10,12 +10,19 @@ public struct JXLFile: Sendable {
     /// available. Set at parse time so callers don't need access to the
     /// raw codestream bytes.
     public let imageDimensions: (width: Int, height: Int)?
+    /// The full bare-codestream bytes (including the `FF 0A` signature),
+    /// retained only for bare files (`isContainer == false`). The writer
+    /// uses these to losslessly wrap the codestream into container format
+    /// when metadata boxes must be added; nil for container files.
+    public let rawCodestream: Data?
 
     public init(isContainer: Bool, boxes: [ISOBMFFBox] = [],
-                imageDimensions: (width: Int, height: Int)? = nil) {
+                imageDimensions: (width: Int, height: Int)? = nil,
+                rawCodestream: Data? = nil) {
         self.isContainer = isContainer
         self.boxes = boxes
         self.imageDimensions = imageDimensions
+        self.rawCodestream = rawCodestream
     }
 
     /// Find the first box of the given type.

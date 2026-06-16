@@ -6,6 +6,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.9.5] — 2026-06-16
+
+### Changed
+
+- **`ImageMetadata.write(to:)` now losslessly wraps a bare JPEG XL codestream
+  into container format instead of refusing the write.** A bare codestream
+  (`FF 0A …`) has no box structure to hold an `Exif`/`xml ` box, so any metadata
+  write — orientation (rotate), keywords, rating, GPS, IPTC — previously threw
+  `MetadataError.writeNotSupported("…container format required")`. The writer now
+  wraps the codestream in a container (`JXL ` signature + `ftyp` + metadata boxes
+  + a `jxlc` box holding the codestream copied byte-for-byte, no re-encode),
+  giving those boxes a home. A bare file with nothing to embed is returned
+  unchanged, and re-writing an already-wrapped file replaces its metadata boxes
+  in place rather than wrapping again.
+  ([`Sources/SwiftExif/JPEGXL/JXLWriter.swift`](Sources/SwiftExif/JPEGXL/JXLWriter.swift))
+
+### Added
+
+- **`JXLFile.rawCodestream`** retains the original bare-codestream bytes
+  (including the `FF 0A` signature) at parse time so the writer can wrap them on
+  demand; nil for container files.
+  ([`Sources/SwiftExif/JPEGXL/JXLFile.swift`](Sources/SwiftExif/JPEGXL/JXLFile.swift))
+
 ## [1.9.4] — 2026-06-13
 
 ### Changed

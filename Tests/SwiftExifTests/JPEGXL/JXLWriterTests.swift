@@ -46,17 +46,74 @@ final class JXLWriterTests: XCTestCase {
         XCTAssertEqual(reparsed.xmp?.city, "Oslo")
     }
 
-    func testBareCodestreamThrows() throws {
+    func testBareCodestreamUnchangedWhenNoMetadata() throws {
+        // Writing a bare codestream with nothing to embed is a no-op: the
+        // bytes must come back byte-for-byte identical (no needless wrap).
         let bare = TestFixtures.bareJXLCodestream()
         let metadata = try ImageMetadata.read(from: bare)
 
-        XCTAssertThrowsError(try metadata.writeToData()) { error in
-            guard let metaError = error as? MetadataError,
-                  case .writeNotSupported = metaError else {
-                XCTFail("Expected writeNotSupported error, got: \(error)")
-                return
-            }
-        }
+        let written = try metadata.writeToData()
+        XCTAssertEqual(written, bare)
+    }
+
+    func testBareCodestreamWrapsIntoContainerWhenAddingMetadata() throws {
+        let bare = TestFixtures.bareJXLCodestream()
+        var metadata = try ImageMetadata.read(from: bare)
+
+        // Rotating a bare-codestream JXL: the codestream has no box to hold an
+        // Exif orientation tag, so the writer wraps it into container format.
+        metadata.setOrientation(6)
+        let written = try metadata.writeToData()
+
+        let reparsed = try JXLParser.parse(written)
+        XCTAssertTrue(reparsed.isContainer, "Bare codestream must be wrapped into container format")
+        XCTAssertEqual(reparsed.findBox("jxlc")?.data, bare, "Codestream must be copied verbatim")
+        XCTAssertNotNil(reparsed.findBox("Exif"), "Orientation must be stored in an Exif box")
+
+        let remeta = try ImageMetadata.read(from: written)
+        XCTAssertEqual(remeta.exif?.orientation, 6)
+    }
+
+    func testBareCodestreamWrappedOnceNotPerWrite() throws {
+        // Rotating a bare JXL twice must wrap exactly once: the first write
+        // wraps bare→container, the second sees a container and replaces the
+        // Exif box in place — no duplicate ftyp/jxlc/Exif, no nested wrap.
+        let bare = TestFixtures.bareJXLCodestream()
+        var first = try ImageMetadata.read(from: bare)
+        first.setOrientation(6)
+        let afterFirst = try first.writeToData()
+
+        var second = try ImageMetadata.read(from: afterFirst)
+        second.setOrientation(8)
+        let afterSecond = try second.writeToData()
+
+        let reparsed = try JXLParser.parse(afterSecond)
+        XCTAssertEqual(reparsed.boxes.filter { $0.type == "ftyp" }.count, 1)
+        XCTAssertEqual(reparsed.boxes.filter { $0.type == "jxlc" }.count, 1)
+        XCTAssertEqual(reparsed.boxes.filter { $0.type == "Exif" }.count, 1)
+        XCTAssertEqual(reparsed.findBox("jxlc")?.data, bare, "Codestream must stay verbatim across re-writes")
+        XCTAssertEqual(try ImageMetadata.read(from: afterSecond).exif?.orientation, 8)
+    }
+
+    func testBareCodestreamWrapsForXMPMetadata() throws {
+        // The wrap is not orientation-specific: any descriptive metadata write
+        // (here XMP keywords/headline) on a bare codestream wraps the same way.
+        let bare = TestFixtures.bareJXLCodestream()
+        var metadata = try ImageMetadata.read(from: bare)
+
+        metadata.xmp = XMPData()
+        metadata.xmp?.headline = "Bare Wrap"
+        metadata.xmp?.city = "Oslo"
+        let written = try metadata.writeToData()
+
+        let reparsed = try JXLParser.parse(written)
+        XCTAssertTrue(reparsed.isContainer, "Bare codestream must be wrapped into container format")
+        XCTAssertEqual(reparsed.findBox("jxlc")?.data, bare, "Codestream must be copied verbatim")
+        XCTAssertNotNil(reparsed.findBox("xml "), "XMP must be stored in an xml box")
+
+        let remeta = try ImageMetadata.read(from: written)
+        XCTAssertEqual(remeta.xmp?.headline, "Bare Wrap")
+        XCTAssertEqual(remeta.xmp?.city, "Oslo")
     }
 
     func testAddExifToEmpty() throws {
