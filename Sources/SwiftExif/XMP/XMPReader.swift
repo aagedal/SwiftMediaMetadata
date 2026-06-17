@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(FoundationXML)
-import FoundationXML
-#endif
 
 /// Parse XMP XML from an APP1 segment or raw XML data.
 public struct XMPReader: Sendable {
@@ -62,8 +59,11 @@ public struct XMPReader: Sendable {
 
 // MARK: - SAX Parser
 
-private class XMPXMLParser: NSObject, XMLParserDelegate {
+private final class XMPXMLParser: PureXMLEvents {
     let xmlString: String
+    /// Set when the frame-depth cap is hit; polled by the tokenizer via `shouldStop` to halt.
+    private var aborted = false
+    var shouldStop: Bool { aborted }
     private var properties: [String: XMPValue] = [:]
     /// Container form (Bag vs Seq) per array key, so the writer can round-trip it.
     private var arrayForms: [String: XMPArrayForm] = [:]
@@ -149,15 +149,9 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     }
 
     func parse() throws -> XMPData {
-        guard let data = xmlString.data(using: .utf8) else {
-            throw MetadataError.invalidXMP("Failed to encode XML as UTF-8")
-        }
-
-        let parser = XMLParser(data: data)
-        parser.delegate = self
-        parser.shouldProcessNamespaces = true
-        parser.shouldReportNamespacePrefixes = true
-        parser.parse()
+        // Pure-Swift tokenizer (no libxml2) drives the same SAX building logic — see
+        // PureXMLTokenizer for why Foundation's XMLParser is avoided here.
+        PureXMLTokenizer().parse(xmlString, events: self)
 
         if let error = parseError {
             throw error
@@ -168,9 +162,9 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         return result
     }
 
-    // MARK: - XMLParserDelegate
+    // MARK: - PureXMLEvents
 
-    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String]) {
+    func startElement(_ elementName: String, namespaceURI: String?, attributes attributeDict: [String: String]) {
         currentText = ""
 
         // MWG Region handling
@@ -258,7 +252,7 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         // element supplies that field's value: push the outer frame, parse the inner container
         // fresh, and let the matching close-tag pop and assign.
         if shouldDescend(elementName: elementName) {
-            if descend(triggeringElement: elementName, attributes: attributeDict, parser: parser) {
+            if descend(triggeringElement: elementName, attributes: attributeDict) {
                 return  // Description trigger fully handled in descend(), or depth cap hit.
             }
             // Bag/Seq/Alt: fall through so the existing element-start branches fire at the
@@ -408,11 +402,11 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         }
     }
 
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
+    func characters(_ string: String) {
         currentText += string
     }
 
-    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+    func endElement(_ elementName: String, namespaceURI: String?) {
         // MWG Region end handling
         if namespaceURI == XMPNamespace.mwgRegions && elementName == "Regions" {
             inRegions = false
@@ -583,19 +577,19 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
         }
     }
 
-    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
-        // Keep the first error: abortParsing() (frame-depth cap) reports a generic
-        // "delegate aborted" error here that must not clobber the specific message.
-        if self.parseError == nil {
-            self.parseError = MetadataError.invalidXMP(parseError.localizedDescription)
+    func tokenizerError(_ message: String) {
+        // Keep the first error: the frame-depth cap also routes through here and must not clobber
+        // a more specific earlier message.
+        if parseError == nil {
+            parseError = MetadataError.invalidXMP(message)
         }
     }
 
-    func parser(_ parser: XMLParser, didStartMappingPrefix prefix: String, toURI namespaceURI: String) {
+    func startPrefix(_ prefix: String, uri namespaceURI: String) {
         prefixStack.append((prefix, namespaceURI))
     }
 
-    func parser(_ parser: XMLParser, didEndMappingPrefix prefix: String) {
+    func endPrefix(_ prefix: String) {
         if let idx = prefixStack.lastIndex(where: { $0.prefix == prefix }) {
             prefixStack.remove(at: idx)
         }
@@ -637,12 +631,12 @@ private class XMPXMLParser: NSObject, XMLParserDelegate {
     /// depth cap was hit and parsing was aborted), in which case the caller should return
     /// from didStartElement immediately. False otherwise (Bag/Seq/Alt) — the existing
     /// handlers run at the inner level after descend.
-    private func descend(triggeringElement: String, attributes: [String: String], parser: XMLParser) -> Bool {
+    private func descend(triggeringElement: String, attributes: [String: String]) -> Bool {
         guard frameStack.count < XMPReader.maxFrameDepth else {
             parseError = MetadataError.invalidXMP(
                 "Frame stack depth exceeds limit (\(XMPReader.maxFrameDepth))"
             )
-            parser.abortParsing()
+            aborted = true
             return true
         }
         let parentKey = "\(structureChildNamespace)\(structureChildElement)"
