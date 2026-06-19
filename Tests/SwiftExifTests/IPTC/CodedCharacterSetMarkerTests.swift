@@ -63,4 +63,21 @@ final class CodedCharacterSetMarkerTests: XCTestCase {
         let data = try IPTCWriter.write(iptc)
         XCTAssertNil(data.range(of: utf8Marker), "ASCII-only IPTC should not declare a charset")
     }
+
+    /// Class-level invariant guarding against any future "flip on each write" regression:
+    /// once IPTC has been serialized, re-reading and re-writing it must be byte-stable.
+    /// (The marker parity bug violated this — the second write differed from the first.)
+    func testSerializationIsByteStableAcrossWrites() throws {
+        var iptc = IPTCData()
+        iptc.caption = "Jonas Gahr Støre og Åse Jonæs"
+        iptc.byline = "Tórður"
+        iptc.city = "Tromsø"
+        iptc.keywords = ["æ", "ø", "å", "ascii"]
+
+        let first = try IPTCWriter.write(iptc)
+        let second = try IPTCWriter.write(try IPTCReader.read(from: first))
+        let third = try IPTCWriter.write(try IPTCReader.read(from: second))
+        XCTAssertEqual(first, second, "write→read→write must be byte-stable")
+        XCTAssertEqual(second, third, "serialization must converge to a fixed point")
+    }
 }
