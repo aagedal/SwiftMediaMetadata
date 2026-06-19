@@ -33,18 +33,23 @@ public struct IPTCWriter: Sendable {
         // Determine if we need to write CodedCharacterSet (1:90)
         let needsCharsetTag = containsNonASCII(outputData)
 
-        // Write Record 1:90 CodedCharacterSet for UTF-8
+        // Emit our own canonical UTF-8 marker whenever non-ASCII content is present.
+        // This is unconditional (not gated on "is a 1:90 already in datasets") because the
+        // loop below ALWAYS skips pre-existing CodedCharacterSet datasets — gating here would
+        // mean an input that already carries a 1:90 (e.g. read back from a file ImageIO or a
+        // prior write authored) gets its marker skipped in the loop AND never re-emitted,
+        // silently dropping the UTF-8 declaration and corrupting non-ASCII text for readers
+        // that default to Latin-1. Writing it here and skipping all existing ones below
+        // de-duplicates to exactly one canonical marker and makes the write idempotent.
         if needsCharsetTag {
-            // Only write if not already present in datasets
-            if !outputData.datasets.contains(where: { $0.tag == .codedCharacterSet }) {
-                writeDataSet(&writer, record: 1, dataSet: 90,
-                             data: Data(IPTCReader.utf8EscapeSequence))
-            }
+            writeDataSet(&writer, record: 1, dataSet: 90,
+                         data: Data(IPTCReader.utf8EscapeSequence))
         }
 
         // Write datasets in order
         for ds in outputData.datasets {
-            // Skip any existing CodedCharacterSet that isn't UTF-8 (we wrote the correct one above)
+            // Skip any existing CodedCharacterSet — the canonical UTF-8 marker (if needed) was
+            // written above; a stale/non-UTF-8 one must never be carried through.
             if ds.tag == .codedCharacterSet { continue }
             writeDataSet(&writer, record: ds.tag.record, dataSet: ds.tag.dataSet, data: ds.rawValue)
         }
