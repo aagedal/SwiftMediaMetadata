@@ -74,8 +74,11 @@ enum MPEGBitstream {
         mutating func readSE() -> Int32 {
             let ue = readUE()
             if ue == 0 { return 0 }
-            let sign: Int32 = (ue & 1) == 1 ? 1 : -1
-            return sign * Int32((ue + 1) >> 1)
+            // Widen to UInt64 before `+ 1`: a malformed bitstream can make
+            // readUE() return 0xFFFFFFFF, and `ue + 1` in UInt32 would trap.
+            let magnitude = Int64((UInt64(ue) + 1) >> 1)
+            let signed = (ue & 1) == 1 ? magnitude : -magnitude
+            return Int32(truncatingIfNeeded: signed)
         }
     }
 
@@ -228,13 +231,15 @@ enum MPEGBitstream {
         _ = br.readUE() // seq_parameter_set_id
 
         var chromaFormatIDC: UInt32 = 1
-        var bitDepthLuma: UInt32 = 8
+        // 64-bit so the `+ 8` can't overflow when a malformed stream makes
+        // readUE() return a near-UInt32.max value.
+        var bitDepthLuma = 8
         let highFamily: Set<Int> = [44, 83, 86, 100, 110, 118, 122, 128, 134, 135, 138, 139, 244]
         if highFamily.contains(profileIDC) {
             chromaFormatIDC = br.readUE()
             if chromaFormatIDC == 3 { _ = br.readBool() } // separate_colour_plane_flag
-            bitDepthLuma = br.readUE() + 8
-            _ = br.readUE() + 8  // bit_depth_chroma_minus8
+            bitDepthLuma = Int(br.readUE()) + 8
+            _ = br.readUE()  // bit_depth_chroma_minus8
             _ = br.readBool()    // qpprime_y_zero_transform_bypass_flag
             let seqScalingPresent = br.readBool()
             if seqScalingPresent {
@@ -247,7 +252,7 @@ enum MPEGBitstream {
             }
         }
         f.chromaSubsampling = h264ChromaName(chromaFormatIDC: chromaFormatIDC)
-        f.bitDepth = Int(bitDepthLuma)
+        f.bitDepth = bitDepthLuma
 
         _ = br.readUE() // log2_max_frame_num_minus4
         let picOrderCntType = br.readUE()
@@ -263,14 +268,16 @@ enum MPEGBitstream {
         _ = br.readUE() // num_ref_frames
         _ = br.readBool() // gaps_in_frame_num_value_allowed_flag
 
-        let picWidthInMBs = br.readUE() + 1
-        let picHeightInMapUnits = br.readUE() + 1
+        // 64-bit Int throughout: readUE() can return up to 0xFFFFFFFF on a
+        // malformed stream, so `+ 1` and `* 16` must not overflow/trap.
+        let picWidthInMBs = Int(br.readUE()) + 1
+        let picHeightInMapUnits = Int(br.readUE()) + 1
         let frameMBsOnly = br.readBool()
         if !frameMBsOnly { _ = br.readBool() } // mb_adaptive_frame_field_flag
         _ = br.readBool() // direct_8x8_inference_flag
 
-        var width = Int(picWidthInMBs) * 16
-        var height = Int(picHeightInMapUnits) * 16 * (frameMBsOnly ? 1 : 2)
+        var width = picWidthInMBs * 16
+        var height = picHeightInMapUnits * 16 * (frameMBsOnly ? 1 : 2)
 
         let frameCroppingFlag = br.readBool()
         if frameCroppingFlag {
@@ -281,8 +288,8 @@ enum MPEGBitstream {
             let (subW, subH) = h264ChromaSubFactors(chromaFormatIDC: chromaFormatIDC)
             let cropUnitX = subW
             let cropUnitY = subH * (frameMBsOnly ? 1 : 2)
-            width -= Int(cropL + cropR) * cropUnitX
-            height -= Int(cropT + cropB) * cropUnitY
+            width -= (Int(cropL) + Int(cropR)) * cropUnitX
+            height -= (Int(cropT) + Int(cropB)) * cropUnitY
         }
         f.width = max(0, width)
         f.height = max(0, height)
@@ -499,15 +506,17 @@ enum MPEGBitstream {
             let cropT = br.readUE()
             let cropB = br.readUE()
             let (subW, subH) = h264ChromaSubFactors(chromaFormatIDC: chromaFormatIDC)
-            width -= Int(cropL + cropR) * subW
-            height -= Int(cropT + cropB) * subH
+            // Int additions: `cropL + cropR` in UInt32 would trap on a
+            // malformed stream where both decode near UInt32.max.
+            width -= (Int(cropL) + Int(cropR)) * subW
+            height -= (Int(cropT) + Int(cropB)) * subH
         }
         f.width = max(0, width)
         f.height = max(0, height)
 
-        let bitDepthLuma = br.readUE() + 8
-        _ = br.readUE() + 8 // bit_depth_chroma
-        f.bitDepth = Int(bitDepthLuma)
+        let bitDepthLuma = Int(br.readUE()) + 8
+        _ = br.readUE() // bit_depth_chroma
+        f.bitDepth = bitDepthLuma
 
         let log2MaxPicOrderCntLsbMinus4 = br.readUE()
 
