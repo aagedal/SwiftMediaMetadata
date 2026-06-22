@@ -51,6 +51,40 @@ final class ReverseGeocoderTests: XCTestCase {
         XCTAssertTrue(result!.distance < 20)
     }
 
+    // MARK: - Alpha-2 Country Code
+
+    func testAlpha2CountryCode() {
+        let paris = geocoder.lookup(latitude: 48.8566, longitude: 2.3522)
+        XCTAssertEqual(paris?.countryCode, "FRA")
+        XCTAssertEqual(paris?.countryCodeAlpha2, "FR")
+
+        let oslo = geocoder.lookup(latitude: 59.9139, longitude: 10.7522)
+        XCTAssertEqual(oslo?.countryCode, "NOR")
+        XCTAssertEqual(oslo?.countryCodeAlpha2, "NO")
+    }
+
+    /// The alpha-2 code feeds Foundation's offline region localization.
+    func testAlpha2DrivesOfflineLocalization() {
+        guard let paris = geocoder.lookup(latitude: 48.8566, longitude: 2.3522) else {
+            return XCTFail("expected a lookup result for Paris")
+        }
+        let english = Locale(identifier: "en_US")
+        XCTAssertEqual(english.localizedString(forRegionCode: paris.countryCodeAlpha2), "France")
+        let french = Locale(identifier: "fr_FR")
+        XCTAssertEqual(french.localizedString(forRegionCode: paris.countryCodeAlpha2), "France")
+    }
+
+    func testLocalizedCountryHelper() {
+        guard let tokyo = geocoder.lookup(latitude: 35.6762, longitude: 139.6503) else {
+            return XCTFail("expected a lookup result for Tokyo")
+        }
+        XCTAssertEqual(tokyo.country, "Japan") // raw English field unchanged
+        XCTAssertEqual(tokyo.localizedCountry(Locale(identifier: "en_US")), "Japan")
+        XCTAssertEqual(tokyo.localizedCountry(Locale(identifier: "de_DE")), "Japan")
+        XCTAssertEqual(tokyo.localizedCountry(Locale(identifier: "fr_FR")), "Japon")
+        XCTAssertEqual(tokyo.localizedCountry(Locale(identifier: "es_ES")), "Japón")
+    }
+
     // MARK: - Edge Cases
 
     func testMiddleOfOcean() {

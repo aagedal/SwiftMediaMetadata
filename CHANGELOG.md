@@ -6,6 +6,66 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [1.9.8] — 2026-06-23
+
+### Added
+
+- **`GeoLocation.countryCodeAlpha2`** exposes the ISO 3166-1 alpha-2 country
+  code (e.g. `"FR"`) alongside the existing alpha-3 `countryCode`. The alpha-2
+  was already the source of truth in the embedded database (alpha-3 is derived
+  from it) but was discarded during lookup; it is now surfaced so callers can
+  drive Foundation's offline country-name localization.
+  ([`Sources/SwiftExif/Geolocation/ReverseGeocoder.swift`](Sources/SwiftExif/Geolocation/ReverseGeocoder.swift))
+- **`GeoLocation.localizedCountry(_:)`** returns the country name localized into
+  a given `Locale` (defaulting to `.current`), resolved offline via Foundation
+  from `countryCodeAlpha2`, falling back to the English `country` field for
+  unknown codes. City and region names remain English-only.
+  ([`Sources/SwiftExif/Geolocation/ReverseGeocoder.swift`](Sources/SwiftExif/Geolocation/ReverseGeocoder.swift))
+
+### Fixed
+
+- **UInt32 overflow traps in H.264/H.265 SPS parsing.** A crafted SPS NAL could
+  make the Exp-Golomb `readUE()` decode a near-`UInt32.max` value, after which
+  the SPS parsers' trapping UInt32 arithmetic (`ue + 1`, bit-depth `+ 8`,
+  width/height-in-MBs `+ 1`, crop-window sums) crashed the whole process
+  (SIGTRAP) on any malformed `.mp4`/`.mov`/`.ts`/MKV reached via `MPEGReader` or
+  `MP4VisualSampleEntry`. The arithmetic is now widened to 64-bit, so adversarial
+  input yields a clamped/garbage dimension instead of a trap; valid streams are
+  unchanged. Adds `MPEGBitstreamFuzzTests`.
+
+### Tests
+
+- Hardened the IPTC marker tests with a write→read→write byte-stability
+  invariant, guarding against any future "flip the marker on each write" parity
+  regression. Test-only; no change to the shipped library.
+
+## [1.9.7] — 2026-06-19
+
+### Fixed
+
+- **`IPTCWriter` dropped the UTF-8 `CodedCharacterSet` (1:90) marker on
+  re-write.** The marker was written only when the input `IPTCData` lacked one,
+  while the serialization loop always skipped existing 1:90 datasets — so a write
+  whose input already carried a marker silently dropped it, and across a
+  multi-write pipeline the marker flipped on/off by parity, leaving non-ASCII
+  IPTC text undeclared and mojibaked on readers defaulting to ISO-8859-1. One
+  canonical UTF-8 marker is now emitted unconditionally when non-ASCII content is
+  present, idempotent across repeated writes. Adds `CodedCharacterSetMarkerTests`.
+  ([`Sources/SwiftExif/IPTC/IPTCWriter.swift`](Sources/SwiftExif/IPTC/IPTCWriter.swift))
+
+## [1.9.6] — 2026-06-17
+
+### Changed
+
+- **`XMPReader` is now libxml2-free, backed by a pure-Swift tokenizer.**
+  Foundation's `XMLParser` wraps libxml2, whose process-global state is not
+  thread-safe and can race other in-process libxml2 users (notably ImageIO),
+  surfacing as `EXC_BAD_ACCESS` during concurrent image decode + XMP parse. A
+  dependency-free `PureXMLTokenizer` now emits the same SAX events, leaving the
+  XMP-building logic unchanged; XMP read + write are 100% pure Swift. Handles
+  entities (predefined + decimal/hex numeric refs), CDATA, comments, PIs, xmlns
+  scoping, and self-closing tags. Adds `XMPPureTokenizerTests`.
+
 ## [1.9.5] — 2026-06-16
 
 ### Changed

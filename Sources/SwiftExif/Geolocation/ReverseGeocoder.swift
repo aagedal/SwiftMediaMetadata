@@ -10,6 +10,9 @@ public struct GeoLocation: Sendable, CustomStringConvertible {
     public let country: String
     /// ISO 3166-1 alpha-3 country code (for IPTC Country-PrimaryLocationCode).
     public let countryCode: String
+    /// ISO 3166-1 alpha-2 country code (e.g. "FR"), suitable for
+    /// `Locale.localizedString(forRegionCode:)` offline country-name localization.
+    public let countryCodeAlpha2: String
     /// IANA timezone identifier (e.g. "Europe/Oslo").
     public let timezone: String
     /// City population.
@@ -19,6 +22,14 @@ public struct GeoLocation: Sendable, CustomStringConvertible {
 
     public var description: String {
         "\(city), \(region), \(country) (\(countryCode)) [\(String(format: "%.1f", distance)) km]"
+    }
+
+    /// The country name localized into the given locale, resolved offline via
+    /// Foundation from ``countryCodeAlpha2``. Falls back to the English ``country``
+    /// when the locale cannot name the region (e.g. an unknown code).
+    /// - Parameter locale: Target locale. Defaults to the user's current locale.
+    public func localizedCountry(_ locale: Locale = .current) -> String {
+        locale.localizedString(forRegionCode: countryCodeAlpha2) ?? country
     }
 }
 
@@ -118,6 +129,7 @@ public final class ReverseGeocoder: @unchecked Sendable {
             region: db.regionNames[regionIdx],
             country: db.countryNames[countryIdx],
             countryCode: cc3,
+            countryCodeAlpha2: cc2,
             timezone: db.timezoneNames[tzIdx],
             population: Int(db.populations[index]),
             distance: distance
