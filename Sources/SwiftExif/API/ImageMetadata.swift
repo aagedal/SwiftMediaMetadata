@@ -1228,6 +1228,9 @@ public struct ImageMetadata: Sendable {
         if let xmp = xmp {
             let xmpData = XMPWriter.write(xmp)
             file.replaceOrAddXMPSegment(JPEGSegment(marker: .app1, data: xmpData))
+        } else {
+            // Remove existing XMP segment if XMP was stripped
+            file.segments.removeAll { $0.isXMP }
         }
 
         // Write ICC profile
@@ -1281,6 +1284,9 @@ public struct ImageMetadata: Sendable {
         if let xmp = xmp {
             let xml = XMPWriter.generateXML(xmp)
             file.replaceOrAddXMPChunk(xml)
+        } else {
+            // Remove existing XMP chunk if XMP was stripped
+            file.removeXMPChunk()
         }
 
         // Write ICC profile as iCCP chunk
@@ -1319,6 +1325,9 @@ public struct ImageMetadata: Sendable {
         if let xmp = xmp {
             let xml = XMPWriter.generateXML(xmp)
             file.replaceOrAddBox("xml ", data: Data(xml.utf8))
+        } else {
+            // Remove existing XMP box if XMP was stripped
+            file.removeBox("xml ")
         }
 
         return try JXLWriter.write(file)

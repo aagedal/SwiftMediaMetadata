@@ -41,4 +41,9 @@ public struct JXLFile: Sendable {
             boxes.append(newBox)
         }
     }
+
+    /// Remove all boxes of the given type.
+    public mutating func removeBox(_ type: String) {
+        boxes.removeAll { $0.type == type }
+    }
 }

@@ -70,7 +70,7 @@ public struct PNGFile: Sendable {
         payload.append(Data(xml.utf8))
 
         // Replace existing XMP iTXt or add new one
-        if let index = chunks.firstIndex(where: { $0.type == "iTXt" && isXMPiTXt($0) }) {
+        if let index = chunks.firstIndex(where: { $0.type == "iTXt" && Self.isXMPiTXt($0)}) {
             let crc = CRC32.compute(type: "iTXt", data: payload)
             chunks[index] = PNGChunk(type: "iTXt", data: payload, crc: crc)
         } else {
@@ -83,7 +83,13 @@ public struct PNGFile: Sendable {
         chunks.removeAll { $0.type == type }
     }
 
-    private func isXMPiTXt(_ chunk: PNGChunk) -> Bool {
+    /// Remove the XMP iTXt chunk, if present. Targets only the
+    /// `XML:com.adobe.xmp` iTXt chunk, leaving any other iTXt text intact.
+    public mutating func removeXMPChunk() {
+        chunks.removeAll { $0.type == "iTXt" && Self.isXMPiTXt($0)}
+    }
+
+    private static func isXMPiTXt(_ chunk: PNGChunk) -> Bool {
         let keyword = "XML:com.adobe.xmp"
         guard chunk.data.count > keyword.utf8.count else { return false }
         return chunk.data.prefix(keyword.utf8.count) == Data(keyword.utf8)
