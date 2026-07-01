@@ -218,7 +218,7 @@ public struct XMPWriter: Sendable {
         add(XMPNamespace.crs, "ToneCurve", "ToneCurveRed", "ToneCurveGreen", "ToneCurveBlue",
             "ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue",
             "GradientBasedCorrections", "PaintBasedCorrections", "CircularGradientBasedCorrections",
-            "MaskGroupBasedCorrections", "RetouchAreas", "CorrectionMasks", "Dabs")
+            "MaskGroupBasedCorrections", "RetouchAreas", "CorrectionMasks", "Masks", "Dabs")
         add(XMPNamespace.xmpDM, "markers")
         return keys
     }()

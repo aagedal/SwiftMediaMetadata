@@ -268,6 +268,69 @@ final class XMPWriterTests: XCTestCase {
         XCTAssertEqual(masks.first?["\(crsNS)MaskName"], .simple("Radial Gradient 1"))
     }
 
+    func testACRBrushMaskNestedSeqContainersRewritten() throws {
+        // A brush mask nests one more level than a radial: the Mask/Aggregate carries a
+        // crs:Masks Seq of Mask/Paint sub-masks, each with a crs:Dabs Seq of stroke records.
+        // ACR writes crs:Masks and crs:Dabs as rdf:Seq — the writer must emit Seq (not Bag)
+        // for these too, and must not lose the nested shape on rewrite.
+        let crsNS = "http://ns.adobe.com/camera-raw-settings/1.0/"
+        let source = """
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+         <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="\(crsNS)">
+           <crs:MaskGroupBasedCorrections>
+            <rdf:Seq>
+             <rdf:li>
+              <rdf:Description crs:What="Correction" crs:CorrectionName="Mask 1">
+               <crs:CorrectionMasks>
+                <rdf:Seq>
+                 <rdf:li>
+                  <rdf:Description crs:What="Mask/Aggregate" crs:MaskName="Brush 1">
+                   <crs:Masks>
+                    <rdf:Seq>
+                     <rdf:li>
+                      <rdf:Description crs:What="Mask/Paint" crs:Radius="0.4">
+                       <crs:Dabs>
+                        <rdf:Seq>
+                         <rdf:li>f 0.5000</rdf:li>
+                         <rdf:li>d 0.5 0.5</rdf:li>
+                        </rdf:Seq>
+                       </crs:Dabs>
+                      </rdf:Description>
+                     </rdf:li>
+                    </rdf:Seq>
+                   </crs:Masks>
+                  </rdf:Description>
+                 </rdf:li>
+                </rdf:Seq>
+               </crs:CorrectionMasks>
+              </rdf:Description>
+             </rdf:li>
+            </rdf:Seq>
+           </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+         </rdf:RDF>
+        </x:xmpmeta>
+        """
+        let parsed = try XMPReader.readFromXML(Data(source.utf8))
+        let rewritten = XMPWriter.generateXML(parsed)
+        // All four nested containers are Seq; none flattened to Bag.
+        XCTAssertFalse(rewritten.contains("<rdf:Bag>"))
+        XCTAssertEqual(rewritten.components(separatedBy: "<rdf:Seq>").count - 1, 4)
+
+        // The nested Mask/Aggregate → Masks → Mask/Paint → Dabs shape survives the rewrite.
+        let reparsed = try XMPReader.readFromXML(Data(rewritten.utf8))
+        let outer = reparsed.structuredArrayValue(namespace: crsNS, property: "MaskGroupBasedCorrections")
+        guard case .structuredArray(let correctionMasks)? = outer?[0]["\(crsNS)CorrectionMasks"],
+              case .structuredArray(let paintMasks)? = correctionMasks.first?["\(crsNS)Masks"],
+              case .array(let dabs)? = paintMasks.first?["\(crsNS)Dabs"] else {
+            XCTFail("nested brush-mask shape lost on rewrite")
+            return
+        }
+        XCTAssertEqual(paintMasks.first?["\(crsNS)What"], .simple("Mask/Paint"))
+        XCTAssertEqual(dabs, ["f 0.5000", "d 0.5 0.5"])
+    }
+
     func testRegionUnitWithSpecialCharactersProducesValidXML() throws {
         // Area/dimension unit strings come straight from the source file; a quote in
         // them must not break the rewritten packet.
