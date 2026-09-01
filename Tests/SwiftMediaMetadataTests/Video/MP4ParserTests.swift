@@ -1125,7 +1125,11 @@ final class MP4ParserTests: XCTestCase {
         // Easier to just compute it explicitly:
         let profile: UInt32 = 8
         let level: UInt32 = 4
-        let word = (profile << 25) | (level << 19) | (1 << 18) | (0 << 17) | (1 << 16) | (4 << 12)
+        var word = profile << 25
+        word |= level << 19
+        word |= UInt32(1) << 18 // RPU present
+        word |= UInt32(1) << 16 // base layer present
+        word |= UInt32(4) << 12 // HLG-compatible base-layer signal
         var w = BinaryWriter(capacity: 24)
         w.writeUInt8(1)                            // dv_version_major
         w.writeUInt8(0)                            // dv_version_minor
