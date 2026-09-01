@@ -57,7 +57,14 @@ when reading or writing XMP.
 
 ### CLI
 
-Download the macOS arm64 archive and checksum from the
+Install the macOS arm64 CLI with Homebrew:
+
+```sh
+brew install aagedal/tap/swift-exif
+swift-exif --version
+```
+
+Or download the archive and checksum directly from the
 [2.0.0 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/2.0.0):
 
 ```sh
@@ -68,8 +75,7 @@ tar -xzf swift-exif-macos-arm64.tar.gz
 ./swift-exif-macos-arm64/swift-exif --version
 ```
 
-Keep the extracted executable and resource bundle together. The Homebrew formula
-may lag briefly while its archive URL and checksum are updated for each release.
+Keep the manually extracted executable and resource bundle together.
 
 ### Swift Package
 

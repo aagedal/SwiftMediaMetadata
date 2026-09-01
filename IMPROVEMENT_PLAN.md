@@ -13,7 +13,7 @@ changes still belong in `CHANGELOG.md`.
 - [x] 5. Reduce the compile-time cost of the generated geolocation database
 - [x] 6. Add persistent fuzz and property testing for binary parsers/writers
 - [ ] 7. Split oversized API files without breaking the public API
-- [ ] 8. Prepare and publish the 2.0 release
+- [x] 8. Prepare and publish the 2.0 release
 
 ## 1. Unified filesystem writes and modification dates
 
@@ -72,8 +72,8 @@ Status: Completed 2026-09-01
 
 - [x] Clients build with `import SwiftMediaMetadata` and the new product name.
 - [x] Source and test directories match their renamed SwiftPM targets.
-- [x] README installation examples use the new repository URL and distinguish
-  the pre-release `main` branch from the future 2.0 version tag.
+- [x] README installation examples use the new repository URL and the published
+  2.0 version tag.
 - [x] The changelog documents the breaking migration and stable CLI name.
 - [x] Git remotes contain only the renamed GitHub repository.
 - [x] The full package and opt-in CLI test suites pass after a clean rebuild.
@@ -119,10 +119,9 @@ Status: Completed 2026-09-01
 
 Completion notes:
 
-- The latest published GitHub release remains 1.6.0, the tap formula points to
-  a retired Codeberg 1.8.1 artifact, and no 2.0.0 tag exists yet. README install
-  instructions now use `main` for the renamed package and avoid promising an
-  unavailable CLI binary.
+- At the time of the audit, the latest published GitHub release was 1.6.0 and
+  the tap formula pointed to a retired Codeberg 1.8.1 artifact. Those findings
+  drove the 2.0 release and Homebrew work recorded below.
 - Updated the supported-format table for safe versus unsafe RAW writes, writable
   GIF/PDF/MP4/SVG metadata, and the previously omitted BMP, ARRIRAW, and IVF
   readers.
@@ -206,7 +205,7 @@ Status: Planned
 
 ## 8. Version 2.0 release
 
-Status: In progress
+Status: Completed 2026-09-01
 
 - [x] Keep the CLI version, package/module rename, migration notes, and changelog
   aligned on 2.0.0.
@@ -221,8 +220,20 @@ Status: In progress
   `RELEASE_CHECKLIST.md`.
 - [x] Complete the pre-tag checklist and replace the changelog's `Unreleased`
   marker with the actual release date.
-- [ ] Push the reviewed 2.0.0 tag and verify the published GitHub artifacts.
-- [ ] Update and smoke-test the external Homebrew tap using the published
+- [x] Push the reviewed 2.0.0 tag and verify the published GitHub artifacts.
+- [x] Update and smoke-test the external Homebrew tap using the published
   archive checksum.
-- [ ] Switch README installation examples from pre-release instructions to the
+- [x] Switch README installation examples from pre-release instructions to the
   published tag and verified Homebrew formula.
+
+Completion notes:
+
+- Published the annotated `2.0.0` tag and a public GitHub release containing the
+  macOS arm64 CLI archive and SHA-256 checksum.
+- Downloaded the public assets, verified the checksum and archive layout, and
+  smoke-tested version reporting plus bundled Oslo reverse geocoding.
+- Resolved a throwaway SwiftPM consumer at exactly 2.0.0 and compiled
+  `import SwiftMediaMetadata` against the renamed product.
+- Updated `aagedal/homebrew-tap` to the renamed repository, published archive,
+  and matching checksum. A stable macOS 15 workflow installed the formula and
+  passed its version and geocoding smoke tests.
