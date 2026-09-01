@@ -6,7 +6,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
-## [2.0.0] — Unreleased
+## [2.0.0] — 2026-09-01
 
 ### Added
 
@@ -1530,7 +1530,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
-[2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...HEAD
+[2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...2.0.0
 [1.9.10]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.9...1.9.10
 [1.9.9]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.8...1.9.9
 [1.9.8]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.7...1.9.8

@@ -57,23 +57,29 @@ when reading or writing XMP.
 
 ### CLI
 
-The 2.0 CLI binary has not been published yet. The existing Homebrew formula
-still targets a retired 1.x artifact, so build the CLI from source until a 2.0
-release and matching formula are available. See [Building from source](#building-from-source).
+Download the macOS arm64 archive and checksum from the
+[2.0.0 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/2.0.0):
+
+```sh
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/2.0.0/swift-exif-macos-arm64.tar.gz
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/2.0.0/swift-exif-macos-arm64.tar.gz.sha256
+shasum -a 256 -c swift-exif-macos-arm64.tar.gz.sha256
+tar -xzf swift-exif-macos-arm64.tar.gz
+./swift-exif-macos-arm64/swift-exif --version
+```
+
+Keep the extracted executable and resource bundle together. The Homebrew formula
+may lag briefly while its archive URL and checksum are updated for each release.
 
 ### Swift Package
 
-The rename to SwiftMediaMetadata is currently available on `main` ahead of the
-2.0 release. Add the package to your `Package.swift` with:
+Add the package to your `Package.swift` with:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", branch: "main"),
+    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "2.0.0"),
 ]
 ```
-
-Once 2.0.0 is published, replace `branch: "main"` with `from: "2.0.0"` to
-return to version-based dependency resolution.
 
 Then add it as a dependency to your target:
 

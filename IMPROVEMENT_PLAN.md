@@ -219,7 +219,7 @@ Status: In progress
   archive.
 - [x] Document the exact pre-tag, publish, Homebrew, and post-release checks in
   `RELEASE_CHECKLIST.md`.
-- [ ] Complete the pre-tag checklist and replace the changelog's `Unreleased`
+- [x] Complete the pre-tag checklist and replace the changelog's `Unreleased`
   marker with the actual release date.
 - [ ] Push the reviewed 2.0.0 tag and verify the published GitHub artifacts.
 - [ ] Update and smoke-test the external Homebrew tap using the published
