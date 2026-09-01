@@ -6,7 +6,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
-## [2.0.0] — 2026-09-01
+## [2.0.0] — Unreleased
 
 ### Added
 
@@ -28,6 +28,22 @@ the CLI; the library target follows the same numbering.
 - Image, video, audio, and XMP sidecar writes now use one internal filesystem
   transaction for atomic replacement, backups, temporary-file cleanup, and
   file attributes.
+
+## [1.9.10] — 2026-07-01
+
+### Fixed
+
+- Camera Raw brush-mask XMP now serializes the nested `crs:Masks` container as
+  `rdf:Seq`, matching Adobe Camera Raw and preserving the complete
+  Mask/Aggregate → Masks → Mask/Paint → Dabs structure across rewrites.
+
+## [1.9.9] — 2026-06-23
+
+### Fixed
+
+- Clearing XMP now removes the embedded packet from JPEG, PNG, and JPEG XL
+  output. Previously `stripXMP()` and `stripAllMetadata()` could leave the
+  original XMP behind in those formats.
 
 ## [1.9.8] — 2026-06-23
 
@@ -1503,7 +1519,17 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
-[2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...2.0.0
+[2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...HEAD
+[1.9.10]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.9...1.9.10
+[1.9.9]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.8...1.9.9
+[1.9.8]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.7...1.9.8
+[1.9.7]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.6...1.9.7
+[1.9.6]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.5...1.9.6
+[1.9.5]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.4...1.9.5
+[1.9.4]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.3...1.9.4
+[1.9.3]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.2...1.9.3
+[1.9.2]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.1...1.9.2
+[1.9.1]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.0...1.9.1
 [1.9.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.8.2...1.9.0
 [1.8.2]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.8.1...1.8.2
 [1.8.1]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.8.0...1.8.1

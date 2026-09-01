@@ -8,26 +8,31 @@ A native Swift library for reading and writing image and video metadata — Exif
 |--------|------|-------|----------------|
 | JPEG | Yes | Yes | Exif, IPTC, XMP, C2PA, ICC |
 | TIFF | Yes | Yes | Exif, IPTC, XMP, C2PA, ICC |
-| RAW (DNG, CR2, CR3, NEF, NRW, ARW, RAF, RW2, ORF, PEF, SRW, .raw, IIQ, 3FR, FFF, X3F, MRW) | Yes | Yes | Exif, IPTC, XMP, MakerNotes, ICC |
+| DNG / GPR / CR3 | Yes | Yes | Exif, IPTC, XMP, MakerNotes, ICC |
+| Proprietary RAW (CR2, NEF, NRW, ARW, RAF, RW2, ORF, PEF, SRW, .raw, IIQ, 3FR, FFF, X3F, MRW) | Yes | XMP sidecar | Exif, IPTC, XMP, MakerNotes, ICC; embedded writes are refused by default because a full TIFF rewrite can damage maker-private data |
 | JPEG XL (container) | Yes | Yes | Exif, XMP, C2PA, ICC |
 | PNG | Yes | Yes | Exif, XMP, C2PA, ICC |
 | AVIF | Yes | Yes | Exif, XMP, C2PA, ICC |
 | HEIF / HEIC | Yes | Yes | Exif, XMP, C2PA, ICC |
 | WebP | Yes | Yes | Exif, XMP, C2PA, ICC |
-| GIF | Yes | — | XMP, C2PA |
-| PDF | Yes | — | XMP, C2PA, document metadata |
+| GIF | Yes | Yes | XMP; C2PA read-only |
+| PDF | Yes | Yes | XMP, document metadata; C2PA read-only |
 | PSD (Photoshop) | Yes | Yes | Exif, IPTC, XMP, ICC |
-| MP4 / MOV / M4V | Yes | — | Exif, XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, profile, fps, field order, bit depth, chroma subsampling, pixel format, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language, QuickTime `tmcd` timecode |
+| BMP | Yes | — | Container and image dimensions; no embedded metadata writer |
+| SVG | Yes | Yes | XMP |
+| MP4 / MOV / M4V | Yes | Yes | XMP, GPS, C2PA, Sony NRT camera metadata, full stream info (codec, profile, fps, field order, bit depth, chroma subsampling, pixel format, color primaries/transfer/matrix/range, pixel aspect ratio, bit rate) + audio (codec, sample rate, channels, channel layout, bit depth, bit rate) + subtitle tracks (tx3g, WebVTT, TTML, CEA-608/708) with language, QuickTime `tmcd` timecode |
 | Blackmagic RAW (.braw) | Yes | — | Container metadata via QuickTime layout (no `ftyp`, tail-placed `moov`): resolution, project frame rate, audio, timecode, plus the `moov.meta` slate — camera make/model, firmware, viewing gamma/gamut, color science, compression ratio, shutter type, sensor capture FPS (off-speed), production slate (clip number / scene / take / reel / camera / environment / day-night), sensor area, crop / safe-area rectangles, LUT used, post-3DLUT mode, frameguide aspect ratio, gamut compression. Per-frame interpretation attributes (white point, tint, absolute ISO) live in proprietary `bfdn`/`ctrn` boxes and remain unparsed |
 | RED RAW (.R3D) | Yes | — | Clip-header metadata from RED's own length-prefixed `RED2`/`RED1` atom: resolution (from `rdi`), audio sample rate (from `rda`), original capture frame rate, plus the TLV slate — camera brain + sensor, body serial, lens model, firmware, ISO, color temperature (Kelvin), crop area (`WxH+X+Y`), record/playback timecodes, reel + take, video format ("8K 16:9"), quality preset, storage media + serial + format date/time, original camera filename, focus distance. Tag IDs match ExifTool's `Image::ExifTool::Red` table |
 | Nikon RAW Video (N-RAW) | Yes | — | Detected by `ftyp niko` brand + `NR3D` codec FourCC. Nikon Z8/Z9 ship N-RAW with a `.R3D` extension as part of the post-acquisition "RED RAW" branding, but the bitstream is wholly unrelated to RED's REDCODE — promoted to `format = .nikonRaw` so callers can disambiguate. All standard MP4 metadata (resolution, timecode, audio, color) reads through the QuickTime path |
 | MXF (SMPTE 377) | Yes | — | C2PA, Sony NonRealTimeMeta (RDD-18), picture/sound essence descriptors (resolution, frame rate, scan type, chroma, color) |
 | Sony X-OCN (.mxf) | Yes | — | MXF wrapper detected via picture-essence UL (`060e2b34.0401.0106.0e06.0401.0206.06xx`) or NRT `videoCodec` label. Promotes `format = .xocn` with codec long-names `Sony X-OCN LT/ST/XT`. Deepens NRT AcquisitionRecord harvest: every `CameraUnitMetadataSet`, `SonyF65CameraMetadataSet`, `CameraPostureMetadataSet`, `LensUnitMetadataSet` `<Item>` is captured into a flat `acquisitionGroups` dictionary, with curated typed fields on `CameraMetadata` for ISO, exposure index, shutter angle/time, ND filter, white balance, capture/look gamma + color, raw black/gray/white code values, monitoring LUT, sensor effective size, camera tilt/roll. ASC CDL Slope/Offset/Power/Saturation from `<ExtendedContents>` parsed into `ascCDL` (identity transforms suppressed). Verified against Sony F55 8.6K 3:2 X-OCN LT clips |
+| ARRIRAW (.mxf) | Yes | — | MXF-wrapped ARRIRAW detection, stream metadata, and ARRI camera JSON/slate metadata |
 | Canon Cinema RAW Light (.CRM / .CRL) | Yes | — | ISOBMFF with `ftyp crx ` and the same Canon-metadata UUID (`85c0b687-820f-11e0-8111-f4ce462b6a48`) used by CR3 still images. Distinguished from CR3 by CNCV `"CanonCRM..."`. Reads the in-`moov` `CMT1`/`CMT2`/`CMT3`/`CMT4` TIFF IFDs (Make/Model/Lens/exposure/GPS via the shared `CanonUUIDExtractor`) plus the dedicated `CTMD` track for per-frame timed metadata: type 0x0001 timestamp (with hundredths-of-a-second), 0x0004 focal length (mm), 0x0005 exposure (F-number / shutter / ISO), 0x0007/8/9 embedded TIFF blocks (CanonColorData → R/G1/G2/B white-balance multipliers). The full per-frame stream lands in `videoMetadata.cameraTimeline`; first-frame values populate single-valued `CameraMetadata` fields. THMB and PRVW JPEGs are surfaced as `embeddedThumbnailJPEG` / `embeddedPreviewJPEG`. `.CRL` proxies share the layout and tag as `format = .crl` ("Canon Cinema RAW Light Proxy"). Verified against EOS C70 master clips |
 | Matroska (.mkv) | Yes | — | Stream info (codec, profile, fps, dimensions, bit depth, chroma, chroma location, color, pixel format) decoded from both `Tracks` and `CodecPrivate` (hvcC/av1C/avcC), Segment-level `COMMENT`/`DESCRIPTION` tags, audio tracks, subtitle tracks (SRT, ASS/SSA, WebVTT, PGS, VobSub) with language + default/forced/SDH flags |
 | WebM (.webm) | Yes | — | Stream info (VP8/VP9/AV1) + audio (Vorbis/Opus) + subtitle tracks |
 | AVI (RIFF) | Yes | — | Stream info (codec, fps, dimensions, bit depth) + audio (codec, sample rate, channels), INFO tags |
 | MPEG-PS / MPEG-TS / M2TS | Yes | — | Sequence-header stream facts (resolution, fps, aspect, bit rate), PMT elementary-stream inventory (DVB subtitles / teletext / PGS with language), M2TS (Blu-ray BDAV, 192-byte packets) auto-detected |
+| IVF | Yes | — | VP8, VP9, AV1, or AV2 elementary-stream codec, dimensions, frame rate, duration, and frame count |
 | MP3 (ID3v1 / ID3v2) | Yes | Yes | Tags + codec, sample rate, channels, bit rate, duration; ID3v2 frame detail (TXXX/WXXX/PRIV/GEOB/CHAP/CTOC) |
 | FLAC | Yes | Yes | Tags + sample rate, channels, bit depth, duration; SeekTable + CueSheet |
 | M4A | Yes | Yes | Tags + codec, sample rate, channels, bit depth, channel layout, bit rate, duration |
@@ -40,6 +45,9 @@ A native Swift library for reading and writing image and video metadata — Exif
 | AAE sidecar (Apple Photos) | Yes | — | iPhone/iPad edit-decision sidecar |
 | Sony NRT sidecar (.XML) | Yes | — | Camera metadata auto-probed next to MP4/MXF |
 
+Compressed SVGZ payloads are not currently decoded; use an uncompressed SVG
+when reading or writing XMP.
+
 ## Requirements
 
 - Swift 6.0+
@@ -47,22 +55,25 @@ A native Swift library for reading and writing image and video metadata — Exif
 
 ## Installation
 
-### CLI (Homebrew)
+### CLI
 
-```sh
-brew tap aagedal/tap
-brew install swift-exif
-```
+The 2.0 CLI binary has not been published yet. The existing Homebrew formula
+still targets a retired 1.x artifact, so build the CLI from source until a 2.0
+release and matching formula are available. See [Building from source](#building-from-source).
 
 ### Swift Package
 
-Add SwiftMediaMetadata to your `Package.swift`:
+The rename to SwiftMediaMetadata is currently available on `main` ahead of the
+2.0 release. Add the package to your `Package.swift` with:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "2.0.0"),
+    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", branch: "main"),
 ]
 ```
+
+Once 2.0.0 is published, replace `branch: "main"` with `from: "2.0.0"` to
+return to version-based dependency resolution.
 
 Then add it as a dependency to your target:
 
@@ -177,7 +188,8 @@ if let exif = metadata.exif {
 
 ### Writing Metadata
 
-Works for all supported image formats (JPEG, TIFF, RAW, JPEG XL, PNG, AVIF, HEIF, WebP):
+The same API writes every format marked “Yes” in the table above. Proprietary
+RAW files default to XMP sidecars because embedded TIFF rewrites are unsafe:
 
 ```swift
 var metadata = try readMetadata(from: imageURL)
@@ -240,12 +252,10 @@ metadata.syncXMPToIPTC()
 
 ### Video Metadata
 
-Read rich stream-level metadata from MP4, MOV, M4V, MXF, MKV, WebM, AVI, and
-MPEG-PS/TS/M2TS files — enough to replace `ffprobe` in editorial and
-media-pipeline tooling. Container essence (mdat / MXF KLV body / Matroska
-clusters) is never fully materialised; parsers only touch the header
-metadata, so reading a multi-gigabyte MXF or ProRes file is a sub-millisecond
-operation on memory-mapped data.
+Read rich stream-level metadata from the video and cinema-camera containers in
+the supported-format table above — enough to replace `ffprobe` in editorial
+and media-pipeline tooling. Container essence (mdat / MXF KLV body / Matroska
+clusters) is never fully materialised; parsers only touch the header metadata.
 
 ```swift
 let video = try VideoMetadata.read(from: videoURL)
@@ -258,12 +268,12 @@ no AVFoundation, no external dependencies.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `format` | `VideoFormat` | `.mp4`, `.mov`, `.m4v`, `.mxf`, `.xocn`, `.mkv`, `.webm`, `.avi`, `.mpg`, `.braw`, `.arriraw`, `.r3d`, `.nikonRaw` |
+| `format` | `VideoFormat` | `.mp4`, `.mov`, `.m4v`, `.mxf`, `.xocn`, `.mkv`, `.webm`, `.avi`, `.mpg`, `.braw`, `.arriraw`, `.r3d`, `.nikonRaw`, `.crm`, `.crl`, `.ivf` |
 | `formatLongName` | `String?` | Human-readable container name (`"QuickTime / MOV"`, `"MP4 (MPEG-4 Part 14)"`, `"Matroska"`, `"WebM"`, …) — matches ffprobe `format_long_name` |
 | `fileSize` | `Int64?` | File size in bytes |
 | `duration` | `TimeInterval?` | Total playback duration in seconds |
 | `creationDate` | `Date?` | Capture / mux time (ISOBMFF `mvhd`, Matroska `DateUTC`, etc.) |
-| `modificationDate` | `Date?` | Last modification time |
+| `modificationDate` | `Date?` | Embedded container modification time (for example QuickTime `mvhd`), not the filesystem modification date |
 | `bitRate` | `Int?` | Overall container bitrate in bits/second |
 | `timecode` | `String?` | Clip start timecode `HH:MM:SS:FF` (or `HH:MM:SS;FF` for drop-frame) — the first source the container yields |
 | `timecodes` | `[Timecode]` | Every timecode source the container carries, tagged with provenance — QuickTime `tmcd` track, `moov>udta ©TIM`, XMP `xmpDM:startTimeCode`/`altTimeCode`, MXF MaterialPackage vs FilePackage, Sony NRT LtcChangeTable. Mismatches trigger a `timecode mismatch:` entry in `warnings` |
@@ -983,10 +993,10 @@ Sources/SwiftMediaMetadata/
 ├── AVIF/           # AVIF (ISOBMFF) parser and writer
 ├── HEIF/           # HEIF/HEIC parser and writer with auxiliary image walk
 ├── WebP/           # WebP (RIFF container) parser and writer
-├── GIF/            # GIF parser (XMP + C2PA Application Extension)
-├── BMP/            # BMP / DIB header reader
-├── SVG/            # SVG metadata reader
-├── PDF/            # PDF document metadata + catalog `/Metadata` XMP
+├── GIF/            # GIF parser/writer (XMP + C2PA Application Extension)
+├── BMP/            # BMP header reader
+├── SVG/            # SVG XMP metadata reader/writer
+├── PDF/            # PDF document metadata + catalog `/Metadata` XMP reader/writer
 ├── PSD/            # Photoshop document parser and writer
 ├── Apple/          # AAE sidecar parser (Apple Photos edit decisions)
 ├── Audio/          # MP3/FLAC/M4A/Ogg/WAV/AIFF tag and codec readers + writers

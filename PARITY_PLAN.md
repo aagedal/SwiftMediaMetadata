@@ -3,11 +3,13 @@
 Tracking the remaining real bugs found by comparing `swift-exif` output
 against ExifTool (stills) and ffprobe (video) on the corpora at:
 
-- Stills: `/Users/traag222/Development/Aagedal_Photo_Agent/TestImages/`
-- Video:  `/Users/traag222/Movies/TestVideo/`
+- Stills: `/Users/truls.aagedal/Pictures/TestImages/`
+- Video:  `/Users/truls.aagedal/Movies/TestVideo/`
 
-Generated 2026-05-01. Comparison harness lives in `/tmp/exif_compare/`
-(`compare_stills.py`, `compare_video.py`).
+Generated 2026-05-01. Audited 2026-09-01: the corpora are present at the
+updated paths above, but the temporary comparison harness and ExifTool install
+are not. The snapshot below must remain historical until the harness is
+recreated and both corpora are rerun; `ffprobe` is available.
 
 ## Status snapshot
 

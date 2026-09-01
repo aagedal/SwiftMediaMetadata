@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos-tests:
+    name: macOS library tests
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run core test suite
+        run: swift test --filter SwiftMediaMetadataTests
+
+  cli-tests:
+    name: macOS CLI tests
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run black-box CLI test suite
+        run: Scripts/run-cli-tests.sh
+
+  ios-build:
+    name: iOS 16 library build
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compile library for iOS
+        run: |
+          IOS_SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          swift build \
+            --target SwiftMediaMetadata \
+            --triple arm64-apple-ios16.0 \
+            --sdk "$IOS_SDK_PATH"

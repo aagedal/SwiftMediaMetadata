@@ -8,7 +8,7 @@ changes still belong in `CHANGELOG.md`.
 
 - [x] 1. Unify filesystem writes and support modification-date preservation
 - [x] 2. Rename the package and library module for the 2.0 release
-- [ ] 3. Add continuous integration for supported products and platforms
+- [x] 3. Add continuous integration for supported products and platforms
 - [ ] 4. Rebaseline roadmap, changelog, and installation documentation
 - [ ] 5. Reduce the compile-time cost of the generated geolocation database
 - [ ] 6. Add persistent fuzz and property testing for binary parsers/writers
@@ -71,7 +71,8 @@ Status: Completed 2026-09-01
 
 - [x] Clients build with `import SwiftMediaMetadata` and the new product name.
 - [x] Source and test directories match their renamed SwiftPM targets.
-- [x] README installation examples use the new repository URL and a 2.0 version.
+- [x] README installation examples use the new repository URL and distinguish
+  the pre-release `main` branch from the future 2.0 version tag.
 - [x] The changelog documents the breaking migration and stable CLI name.
 - [x] Git remotes contain only the renamed GitHub repository.
 - [x] The full package and opt-in CLI test suites pass after a clean rebuild.
@@ -89,22 +90,43 @@ Completion notes:
 
 ## 3. Continuous integration
 
-Status: Planned
+Status: Completed 2026-09-01
 
-- Run the core Swift test suite on macOS.
-- Run black-box CLI tests with `SWIFT_EXIF_RUN_CLI_TESTS=1`.
-- Compile-check the library for every platform advertised in `Package.swift`.
-- Keep optional external-fixture/ffmpeg tests visibly reported as skipped.
+- [x] Run the core Swift test suite on macOS.
+- [x] Run black-box CLI tests with `SWIFT_EXIF_RUN_CLI_TESTS=1`.
+- [x] Compile-check the library for every platform advertised in `Package.swift`.
+- [x] Keep optional external-fixture/ffmpeg tests visibly reported as skipped.
+
+Completion notes:
+
+- Added GitHub Actions checks for the macOS library suite, the opt-in
+  black-box CLI suite, and an arm64 iOS 16 library build.
+- Kept the library and CLI suites as separate checks so optional test skips and
+  failures are visible in the check that owns them.
+- Verified 1,592 library tests (20 skipped, 0 failures), all 50 opt-in CLI
+  tests (0 failures), and the iOS cross-compile command with the iPhoneOS SDK.
 
 ## 4. Roadmap and release documentation
 
-Status: Planned
+Status: In progress
 
-- Re-run the ExifTool/ffprobe comparison corpus before replacing the stale
+- [ ] Re-run the ExifTool/ffprobe comparison corpus before replacing the stale
   parity snapshot.
-- Add missing changelog entries for tags 1.9.9 and 1.9.10.
-- Audit package and CLI installation instructions against release artifacts.
-- Ensure supported-format tables and known limitations agree with the code.
+- [x] Add missing changelog entries for tags 1.9.9 and 1.9.10.
+- [x] Audit package and CLI installation instructions against release artifacts.
+- [x] Ensure supported-format tables and known limitations agree with the code.
+
+Progress notes:
+
+- The latest published GitHub release remains 1.6.0, the tap formula points to
+  a retired Codeberg 1.8.1 artifact, and no 2.0.0 tag exists yet. README install
+  instructions now use `main` for the renamed package and avoid promising an
+  unavailable CLI binary.
+- Updated the supported-format table for safe versus unsafe RAW writes, writable
+  GIF/PDF/MP4/SVG metadata, and the previously omitted BMP, ARRIRAW, and IVF
+  readers.
+- Located both comparison corpora under the current account. Rebaselining is
+  still pending because the `/tmp` harness is gone and ExifTool is not installed.
 
 ## 5. Geolocation database build cost
 
