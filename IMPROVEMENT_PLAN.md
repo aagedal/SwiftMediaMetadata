@@ -12,7 +12,7 @@ changes still belong in `CHANGELOG.md`.
 - [x] 4. Rebaseline roadmap, changelog, and installation documentation
 - [x] 5. Reduce the compile-time cost of the generated geolocation database
 - [x] 6. Add persistent fuzz and property testing for binary parsers/writers
-- [ ] 7. Split oversized API files without breaking the public API
+- [x] 7. Split oversized API files without breaking the public API
 - [x] 8. Prepare and publish the 2.0 release
 
 ## 1. Unified filesystem writes and modification dates
@@ -196,12 +196,29 @@ Completion notes:
 
 ## 7. API maintainability
 
-Status: Planned
+Status: Completed 2026-09-01
 
-- Split `ImageMetadata.swift` into focused extensions by responsibility.
-- Separate filesystem concerns from metadata serialization.
-- Standardize write results and warnings across media types in a future
-  source-compatible step; defer type moves or removals to a major release.
+- [x] Split `ImageMetadata.swift` into focused extensions by responsibility.
+- [x] Separate filesystem commits from metadata serialization.
+- [x] Standardize write results and warnings across media types in a
+  source-compatible step; retain existing methods as compatibility wrappers.
+- [x] Cover the common result contract, warning propagation, sidecar writes,
+  and single-file batch processing with focused tests.
+- [x] Run the full package, opt-in CLI, and iOS compile verification.
+
+Completion notes:
+
+- `ImageMetadata.swift` now contains only the core stored state and initializer;
+  reading, writing, editing, extraction, sidecar, location, and format code live
+  in focused extensions.
+- `MetadataWriteResult<Data>` represents serialization and
+  `MetadataWriteResult<URL>` represents a committed file across image, video,
+  audio, and XMP writers. Existing write APIs delegate to the new contract.
+- `FileCommitter` owns only the filesystem transaction and receives bytes that
+  have already been serialized.
+- Verified 1,655 package tests (48 skipped, 0 failures), all 50 opt-in CLI
+  tests (0 failures), the arm64 iOS 16 library build, and SwiftPM's exported-API
+  comparison against the 2.0.0 tag (no breaking changes).
 
 ## 8. Version 2.0 release
 

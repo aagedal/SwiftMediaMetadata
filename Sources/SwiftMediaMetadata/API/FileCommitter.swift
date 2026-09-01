@@ -5,11 +5,13 @@ import Foundation
 /// Metadata serialization intentionally remains in the format-specific writers;
 /// this type only owns committing the resulting bytes to disk.
 enum FileCommitter {
-    static func write(
+    /// Commit already-serialized bytes and return the destination that was written.
+    @discardableResult
+    static func commit(
         _ data: Data,
         to url: URL,
         options: ImageMetadata.WriteOptions
-    ) throws {
+    ) throws -> URL {
         let fm = FileManager.default
 
         do {
@@ -38,6 +40,7 @@ enum FileCommitter {
                     try fm.setAttributes([.modificationDate: modificationDate], ofItemAtPath: url.path)
                 }
             }
+            return url
         } catch let error as MetadataError {
             throw error
         } catch {

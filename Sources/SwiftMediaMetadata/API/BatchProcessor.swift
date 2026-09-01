@@ -62,9 +62,18 @@ public struct BatchProcessor: Sendable {
         writeOptions: ImageMetadata.WriteOptions = .default,
         transform: MetadataTransform
     ) throws {
+        _ = try processResult(file: url, writeOptions: writeOptions, transform: transform)
+    }
+
+    /// Apply a transformation to one file and return its write outcome.
+    public static func processResult(
+        file url: URL,
+        writeOptions: ImageMetadata.WriteOptions = .default,
+        transform: MetadataTransform
+    ) throws -> MetadataWriteResult<URL> {
         var metadata = try ImageMetadata.read(from: url)
         try transform(&metadata)
-        try metadata.write(to: url, options: writeOptions)
+        return try metadata.writeResult(to: url, options: writeOptions)
     }
 
     /// Apply a transformation to all supported files in a directory.

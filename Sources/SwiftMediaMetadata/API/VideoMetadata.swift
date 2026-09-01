@@ -374,11 +374,20 @@ public struct VideoMetadata: Sendable {
 
     // MARK: - Writing
 
+    /// Serialize updated metadata without touching the filesystem.
+    public func serialized() throws -> MetadataWriteResult<Data> {
+        MetadataWriteResult(output: try serializedData())
+    }
+
     /// Write updated metadata back to a new Data blob.
     ///
     /// Writing is only supported for ISOBMFF containers (MP4/MOV/M4V); all other
     /// formats throw `MetadataError.writeNotSupported`.
     public func writeToData() throws -> Data {
+        try serialized().output
+    }
+
+    private func serializedData() throws -> Data {
         guard let original = originalData else {
             throw MetadataError.writeNotSupported("No original video data available for writing")
         }
@@ -392,13 +401,22 @@ public struct VideoMetadata: Sendable {
 
     /// Write updated metadata to a file URL.
     public func write(to url: URL) throws {
-        try write(to: url, options: .default)
+        _ = try writeResult(to: url)
     }
 
     /// Write metadata to a file URL with options (atomic, backup).
     public func write(to url: URL, options: ImageMetadata.WriteOptions) throws {
-        let data = try writeToData()
-        try FileCommitter.write(data, to: url, options: options)
+        _ = try writeResult(to: url, options: options)
+    }
+
+    /// Serialize metadata, commit it to disk, and return the common write outcome.
+    public func writeResult(
+        to url: URL,
+        options: ImageMetadata.WriteOptions = .default
+    ) throws -> MetadataWriteResult<URL> {
+        let result = try serialized()
+        let output = try FileCommitter.commit(result.output, to: url, options: options)
+        return MetadataWriteResult(output: output, warnings: result.warnings)
     }
 
     // MARK: - Stripping

@@ -6,6 +6,24 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [2.1.0] — Unreleased
+
+### Added
+
+- `MetadataWriteResult<Output>` provides one source-compatible result contract
+  for image, video, audio, XMP sidecar, and single-file batch writes. The result
+  carries either serialized `Data` or the committed destination `URL` together
+  with non-fatal warnings.
+- `serialized()` and `writeResult(to:options:)` separate in-memory metadata
+  serialization from filesystem commits. Existing `writeToData()` and
+  `write(to:)` entry points remain available as compatibility wrappers.
+
+### Changed
+
+- The image API implementation is split into focused reading, writing, editing,
+  extraction, sidecar, location, and format extensions. The public API remains
+  source compatible.
+
 ## [2.0.0] — 2026-09-01
 
 ### Added
@@ -1530,6 +1548,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
+[2.1.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/2.0.0...HEAD
 [2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...2.0.0
 [1.9.10]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.9...1.9.10
 [1.9.9]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.8...1.9.9

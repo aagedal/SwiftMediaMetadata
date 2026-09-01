@@ -18,7 +18,7 @@ public struct XMPSidecar: Sendable {
 
     /// Write XMP data to a sidecar file.
     public static func write(_ xmpData: XMPData, to url: URL) throws {
-        try write(xmpData, to: url, options: .default)
+        _ = try writeResult(xmpData, to: url)
     }
 
     /// Write XMP data to a sidecar file with filesystem write options.
@@ -27,11 +27,27 @@ public struct XMPSidecar: Sendable {
         to url: URL,
         options: ImageMetadata.WriteOptions
     ) throws {
+        _ = try writeResult(xmpData, to: url, options: options)
+    }
+
+    /// Serialize XMP without touching the filesystem.
+    public static func serialized(_ xmpData: XMPData) throws -> MetadataWriteResult<Data> {
         let xml = XMPWriter.generateXML(xmpData)
         guard let data = xml.data(using: .utf8) else {
             throw MetadataError.encodingError("Failed to encode XMP XML as UTF-8")
         }
-        try FileCommitter.write(data, to: url, options: options)
+        return MetadataWriteResult(output: data)
+    }
+
+    /// Serialize XMP, commit it to disk, and return the common write outcome.
+    public static func writeResult(
+        _ xmpData: XMPData,
+        to url: URL,
+        options: ImageMetadata.WriteOptions = .default
+    ) throws -> MetadataWriteResult<URL> {
+        let result = try serialized(xmpData)
+        let output = try FileCommitter.commit(result.output, to: url, options: options)
+        return MetadataWriteResult(output: output, warnings: result.warnings)
     }
 
     /// Derive the sidecar file URL for a given image URL.

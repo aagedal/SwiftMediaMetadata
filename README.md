@@ -220,6 +220,25 @@ metadata.iptc.setValues(["news", "politics"], for: .keywords)
 try metadata.write(to: outputURL)
 ```
 
+Use the result API when a caller needs a uniform outcome across media types or
+must surface non-fatal warnings. Serialization is a separate, filesystem-free
+step:
+
+```swift
+let serialized = try metadata.serialized()
+let bytes: Data = serialized.output
+
+let written = try metadata.writeResult(to: outputURL)
+print("Wrote \(written.output.path)")
+for warning in written.warnings {
+    print("Warning: \(warning)")
+}
+```
+
+`ImageMetadata`, `VideoMetadata`, and `AudioMetadata` expose `serialized()` and
+`writeResult(to:options:)`; `XMPSidecar` exposes the equivalent static methods.
+The earlier `writeToData()` and `write(to:)` methods remain supported.
+
 Filesystem modification dates update by default. Preserve the destination's
 existing date for an in-place metadata edit, or assign the date of a separate
 source file when producing a new destination:

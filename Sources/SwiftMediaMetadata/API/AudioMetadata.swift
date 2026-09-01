@@ -143,7 +143,17 @@ public struct AudioMetadata: Sendable {
 
     // MARK: - Writing
 
+    /// Serialize updated metadata without touching the filesystem.
+    public func serialized() throws -> MetadataWriteResult<Data> {
+        MetadataWriteResult(output: try serializedData())
+    }
+
+    /// Compatibility wrapper for callers that only need the serialized bytes.
     public func writeToData() throws -> Data {
+        try serialized().output
+    }
+
+    private func serializedData() throws -> Data {
         guard let original = originalData else {
             throw MetadataError.writeNotSupported("No original audio data available for writing")
         }
@@ -169,13 +179,22 @@ public struct AudioMetadata: Sendable {
     }
 
     public func write(to url: URL) throws {
-        try write(to: url, options: .default)
+        _ = try writeResult(to: url)
     }
 
     /// Write updated metadata to a file URL with filesystem write options.
     public func write(to url: URL, options: ImageMetadata.WriteOptions) throws {
-        let data = try writeToData()
-        try FileCommitter.write(data, to: url, options: options)
+        _ = try writeResult(to: url, options: options)
+    }
+
+    /// Serialize metadata, commit it to disk, and return the common write outcome.
+    public func writeResult(
+        to url: URL,
+        options: ImageMetadata.WriteOptions = .default
+    ) throws -> MetadataWriteResult<URL> {
+        let result = try serialized()
+        let output = try FileCommitter.commit(result.output, to: url, options: options)
+        return MetadataWriteResult(output: output, warnings: result.warnings)
     }
 
     // MARK: - Stripping
