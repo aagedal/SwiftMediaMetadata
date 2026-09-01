@@ -300,22 +300,37 @@ Completion notes:
 
 ## 10. Remaining 2.1 metadata workflow requests
 
-Status: Planned
+Status: In progress
 
 ### Transactional sidecar mutation
 
-- [ ] Define a public revision token and stale-revision error that do not rely
+- [x] Define a public revision token and stale-revision error that do not rely
   on modification time alone.
-- [ ] Add an `XMPSidecar.update(...)` operation that reads the latest disk
+- [x] Add an `XMPSidecar.update(...)` operation that reads the latest disk
   state, preserves unknown XMP, applies a caller mutation, validates the
   serialized packet, and commits through `FileCommitter`.
-- [ ] Support bounded retries when another writer wins the revision race;
+- [x] Support bounded retries when another writer wins the revision race;
   never silently overwrite a newer sidecar after the caller's base revision.
-- [ ] Read back the installed sidecar and return its new revision and warnings.
-- [ ] Forward write options so visibility, creation date, modification date,
+- [x] Read back the installed sidecar and return its new revision and warnings.
+- [x] Forward write options so visibility, creation date, modification date,
   backups, and atomic replacement follow the shared filesystem contract.
-- [ ] Cover two-writer conflicts, retry success/exhaustion, mutation failure,
+- [x] Cover two-writer conflicts, retry success/exhaustion, mutation failure,
   invalid output, unknown-field preservation, and interrupted-write cleanup.
+
+Implementation notes:
+
+- `XMPSidecarRevision` fingerprints exact packet bytes with SHA-256 and byte
+  count; `.missing` also supports create-only transactions without relying on
+  filesystem date precision.
+- `XMPSidecar.update` applies a mutation to the latest parsed graph, validates
+  generated XML, compares revisions and commits under a cross-process directory
+  lock, then reads back the installed revision before releasing the lock.
+- Ordinary `XMPSidecar.write` calls use the same lock. A retry reapplies the
+  mutation to the competing writer's state, while an already-stale caller base
+  fails before mutation and cannot overwrite newer bytes.
+- Verified 1,696 package tests (48 skipped, 0 failures), all 50 opt-in CLI
+  tests, and the arm64 iOS 16 library build. The eight focused transactional
+  tests import only the public module and cover both atomic and direct commits.
 
 ### Semantic comparison and carrier capabilities
 

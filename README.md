@@ -278,6 +278,34 @@ var xmp = try readXMPSidecar(for: rawFileURL)
 print(xmp.headline)
 ```
 
+For concurrent editors, read a content revision and use a transactional
+mutation. The closure receives the latest parsed packet and preserves fields it
+does not change. It can run more than once when a competing writer commits, so
+keep it free of one-shot side effects:
+
+```swift
+let sidecarURL = XMPSidecar.sidecarURL(for: rawFileURL)
+let snapshot = try XMPSidecar.readSnapshot(from: sidecarURL)
+
+let result = try XMPSidecar.update(
+    at: sidecarURL,
+    expectedRevision: snapshot.revision,
+    maximumRetries: 2,
+    options: ImageMetadata.WriteOptions(
+        fileModificationDate: .preserveExisting
+    )
+) { xmp in
+    xmp.rating = 5
+}
+
+print(result.revision)
+```
+
+A base revision that was already stale throws
+`XMPSidecarUpdateError.staleRevision` without overwriting the newer packet.
+Use `.missing` as the expected revision when a transaction should create a
+sidecar only if none exists.
+
 Localized `rdf:Alt` values retain their original order, language tags,
 duplicates, and empty entries:
 

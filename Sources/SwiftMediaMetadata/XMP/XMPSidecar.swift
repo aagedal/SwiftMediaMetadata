@@ -46,7 +46,9 @@ public struct XMPSidecar: Sendable {
         options: ImageMetadata.WriteOptions = .default
     ) throws -> MetadataWriteResult<URL> {
         let result = try serialized(xmpData)
-        let output = try FileCommitter.commit(result.output, to: url, options: options)
+        let output = try XMPSidecarTransactionLock.withLock(for: url) {
+            try FileCommitter.commit(result.output, to: url, options: options)
+        }
         return MetadataWriteResult(output: output, warnings: result.warnings)
     }
 

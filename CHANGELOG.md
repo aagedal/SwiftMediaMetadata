@@ -37,6 +37,11 @@ the CLI; the library target follows the same numbering.
 - `serialized()` and `writeResult(to:options:)` separate in-memory metadata
   serialization from filesystem commits. Existing `writeToData()` and
   `write(to:)` entry points remain available as compatibility wrappers.
+- `XMPSidecarRevision`, `XMPSidecarSnapshot`, and `XMPSidecar.update` provide
+  content-revisioned sidecar mutations with stale-write detection, bounded
+  merge retries, serialized-packet validation, and an installed-state result.
+  Transactional and ordinary sidecar writes share a cross-process lock and the
+  existing filesystem write-options contract.
 
 ### Changed
 
