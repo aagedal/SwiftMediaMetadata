@@ -65,8 +65,13 @@ final class FLACParserTests: XCTestCase {
 
         data[10] = UInt8((sr >> 12) & 0xFF)
         data[11] = UInt8((sr >> 4) & 0xFF)
-        data[12] = UInt8(((sr & 0x0F) << 4) | ((ch & 0x07) << 1) | ((bps >> 4) & 0x01))
-        data[13] = UInt8((bps & 0x0F) << 4) | UInt8((totalSamples >> 32) & 0x0F)
+        let sampleRateLow = UInt8((sr & 0x0F) << 4)
+        let channelBits = UInt8((ch & 0x07) << 1)
+        let bitsPerSampleHigh = UInt8((bps >> 4) & 0x01)
+        data[12] = sampleRateLow | channelBits | bitsPerSampleHigh
+        let bitsPerSampleLow = UInt8((bps & 0x0F) << 4)
+        let totalSamplesHigh = UInt8((totalSamples >> 32) & 0x0F)
+        data[13] = bitsPerSampleLow | totalSamplesHigh
         data[14] = UInt8((totalSamples >> 24) & 0xFF)
         data[15] = UInt8((totalSamples >> 16) & 0xFF)
         data[16] = UInt8((totalSamples >> 8) & 0xFF)
