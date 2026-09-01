@@ -100,8 +100,9 @@ The supported release target. Builds with the system Swift toolchain
 ```
 
 Output lands at `dist/swift-exif-macos-arm64.tar.gz`. The archive contains the
-stripped CLI and its adjacent SwiftPM resource bundle, which supplies the
-offline geolocation database. Keep both together when installing manually.
+stripped CLI, its adjacent SwiftPM resource bundle, which supplies the offline
+geolocation database, and the project license. Keep the executable and bundle
+together when installing manually.
 For a plain development build, `swift build -c release` places the executable
 and resource bundle together under `.build/release`.
 

@@ -11,8 +11,9 @@ changes still belong in `CHANGELOG.md`.
 - [x] 3. Add continuous integration for supported products and platforms
 - [x] 4. Rebaseline roadmap, changelog, and installation documentation
 - [x] 5. Reduce the compile-time cost of the generated geolocation database
-- [ ] 6. Add persistent fuzz and property testing for binary parsers/writers
+- [x] 6. Add persistent fuzz and property testing for binary parsers/writers
 - [ ] 7. Split oversized API files without breaking the public API
+- [ ] 8. Prepare and publish the 2.0 release
 
 ## 1. Unified filesystem writes and modification dates
 
@@ -165,13 +166,34 @@ Completion notes:
 
 ## 6. Parser and writer hardening
 
-Status: Planned
+Status: Completed 2026-09-01
 
-- Add reusable fuzz entry points for TIFF/Exif, ISOBMFF, XMP, C2PA, and video
-  bitstreams.
-- Add truncation, oversized-length, nesting-depth, and write-read-write
-  properties to the normal test suite.
-- Retain minimized regression inputs when fuzzing finds a failure.
+- [x] Add reusable, deterministic fuzz entry points for TIFF/Exif, ISOBMFF,
+  XMP, C2PA, and video bitstreams.
+- [x] Add all-prefix truncation, oversized-length, nesting-depth, and
+  write-read-write properties to the normal test suite.
+- [x] Support longer reproducible local runs with configurable iteration count
+  and seed.
+- [x] Run the extended harness under Address Sanitizer; retain minimized
+  regression inputs whenever a future run finds a failure.
+
+Implementation notes:
+
+- `ParserHardeningPropertyTests` keeps a fast 256-input deterministic byte-soup
+  pass in every normal test run and exercises every truncation of representative
+  valid inputs.
+- `Scripts/run-parser-fuzzing.sh` raises the same harness to 50,000 inputs by
+  default. `SWIFT_METADATA_FUZZ_ITERATIONS` and `SWIFT_METADATA_FUZZ_SEED` make
+  failures repeatable without maintaining a separate parser implementation.
+- Existing depth-limit regression tests cover ISOBMFF traversal, JUMBF, XMP,
+  CBOR, TIFF child IFDs, and GPMF containers.
+
+Completion notes:
+
+- Verified the normal 256-input profile, the 50,000-input extended profile, and
+  the same 50,000-input profile under Address Sanitizer with no failures.
+- No new crashing input was found to minimize. Existing previously minimized
+  overflow/depth cases remain committed beside their owning parser tests.
 
 ## 7. API maintainability
 
@@ -181,3 +203,26 @@ Status: Planned
 - Separate filesystem concerns from metadata serialization.
 - Standardize write results and warnings across media types in a future
   source-compatible step; defer type moves or removals to a major release.
+
+## 8. Version 2.0 release
+
+Status: In progress
+
+- [x] Keep the CLI version, package/module rename, migration notes, and changelog
+  aligned on 2.0.0.
+- [x] Add one local preflight that runs library/CLI tests, builds and smoke-tests
+  the archive, verifies its contents, and produces a SHA-256 checksum.
+- [x] Add a tag-driven GitHub release workflow that accepts only plain semantic
+  version tags, uses the 2.0 changelog section as release notes, and uploads the
+  verified macOS arm64 archive and checksum.
+- [x] Include the license and required geolocation resource bundle in the CLI
+  archive.
+- [x] Document the exact pre-tag, publish, Homebrew, and post-release checks in
+  `RELEASE_CHECKLIST.md`.
+- [ ] Complete the pre-tag checklist and replace the changelog's `Unreleased`
+  marker with the actual release date.
+- [ ] Push the reviewed 2.0.0 tag and verify the published GitHub artifacts.
+- [ ] Update and smoke-test the external Homebrew tap using the published
+  archive checksum.
+- [ ] Switch README installation examples from pre-release instructions to the
+  published tag and verified Homebrew formula.

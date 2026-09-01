@@ -10,6 +10,13 @@ the CLI; the library target follows the same numbering.
 
 ### Added
 
+- Deterministic parser property tests now exercise TIFF/Exif, ISOBMFF, XMP,
+  C2PA/JUMBF, and video bitstreams with truncations, malformed lengths, seeded
+  byte soup, and write-read-write stability checks. A reusable script supports
+  longer reproducible local runs.
+- Release tooling now provides a single macOS preflight, a tag-driven GitHub
+  release workflow, SHA-256 checksums, archive-content validation, and a
+  step-by-step 2.0 release/Homebrew checklist.
 - `ImageMetadata.WriteOptions.FileModificationDatePolicy` controls filesystem
   modification dates independently of timestamps embedded in media metadata.
   Use `.preserveExisting` for in-place edits or `.set(Date)` when a new output

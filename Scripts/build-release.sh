@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the swift-exif CLI for macOS (arm64). Output lands under ./dist/ as a
-# tarball containing the executable and its SwiftPM resource bundle.
+# tarball containing the executable, its SwiftPM resource bundle, and license.
 #
 # Linux static builds are no longer produced as part of the release.
 # See "Building from source" in README.md for the recipe a downstream
@@ -28,6 +28,7 @@ build_mac() {
   mkdir -p "$out_dir"
   cp ".build/${arch}-apple-macosx/release/swift-exif" "$out_dir/swift-exif"
   cp -R ".build/${arch}-apple-macosx/release/SwiftMediaMetadata_SwiftMediaMetadata.bundle" "$out_dir/"
+  cp LICENSE "$out_dir/LICENSE"
   strip -x "$out_dir/swift-exif"
   file "$out_dir/swift-exif"
   tar -czf "$archive" -C "$DIST" "$artifact_name"
