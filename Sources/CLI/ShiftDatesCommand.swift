@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct ShiftDatesCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -12,6 +12,7 @@ struct ShiftDatesCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .long, help: "Time offset in seconds (positive = forward, negative = backward).")
     var by: Double?
@@ -38,6 +39,10 @@ struct ShiftDatesCommand: ParsableCommand {
         let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
         let offset = by ?? (hours! * 3600)
+        let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+            atomic: true,
+            createBackup: backup && !overwriteOriginal
+        ))
 
         var succeeded = 0
         var failed = 0
@@ -48,7 +53,6 @@ struct ShiftDatesCommand: ParsableCommand {
                 if let condition, !condition.matches(metadata) { continue }
 
                 metadata.shiftDates(by: offset)
-                let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
                 try metadata.write(to: url, options: options)
                 succeeded += 1
             } catch {

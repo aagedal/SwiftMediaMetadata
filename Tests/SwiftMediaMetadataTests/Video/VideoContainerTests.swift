@@ -1,0 +1,862 @@
+import XCTest
+@testable import SwiftMediaMetadata
+
+/// Tests for video-container coverage required by the Aagedal Media Converter swap:
+///   - C2PA in MP4/MOV
+///   - Sony NonRealTimeMeta XML (embedded + sidecar)
+///   - MXF container sniffing + KLV payload extraction
+///   - Negative cases (plain files return nil, no false positives)
+final class VideoContainerTests: XCTestCase {
+
+    // MARK: - C2PA in MP4/MOV
+
+    func testMP4WithC2PAUUIDBox() throws {
+        let jumbf = buildMinimalManifestStore()
+        let data = buildMP4WithC2PAUUIDBox(jumbf: jumbf, brand: "mp42")
+        let metadata = try VideoMetadata.read(from: data)
+
+        XCTAssertNotNil(metadata.c2pa, "C2PA should be extracted from uuid box in MP4")
+        XCTAssertEqual(metadata.c2pa?.manifests.count, 1)
+        XCTAssertEqual(metadata.c2pa?.activeManifest?.claim.claimGenerator, "SwiftMediaMetadata Test")
+    }
+
+    func testMP4WithC2PATopLevelJumb() throws {
+        let jumbf = buildMinimalManifestStore()
+        let data = buildMP4WithTopLevelJumb(jumbf: jumbf)
+        let metadata = try VideoMetadata.read(from: data)
+
+        XCTAssertNotNil(metadata.c2pa)
+    }
+
+    func testMOVWithC2PAUUIDBox() throws {
+        let jumbf = buildMinimalManifestStore()
+        let data = buildMP4WithC2PAUUIDBox(jumbf: jumbf, brand: "qt  ")
+        let metadata = try VideoMetadata.read(from: data)
+
+        XCTAssertEqual(metadata.format, .mov)
+        XCTAssertNotNil(metadata.c2pa)
+    }
+
+    func testPlainMP4HasNoC2PA() throws {
+        let data = buildMinimalValidMP4(brand: "isom")
+        let metadata = try VideoMetadata.read(from: data)
+
+        XCTAssertNil(metadata.c2pa, "Plain MP4 must not surface C2PA")
+        XCTAssertTrue(metadata.warnings.isEmpty)
+    }
+
+    // MARK: - Sony NRT XML (parser)
+
+    func testParseSonyNRTXML() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta">
+          <Device manufacturer="Sony" modelName="PXW-FX9" serialNo="123456"/>
+          <LensUnitMetadata>
+            <LensModelName>Sony FE 24-70mm F2.8 GM</LensModelName>
+          </LensUnitMetadata>
+          <CreationDate value="2024-01-15T10:30:00+02:00"/>
+          <TimeZone>+02:00</TimeZone>
+          <RecordingMode type="normal"/>
+          <VideoFormat>
+            <VideoFrame captureFps="23.98p" formatFps="23.98p"/>
+          </VideoFormat>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="CaptureGammaEquation" value="SLog3"/>
+            </Group>
+          </AcquisitionRecord>
+          <UserDescriptiveMetadata>
+            <Meta name="Creator" content="Jane Doe"/>
+            <Meta name="Project" content="Documentary A"/>
+          </UserDescriptiveMetadata>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+
+        XCTAssertEqual(cam.deviceManufacturer, "Sony")
+        XCTAssertEqual(cam.deviceModelName, "PXW-FX9")
+        XCTAssertEqual(cam.deviceSerialNumber, "123456")
+        XCTAssertEqual(cam.lensModelName, "Sony FE 24-70mm F2.8 GM")
+        XCTAssertEqual(cam.timeZone, "+02:00")
+        XCTAssertEqual(cam.captureGammaEquation, "SLog3")
+        XCTAssertEqual(cam.recordingModeType, "normal")
+        XCTAssertEqual(cam.captureFps!, 23.98, accuracy: 0.001)
+        XCTAssertEqual(cam.userMetaNames, ["Creator", "Project"])
+        XCTAssertEqual(cam.userMetaContents, ["Jane Doe", "Documentary A"])
+        XCTAssertNotNil(cam.creationDate)
+    }
+
+    func testParseSonyNRTWithNamespacePrefix() throws {
+        // Some Sony writers namespace-prefix all elements.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <ns:NonRealTimeMeta xmlns:ns="urn:schemas-professionalDisc:nonRealTimeMeta">
+          <ns:Device manufacturer="Sony" modelName="ILCE-7M4" serialNo="ABC"/>
+          <ns:VideoFormat><ns:VideoFrame captureFps="29.97p"/></ns:VideoFormat>
+        </ns:NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertEqual(cam.deviceManufacturer, "Sony")
+        XCTAssertEqual(cam.deviceModelName, "ILCE-7M4")
+        XCTAssertEqual(cam.captureFps!, 29.97, accuracy: 0.001)
+    }
+
+    func testParseNRTFrameRateFraction() throws {
+        let xml = """
+        <NonRealTimeMeta>
+          <VideoFormat><VideoFrame captureFps="30000/1001"/></VideoFormat>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertEqual(cam.captureFps!, 30000.0 / 1001.0, accuracy: 0.0001)
+    }
+
+    func testNRTParserRejectsMalformed() {
+        let bogus = Data("<<not xml".utf8)
+        XCTAssertThrowsError(try NRTXMLParser.parse(bogus))
+    }
+
+    func testNRTCameraMetadataIsEmptyForBlankXML() throws {
+        let xml = "<NonRealTimeMeta></NonRealTimeMeta>"
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertTrue(cam.isEmpty)
+    }
+
+    /// Sony X-OCN clips (F55/F65/VENICE/BURANO) embed a much richer NRT XML
+    /// document than the FX9 sample above — multiple AcquisitionRecord
+    /// groups, ASC CDL, VideoFrame@videoCodec. This test mirrors the shape
+    /// of the F55 clips at `/Users/traag222/Movies/TestVideo/Sony RAW/Scene9`
+    /// to lock in our depth of harvest.
+    func testParseSonyXOCNNRTXML() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta:ver.2.00">
+          <Device manufacturer="Sony" modelName="MPC-3628" serialNo="0003077"/>
+          <CreationDate value="2022-06-22T19:16:01Z"/>
+          <VideoFormat>
+            <VideoFrame captureFps="24p" formatFps="24p" videoCodec="F55_X-OCN_LT_8.6K_3:2"/>
+            <VideoLayout numOfVerticalLine="5760" pixel="8640" pixelAspect="1.5:1"/>
+          </VideoFormat>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="ExposureIndexOfPhotoMeter" value="3200"/>
+              <Item name="ISOSensitivity" value="3200"/>
+              <Item name="ShutterSpeed_Angle" value="173.00deg"/>
+              <Item name="ShutterSpeed_Time" value="20ms"/>
+              <Item name="NeutralDensityFilterWheelSetting" value="32"/>
+              <Item name="WhiteBalance" value="8000"/>
+              <Item name="TintCorrection" value="0"/>
+              <Item name="CaptureGammaEquation" value="scene-linear"/>
+              <Item name="GammaForCDL" value="rec709"/>
+            </Group>
+            <Group name="SonyF65CameraMetadataSet">
+              <Item name="GammaForLook" value="s-log3-cine"/>
+              <Item name="ColorForLook" value="s-gamut3-cine"/>
+              <Item name="PreCDLTransform" value="LUT:SL3SG3Ctos709.cube"/>
+              <Item name="LookProcessBaked" value="false"/>
+              <Item name="RawBlackCodeValue" value="512"/>
+              <Item name="RawGrayCodeValue" value="1504"/>
+              <Item name="RawWhiteCodeValue" value="5472"/>
+            </Group>
+            <Group name="CameraPostureMetadataSet">
+              <Item name="CameraTiltAngle" value="-2.3deg"/>
+              <Item name="CameraRollAngle" value="0.7deg"/>
+            </Group>
+          </AcquisitionRecord>
+          <ExtendedContents>
+            <cdl:ColorCorrectionCollection xmlns:cdl="urn:ASC:CDL:v1.01">
+              <cdl:ColorCorrection id=" ">
+                <cdl:SOPNode>
+                  <cdl:Slope>1.1000 1.0500 0.9500</cdl:Slope>
+                  <cdl:Offset>0.0100 0.0000 -0.0050</cdl:Offset>
+                  <cdl:Power>0.9800 1.0000 1.0200</cdl:Power>
+                </cdl:SOPNode>
+                <cdl:SatNode>
+                  <cdl:Saturation>1.1000</cdl:Saturation>
+                </cdl:SatNode>
+              </cdl:ColorCorrection>
+            </cdl:ColorCorrectionCollection>
+          </ExtendedContents>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+
+        // VideoFrame@videoCodec + VideoLayout
+        XCTAssertEqual(cam.videoCodecLabel, "F55_X-OCN_LT_8.6K_3:2")
+        XCTAssertEqual(cam.pixelAspect, "1.5:1")
+
+        // CameraUnitMetadataSet
+        XCTAssertEqual(cam.exposureIndex, 3200)
+        XCTAssertEqual(cam.isoSensitivity, 3200)
+        XCTAssertEqual(cam.shutterAngle, 173.0)
+        XCTAssertEqual(cam.shutterTimeMs, 20.0)
+        XCTAssertEqual(cam.ndFilter, "32")
+        XCTAssertEqual(cam.whiteBalanceK, 8000)
+        XCTAssertEqual(cam.tintCorrection, 0)
+        XCTAssertEqual(cam.captureGammaEquation, "scene-linear")
+        XCTAssertEqual(cam.gammaForCDL, "rec709")
+
+        // SonyF65CameraMetadataSet
+        XCTAssertEqual(cam.gammaForLook, "s-log3-cine")
+        XCTAssertEqual(cam.colorForLook, "s-gamut3-cine")
+        XCTAssertEqual(cam.preCDLTransform, "LUT:SL3SG3Ctos709.cube")
+        XCTAssertEqual(cam.lookProcessBaked, false)
+        XCTAssertEqual(cam.rawBlackCodeValue, 512)
+        XCTAssertEqual(cam.rawGrayCodeValue, 1504)
+        XCTAssertEqual(cam.rawWhiteCodeValue, 5472)
+
+        // CameraPostureMetadataSet
+        XCTAssertEqual(cam.cameraTiltAngle, -2.3)
+        XCTAssertEqual(cam.cameraRollAngle, 0.7)
+
+        // Catch-all dictionary
+        XCTAssertEqual(
+            cam.acquisitionGroups["SonyF65CameraMetadataSet"]?["PreCDLTransform"],
+            "LUT:SL3SG3Ctos709.cube"
+        )
+        XCTAssertEqual(
+            cam.acquisitionGroups["CameraPostureMetadataSet"]?["CameraTiltAngle"],
+            "-2.3deg"
+        )
+
+        // ASC CDL — non-identity, so it surfaces.
+        let cdl = try XCTUnwrap(cam.ascCDL)
+        XCTAssertEqual(cdl.slope, [1.1, 1.05, 0.95])
+        XCTAssertEqual(cdl.offset, [0.01, 0.0, -0.005])
+        XCTAssertEqual(cdl.power, [0.98, 1.0, 1.02])
+        XCTAssertEqual(cdl.saturation, 1.1)
+        XCTAssertFalse(cdl.isIdentity)
+    }
+
+    /// VENICE / VENICE 2 / BURANO bodies omit the `<Device>` element from
+    /// their NRT v2.00 XML and instead encode the body identity in the
+    /// `CameraAttributes` Item under `CameraUnitMetadataSet`. We back-fill
+    /// `deviceManufacturer` / `deviceModelName` / `deviceSerialNumber`
+    /// from that string when no `<Device>` is present.
+    func testCameraAttributesBackfillsCinemaBody() throws {
+        let burano = """
+        <NonRealTimeMeta>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="CameraAttributes" value="MPC-2610 0000048 Version1.00"/>
+            </Group>
+          </AcquisitionRecord>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(burano.utf8))
+        XCTAssertEqual(cam.deviceManufacturer, "Sony")
+        XCTAssertEqual(cam.deviceModelName, "BURANO")
+        XCTAssertEqual(cam.deviceSerialNumber, "0000048")
+        XCTAssertEqual(cam.cameraAttributes, "MPC-2610 0000048 Version1.00")
+    }
+
+    func testExplicitDeviceWinsOverCameraAttributes() throws {
+        // FX9-style XML carries both <Device> and CameraAttributes; the
+        // explicit Device must take precedence.
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="PXW-FX9" serialNo="explicit-1"/>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="CameraAttributes" value="MPC-3628 0003077 Version1.03"/>
+            </Group>
+          </AcquisitionRecord>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertEqual(cam.deviceModelName, "PXW-FX9")
+        XCTAssertEqual(cam.deviceSerialNumber, "explicit-1")
+    }
+
+    func testUnknownMPCCodeLeavesModelUnset() throws {
+        let xml = """
+        <NonRealTimeMeta>
+          <AcquisitionRecord>
+            <Group name="CameraUnitMetadataSet">
+              <Item name="CameraAttributes" value="MPC-9999 abc Version0.00"/>
+            </Group>
+          </AcquisitionRecord>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertNil(cam.deviceModelName, "Unknown MPC code must not back-fill modelName")
+        XCTAssertNil(cam.deviceManufacturer, "Unknown MPC code must not back-fill manufacturer")
+        // Serial number is still derivable (second token), regardless of
+        // whether we recognise the model code.
+        XCTAssertEqual(cam.deviceSerialNumber, "abc")
+    }
+
+    /// Identity ASC CDL (Sony's default when no on-set grade is applied)
+    /// must be suppressed so the field doesn't pollute every X-OCN clip.
+    func testIdentityASCCDLSuppressed() throws {
+        let xml = """
+        <NonRealTimeMeta>
+          <ExtendedContents>
+            <cdl:ColorCorrectionCollection xmlns:cdl="urn:ASC:CDL:v1.01">
+              <cdl:ColorCorrection>
+                <cdl:SOPNode>
+                  <cdl:Slope>1.0000 1.0000 1.0000</cdl:Slope>
+                  <cdl:Offset>0.0000 0.0000 0.0000</cdl:Offset>
+                  <cdl:Power>1.0000 1.0000 1.0000</cdl:Power>
+                </cdl:SOPNode>
+                <cdl:SatNode><cdl:Saturation>1.0000</cdl:Saturation></cdl:SatNode>
+              </cdl:ColorCorrection>
+            </cdl:ColorCorrectionCollection>
+          </ExtendedContents>
+        </NonRealTimeMeta>
+        """
+        let cam = try NRTXMLParser.parse(Data(xml.utf8))
+        XCTAssertNil(cam.ascCDL, "Identity ASC CDL must be suppressed")
+    }
+
+    // MARK: - Embedded NRT in MP4
+
+    func testEmbeddedNRTInMP4UUIDBox() throws {
+        let xml = """
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta">
+          <Device manufacturer="Sony" modelName="ILCE-1" serialNo="S-1"/>
+        </NonRealTimeMeta>
+        """
+        // Use a non-XMP uuid + XML payload — the parser sniffs content.
+        let uuidUserType = Data([
+            0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77
+        ])
+        let payload = uuidUserType + Data(xml.utf8)
+        let data = buildMP4WithUUIDBox(uuidPayload: payload)
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.camera?.deviceManufacturer, "Sony")
+        XCTAssertEqual(metadata.camera?.deviceModelName, "ILCE-1")
+    }
+
+    // MARK: - MXF
+
+    func testMXFMagicDetected() {
+        let mxfHead: [UInt8] = [
+            0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01,
+            0x0D, 0x01, 0x02, 0x01, 0x01, 0x02, 0x04, 0x00,
+        ]
+        let data = Data(mxfHead) + Data(repeating: 0, count: 100)
+        XCTAssertTrue(MXFReader.isMXF(data))
+        XCTAssertEqual(FormatDetector.detectVideo(data), .mxf)
+    }
+
+    func testMXFWithEmbeddedNRT() throws {
+        let xml = """
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta">
+          <Device manufacturer="Sony" modelName="PMW-F55" serialNo="X-1"/>
+          <VideoFormat><VideoFrame captureFps="24p"/></VideoFormat>
+        </NonRealTimeMeta>
+        """
+        let data = buildMinimalMXF(withNRTXML: Data(xml.utf8))
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.format, .mxf)
+        XCTAssertEqual(metadata.camera?.deviceManufacturer, "Sony")
+        XCTAssertEqual(metadata.camera?.deviceModelName, "PMW-F55")
+        let fps = try XCTUnwrap(metadata.camera?.captureFps)
+        XCTAssertEqual(fps, 24.0, accuracy: 0.01)
+    }
+
+    func testMXFWithC2PAUnderSMPTEUL() throws {
+        let jumbf = buildMinimalManifestStore()
+        let c2paKey: [UInt8] = [
+            0x06, 0x0E, 0x2B, 0x34, 0x02, 0x53, 0x01, 0x01,
+            0x0D, 0x01, 0x03, 0x01, 0x20, 0xC2, 0x00, 0x00,
+        ]
+        let data = buildMinimalMXF(extraKLVs: [(key: Data(c2paKey), value: jumbf)])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertNotNil(metadata.c2pa, "MXF C2PA must be extracted via SMPTE UL")
+        XCTAssertEqual(metadata.c2pa?.activeManifest?.claim.claimGenerator, "SwiftMediaMetadata Test")
+    }
+
+    func testMXFWithC2PAUnderDarkKey() throws {
+        // "Dark" KLV: unknown 16-byte key, but value starts with JUMBF.
+        let jumbf = buildMinimalManifestStore()
+        let data = buildMinimalMXF(extraKLVs: [(key: Data(repeating: 0x5A, count: 16), value: jumbf)])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertNotNil(metadata.c2pa, "MXF C2PA should be found via JUMBF sniff even under Dark KLV")
+    }
+
+    func testMXFWithBothC2PAAndNRT() throws {
+        let jumbf = buildMinimalManifestStore()
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="PMW-F55" serialNo="X-1"/>
+        </NonRealTimeMeta>
+        """
+        let data = buildMinimalMXF(extraKLVs: [
+            (key: Data(repeating: 0xAA, count: 16), value: Data(xml.utf8)),
+            (key: Data(repeating: 0x5A, count: 16), value: jumbf),
+        ])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "PMW-F55")
+        XCTAssertNotNil(metadata.c2pa)
+    }
+
+    func testPlainMXFHasNoC2PA() throws {
+        let data = buildMinimalMXF(extraKLVs: [])
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertNil(metadata.c2pa)
+        XCTAssertNil(metadata.camera)
+    }
+
+    func testMXFFindsNRTXMLEmbeddedInsideMetadataSet() throws {
+        // Real Sony XDCAM/XAVC MXF files wrap NRT inside an RP 2057 XML
+        // Document Set, so the XML bytes are NOT at the start of any KLV
+        // value — they live several hundred bytes in, behind the set's
+        // local-tag/length/value preamble. The fallback scan must still
+        // recover them.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta:ver.2.20">
+          <Device manufacturer="Sony" modelName="PXW-FX9V" serialNo="4002062"/>
+          <Lens modelName="FE PZ 28-135mm F4 G OSS"/>
+        </NonRealTimeMeta>
+        """
+
+        // Build an MXF where the KLV value *starts* with non-XML bytes
+        // (mimicking an RP 2057 set preamble) and the XML comes after.
+        var klvValue = Data()
+        klvValue.append(contentsOf: [UInt8](repeating: 0x00, count: 64))
+        klvValue.append(Data("text/xml".utf8))
+        klvValue.append(contentsOf: [UInt8](repeating: 0x81, count: 16))
+        klvValue.append(Data(xml.utf8))
+
+        // Use a non-C2PA, non-JUMBF-looking key so only the fallback scan
+        // (not the peek) can recover this.
+        let metadataKey = Data(repeating: 0x44, count: 16)
+        let data = buildMinimalMXF(extraKLVs: [(key: metadataKey, value: klvValue)])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.camera?.deviceManufacturer, "Sony")
+        XCTAssertEqual(metadata.camera?.deviceModelName, "PXW-FX9V")
+        XCTAssertEqual(metadata.camera?.lensModelName, "FE PZ 28-135mm F4 G OSS")
+    }
+
+    func testMXFSkipsLargeEssenceKLVsWithoutLoadingThem() throws {
+        // Build an MXF where a "Dark" KLV carries multi-MB of essence bytes,
+        // followed by a small NRT XML KLV. The parser must not hang on the
+        // essence and must still find the metadata KLV.
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="AFTER-ESSENCE" serialNo="E-1"/>
+        </NonRealTimeMeta>
+        """
+        let essenceKey = Data(repeating: 0x77, count: 16) // not C2PA, not JUMBF-looking
+        let essenceValue = Data(repeating: 0x00, count: 4 * 1024 * 1024)
+        let xmlKey = Data(repeating: 0xAA, count: 16)
+
+        let data = buildMinimalMXF(extraKLVs: [
+            (key: essenceKey, value: essenceValue),
+            (key: xmlKey,     value: Data(xml.utf8)),
+        ])
+
+        let metadata = try VideoMetadata.read(from: data)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "AFTER-ESSENCE")
+    }
+
+    func testMXFIgnoresGiantMetadataKLVAboveSafetyCap() throws {
+        // A KLV whose content peek looks like NRT XML but whose declared
+        // length is implausibly large (> safety cap) must be skipped.
+        let xmlPrefix = "<NonRealTimeMeta>\n"
+        var value = Data(xmlPrefix.utf8)
+        // Pad past the 32 MB safety cap with XML-looking bytes.
+        value.append(Data(repeating: 0x20, count: 33 * 1024 * 1024))
+
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="RECOVERED" serialNo="R-1"/>
+        </NonRealTimeMeta>
+        """
+
+        let data = buildMinimalMXF(extraKLVs: [
+            (key: Data(repeating: 0xBB, count: 16), value: value),
+            (key: Data(repeating: 0xAA, count: 16), value: Data(xml.utf8)),
+        ])
+
+        let metadata = try VideoMetadata.read(from: data)
+        // Must have recovered the second KLV, proving the parser did not
+        // choke on the oversized one.
+        XCTAssertEqual(metadata.camera?.deviceModelName, "RECOVERED")
+    }
+
+    func testBERLengthShortForm() throws {
+        var reader = BinaryReader(data: Data([0x42]))
+        XCTAssertEqual(try MXFReader.readBERLength(&reader), 0x42)
+    }
+
+    func testBERLengthLongForm() throws {
+        // 0x83 = long form, 3 bytes of length follow
+        var reader = BinaryReader(data: Data([0x83, 0x01, 0x02, 0x03]))
+        XCTAssertEqual(try MXFReader.readBERLength(&reader), 0x010203)
+    }
+
+    // MARK: - Sidecar XML discovery
+
+    func testSidecarDiscoveryFindsXMLNextToMXF() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_sidecar_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mxfURL = tmp.appendingPathComponent("CLIP.MXF")
+        let xmlURL = tmp.appendingPathComponent("CLIP.XML")
+
+        // Write a minimal (unparseable-as-MXF) dummy but with valid MXF prefix so
+        // read() goes through MXFReader and then the sidecar probe fires.
+        let mxfPrefix: [UInt8] = [
+            0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01,
+            0x0D, 0x01, 0x02, 0x01, 0x01, 0x02, 0x04, 0x00,
+        ]
+        try Data(mxfPrefix).write(to: mxfURL)
+
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="SIDECAR-1" serialNo="S1"/>
+        </NonRealTimeMeta>
+        """
+        try Data(xml.utf8).write(to: xmlURL)
+
+        let metadata = try VideoMetadata.read(from: mxfURL)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "SIDECAR-1")
+    }
+
+    func testSidecarURLLookupMissingReturnsNil() {
+        let url = URL(fileURLWithPath: "/tmp/does-not-exist-\(UUID().uuidString).mp4")
+        XCTAssertNil(NRTXMLParser.sidecarURL(for: url))
+    }
+
+    func testSidecarCandidatesCoverCaseVariants() {
+        let url = URL(fileURLWithPath: "/tmp/CLIP.MP4")
+        let candidates = NRTXMLParser.sidecarCandidates(for: url).map(\.lastPathComponent)
+        XCTAssertTrue(candidates.contains("CLIP.XML"))
+        XCTAssertTrue(candidates.contains("CLIP.xml"))
+        // Sony XAVC / NXCAM layout: CLIPM01.XML next to CLIP.MP4
+        XCTAssertTrue(candidates.contains("CLIPM01.XML"))
+        XCTAssertTrue(candidates.contains("CLIPM01.xml"))
+    }
+
+    func testSidecarDiscoveryFindsSonyXAVCM01Pattern() throws {
+        // Mirrors the on-card layout of FX3/FX6/A7S etc:
+        //   M4ROOT/CLIP/rre_8077.MP4 + rre_8077M01.XML
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_m01_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mp4URL = tmp.appendingPathComponent("rre_8077.MP4")
+        let xmlURL = tmp.appendingPathComponent("rre_8077M01.XML")
+
+        try buildMinimalValidMP4(brand: "mp42").write(to: mp4URL)
+        let xml = """
+        <NonRealTimeMeta xmlns="urn:schemas-professionalDisc:nonRealTimeMeta:ver.2.20">
+          <Device manufacturer="Sony" modelName="PXW-FX9" serialNo="12345"/>
+          <VideoFormat><VideoFrame captureFps="50.00p"/></VideoFormat>
+        </NonRealTimeMeta>
+        """
+        try Data(xml.utf8).write(to: xmlURL)
+
+        let metadata = try VideoMetadata.read(from: mp4URL)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "PXW-FX9")
+        XCTAssertEqual(metadata.camera?.captureFps, 50.0)
+    }
+
+    // MARK: - Public API
+
+    func testAsyncReadVideoC2PAMetadataReturnsNilForPlainMP4() async throws {
+        let data = buildMinimalValidMP4(brand: "isom")
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_plain_\(UUID().uuidString).mp4")
+        try data.write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let c2pa = try await readVideoC2PAMetadata(from: tmp)
+        XCTAssertNil(c2pa)
+    }
+
+    func testAsyncReadVideoC2PAMetadataPopulatesForSignedMP4() async throws {
+        let jumbf = buildMinimalManifestStore()
+        let data = buildMP4WithC2PAUUIDBox(jumbf: jumbf, brand: "mp42")
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_c2pa_\(UUID().uuidString).mp4")
+        try data.write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let c2pa = try await readVideoC2PAMetadata(from: tmp)
+        XCTAssertNotNil(c2pa)
+        XCTAssertEqual(c2pa?.activeManifest?.claim.claimGenerator, "SwiftMediaMetadata Test")
+    }
+
+    func testAsyncReadVideoCameraMetadataUsesSidecar() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_cam_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mp4URL = tmp.appendingPathComponent("CLIP.MP4")
+        let xmlURL = tmp.appendingPathComponent("CLIP.XML")
+        try buildMinimalValidMP4(brand: "mp42").write(to: mp4URL)
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="FX30" serialNo="S2"/>
+        </NonRealTimeMeta>
+        """
+        try Data(xml.utf8).write(to: xmlURL)
+
+        let cam = try await readVideoCameraMetadata(from: mp4URL)
+        XCTAssertEqual(cam?.deviceModelName, "FX30")
+    }
+
+    func testAsyncReadVideoCameraMetadataReturnsNilForPlainMOV() async throws {
+        let data = buildMinimalValidMP4(brand: "qt  ")
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_plain_\(UUID().uuidString).mov")
+        try data.write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let cam = try await readVideoCameraMetadata(from: tmp)
+        XCTAssertNil(cam)
+    }
+
+    func testFilesWithBothC2PAAndCameraXMLPopulateIndependently() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftexif_both_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mp4URL = tmp.appendingPathComponent("CLIP.MP4")
+        let xmlURL = tmp.appendingPathComponent("CLIP.XML")
+
+        let jumbf = buildMinimalManifestStore()
+        try buildMP4WithC2PAUUIDBox(jumbf: jumbf, brand: "mp42").write(to: mp4URL)
+        let xml = """
+        <NonRealTimeMeta>
+          <Device manufacturer="Sony" modelName="FX3" serialNo="S3"/>
+        </NonRealTimeMeta>
+        """
+        try Data(xml.utf8).write(to: xmlURL)
+
+        let metadata = try await readVideoMetadata(from: mp4URL)
+        XCTAssertNotNil(metadata.c2pa)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "FX3")
+    }
+
+    // MARK: - Fixture builders
+
+    private func buildMinimalValidMP4(brand: String) -> Data {
+        // ftyp + minimal moov (with empty mvhd so MP4Parser does not throw)
+        var data = Data()
+        data.append(writeBoxRaw("ftyp", payload: Data(brand.utf8) + Data([0, 0, 0, 0])))
+
+        var mvhd = Data([0, 0, 0, 0]) // version + flags
+        mvhd.append(Data(repeating: 0, count: 96)) // minimal mvhd body
+        let mvhdBox = writeBoxRaw("mvhd", payload: mvhd)
+        let moovBox = writeBoxRaw("moov", payload: mvhdBox)
+        data.append(moovBox)
+        return data
+    }
+
+    private func buildMP4WithC2PAUUIDBox(jumbf: Data, brand: String) -> Data {
+        var data = buildMinimalValidMP4(brand: brand)
+
+        let c2paUUID = Data([
+            0xD8, 0xFE, 0xC3, 0xD6, 0x1B, 0x0E, 0x48, 0x3C,
+            0x92, 0x97, 0x58, 0x28, 0x87, 0x7E, 0xC4, 0x81,
+        ])
+        let uuidPayload = c2paUUID + jumbf
+        data.append(writeBoxRaw("uuid", payload: uuidPayload))
+        return data
+    }
+
+    private func buildMP4WithTopLevelJumb(jumbf: Data) -> Data {
+        // `jumbf` starts with an outer "jumb" box; re-serialize its inner payload.
+        // Extract the inner payload of the outer jumb and append it as a top-level box.
+        var reader = BinaryReader(data: jumbf)
+        _ = try? reader.readUInt32BigEndian() // size
+        _ = try? reader.readBytes(4) // "jumb"
+        let inner = (try? reader.readBytes(reader.remainingCount)) ?? Data()
+
+        var data = buildMinimalValidMP4(brand: "mp42")
+        data.append(writeBoxRaw("jumb", payload: inner))
+        return data
+    }
+
+    private func buildMP4WithUUIDBox(uuidPayload: Data) -> Data {
+        var data = buildMinimalValidMP4(brand: "mp42")
+        data.append(writeBoxRaw("uuid", payload: uuidPayload))
+        return data
+    }
+
+    private func buildMinimalMXF(withNRTXML xml: Data) -> Data {
+        return buildMinimalMXF(extraKLVs: [(key: Data(repeating: 0xAA, count: 16), value: xml)])
+    }
+
+    private func buildMinimalMXF(extraKLVs: [(key: Data, value: Data)]) -> Data {
+        // Partition Pack key (first 16 bytes).
+        let partitionPackKey: [UInt8] = [
+            0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01,
+            0x0D, 0x01, 0x02, 0x01, 0x01, 0x02, 0x04, 0x00,
+        ]
+        let partitionBody = Data(repeating: 0x00, count: 16)
+
+        var out = Data()
+        out.append(contentsOf: partitionPackKey)
+        out.append(berLength(partitionBody.count))
+        out.append(partitionBody)
+
+        for klv in extraKLVs {
+            out.append(klv.key)
+            out.append(berLength(klv.value.count))
+            out.append(klv.value)
+        }
+        return out
+    }
+
+    private func berLength(_ length: Int) -> Data {
+        if length <= 0x7F {
+            return Data([UInt8(length)])
+        }
+        var bytes: [UInt8] = []
+        var remaining = length
+        while remaining > 0 {
+            bytes.insert(UInt8(remaining & 0xFF), at: 0)
+            remaining >>= 8
+        }
+        return Data([0x80 | UInt8(bytes.count)] + bytes)
+    }
+
+    private func writeBoxRaw(_ type: String, payload: Data) -> Data {
+        var out = Data()
+        let size = UInt32(8 + payload.count)
+        out.append(contentsOf: withUnsafeBytes(of: size.bigEndian) { Array($0) })
+        out.append(type.data(using: .ascii)!)
+        out.append(payload)
+        return out
+    }
+
+    // MARK: - C2PA manifest store builders (copied minimal subset from C2PAReaderTests)
+
+    private func buildMinimalManifestStore() -> Data {
+        let claim = buildClaim(generator: "SwiftMediaMetadata Test")
+        let manifest = buildManifest(label: "urn:c2pa:test-manifest", claimCBOR: claim)
+        return wrapInManifestStore(manifest)
+    }
+
+    private func buildClaim(generator: String) -> Data {
+        var cbor = Data()
+        cbor.append(cborMap(1))
+        cbor.append(cborTextString("claim_generator"))
+        cbor.append(cborTextString(generator))
+        return cbor
+    }
+
+    private func buildMinimalSignature() -> Data {
+        var cbor = Data()
+        cbor.append(0xD2) // tag 18
+        cbor.append(cborArray(4))
+        var protectedMap = Data()
+        protectedMap.append(cborMap(1))
+        protectedMap.append(cborUInt(1))
+        protectedMap.append(cborNegInt(-7))
+        cbor.append(cborByteString(protectedMap))
+        cbor.append(cborMap(0))
+        cbor.append(Data([0xF6]))
+        cbor.append(cborByteString(Data(repeating: 0xFF, count: 64)))
+        return cbor
+    }
+
+    private func buildManifest(label: String, claimCBOR: Data) -> Data {
+        var manifestPayload = Data()
+        appendBox(to: &manifestPayload, type: "jumd", data: buildJUMD(prefix: "c2ma", label: label))
+
+        var claimSuper = Data()
+        appendBox(to: &claimSuper, type: "jumd", data: buildJUMD(prefix: "c2cl", label: "c2pa.claim"))
+        appendBox(to: &claimSuper, type: "cbor", data: claimCBOR)
+        appendBox(to: &manifestPayload, type: "jumb", data: claimSuper)
+
+        var sigSuper = Data()
+        appendBox(to: &sigSuper, type: "jumd", data: buildJUMD(prefix: "c2cs", label: "c2pa.signature"))
+        appendBox(to: &sigSuper, type: "cbor", data: buildMinimalSignature())
+        appendBox(to: &manifestPayload, type: "jumb", data: sigSuper)
+
+        return manifestPayload
+    }
+
+    private func wrapInManifestStore(_ manifestPayload: Data) -> Data {
+        var storePayload = Data()
+        appendBox(to: &storePayload, type: "jumd", data: buildJUMD(prefix: "c2pa", label: "c2pa"))
+        appendBox(to: &storePayload, type: "jumb", data: manifestPayload)
+
+        var out = Data()
+        appendBox(to: &out, type: "jumb", data: storePayload)
+        return out
+    }
+
+    private func buildJUMD(prefix: String, label: String) -> Data {
+        var d = Data()
+        d.append(contentsOf: [UInt8](prefix.utf8))
+        d.append(contentsOf: [0x00, 0x11, 0x00, 0x10, 0x80, 0x00, 0x00, 0xAA,
+                              0x00, 0x38, 0x9B, 0x71])
+        d.append(0x03)
+        d.append(contentsOf: [UInt8](label.utf8))
+        d.append(0x00)
+        return d
+    }
+
+    private func appendBox(to data: inout Data, type: String, data payload: Data) {
+        let size = UInt32(8 + payload.count)
+        data.append(contentsOf: withUnsafeBytes(of: size.bigEndian) { Array($0) })
+        data.append(type.data(using: .ascii)!)
+        data.append(payload)
+    }
+
+    private func cborUInt(_ value: UInt64) -> Data {
+        if value <= 23 { return Data([UInt8(value)]) }
+        if value <= 0xFF { return Data([0x18, UInt8(value)]) }
+        if value <= 0xFFFF { return Data([0x19, UInt8(value >> 8), UInt8(value & 0xFF)]) }
+        var d = Data([0x1A])
+        d.append(contentsOf: withUnsafeBytes(of: UInt32(value).bigEndian) { Array($0) })
+        return d
+    }
+
+    private func cborNegInt(_ value: Int64) -> Data {
+        let n = UInt64(-1 - value)
+        if n <= 23 { return Data([0x20 | UInt8(n)]) }
+        return Data([0x38, UInt8(n)])
+    }
+
+    private func cborTextString(_ s: String) -> Data {
+        let utf8 = [UInt8](s.utf8)
+        let count = utf8.count
+        var header: [UInt8]
+        if count <= 23 { header = [0x60 | UInt8(count)] }
+        else if count <= 255 { header = [0x78, UInt8(count)] }
+        else { header = [0x79, UInt8(count >> 8), UInt8(count & 0xFF)] }
+        return Data(header + utf8)
+    }
+
+    private func cborByteString(_ bytes: Data) -> Data {
+        let count = bytes.count
+        var header: [UInt8]
+        if count <= 23 { header = [0x40 | UInt8(count)] }
+        else if count <= 255 { header = [0x58, UInt8(count)] }
+        else { header = [0x59, UInt8(count >> 8), UInt8(count & 0xFF)] }
+        return Data(header) + bytes
+    }
+
+    private func cborMap(_ count: Int) -> Data {
+        if count <= 23 { return Data([0xA0 | UInt8(count)]) }
+        return Data([0xB8, UInt8(count)])
+    }
+
+    private func cborArray(_ count: Int) -> Data {
+        if count <= 23 { return Data([0x80 | UInt8(count)]) }
+        return Data([0x98, UInt8(count)])
+    }
+}

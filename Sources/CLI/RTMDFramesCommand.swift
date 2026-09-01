@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 /// `swift-exif rtmd-frames file.mp4 [--stream attributes|gyroscope|accelerometer] [--output frames.csv]`
 ///

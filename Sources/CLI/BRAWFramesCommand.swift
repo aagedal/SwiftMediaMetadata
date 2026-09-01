@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 /// `swift-exif braw-frames file.braw [--stream attributes|gyroscope|accelerometer] [--output frames.csv]`
 ///

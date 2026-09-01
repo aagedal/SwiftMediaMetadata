@@ -18,12 +18,12 @@ export SWIFT_EXIF_RUN_CLI_TESTS=1
 
 # --filter defaults to the CLI target; extra args after `--` are passed through
 # to `swift test` (useful for narrowing to a specific class via `--filter`).
-filter="SwiftExifCLITests"
+filter="SwiftMediaMetadataCLITests"
 extra_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --filter)
-            filter="SwiftExifCLITests.$2"
+            filter="SwiftMediaMetadataCLITests.$2"
             shift 2
             ;;
         --)

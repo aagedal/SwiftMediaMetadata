@@ -3,15 +3,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "SwiftExif",
+    name: "SwiftMediaMetadata",
     platforms: [
         .macOS(.v13),
         .iOS(.v16),
     ],
     products: [
         .library(
-            name: "SwiftExif",
-            targets: ["SwiftExif"]
+            name: "SwiftMediaMetadata",
+            targets: ["SwiftMediaMetadata"]
         ),
     ],
     dependencies: [
@@ -27,9 +27,9 @@ let package = Package(
             providers: [.brew(["zlib"]), .apt(["zlib1g-dev"])]
         ),
         .target(
-            name: "SwiftExif",
+            name: "SwiftMediaMetadata",
             dependencies: ["CZlib"],
-            path: "Sources/SwiftExif",
+            path: "Sources/SwiftMediaMetadata",
             linkerSettings: [
                 // `-lz` is enough on macOS (default sysroot search finds libz).
                 // For Linux-musl we pass the absolute libz.a path in the build
@@ -40,30 +40,30 @@ let package = Package(
         .executableTarget(
             name: "swift-exif",
             dependencies: [
-                "SwiftExif",
+                "SwiftMediaMetadata",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/CLI"
         ),
         .executableTarget(
             name: "Benchmark",
-            dependencies: ["SwiftExif"],
+            dependencies: ["SwiftMediaMetadata"],
             path: "Sources/Benchmark"
         ),
         .testTarget(
-            name: "SwiftExifTests",
-            dependencies: ["SwiftExif"],
-            path: "Tests/SwiftExifTests",
+            name: "SwiftMediaMetadataTests",
+            dependencies: ["SwiftMediaMetadata"],
+            path: "Tests/SwiftMediaMetadataTests",
             resources: [.copy("Fixtures/Resources")]
         ),
         // Black-box CLI tests — spawn the built `swift-exif` binary as a subprocess.
         // Gated behind SWIFT_EXIF_RUN_CLI_TESTS=1 so `swift test` skips them by
         // default. Run with `Scripts/run-cli-tests.sh` or:
-        //   SWIFT_EXIF_RUN_CLI_TESTS=1 swift test --filter SwiftExifCLITests
+        //   SWIFT_EXIF_RUN_CLI_TESTS=1 swift test --filter SwiftMediaMetadataCLITests
         .testTarget(
-            name: "SwiftExifCLITests",
-            dependencies: ["SwiftExif", "swift-exif"],
-            path: "Tests/SwiftExifCLITests"
+            name: "SwiftMediaMetadataCLITests",
+            dependencies: ["SwiftMediaMetadata", "swift-exif"],
+            path: "Tests/SwiftMediaMetadataCLITests"
         ),
     ]
 )

@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 /// Resolve file arguments to URLs, expanding directories and applying filters.
 func resolveFiles(_ paths: [String], filter: FileFilterOptions = FileFilterOptions()) throws -> [URL] {

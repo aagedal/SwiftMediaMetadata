@@ -31,8 +31,8 @@ All four HEIC stills issues land together. Test file:
 `IMG_5543_upsideDownFaceThumbnailSource_1.heic`.
 
 ### 1.1 — HEIC GPSAltitude missing
-- **Where**: `Sources/SwiftExif/Exif/ExifData.swift:173–179`
-  (`gpsAltitude` accessor) + `Sources/SwiftExif/API/MetadataExporter.swift:348–349`
+- **Where**: `Sources/SwiftMediaMetadata/Exif/ExifData.swift:173–179`
+  (`gpsAltitude` accessor) + `Sources/SwiftMediaMetadata/API/MetadataExporter.swift:348–349`
 - **Diagnosis**: GPS IFD reaches HEIC ExifData (lat/lon work fine).
   Either the accessor isn't combining the altitude reference byte
   (0x0005, 0=above/1=below) with the rational value, or we never emit
@@ -43,7 +43,7 @@ All four HEIC stills issues land together. Test file:
 - **Effort**: ~10 LOC.
 
 ### 1.2 — HEIC XMP-dc:Description not parsed
-- **Where**: `Sources/SwiftExif/Binary/ISOBMFFMetadata.swift:34–242`
+- **Where**: `Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift:34–242`
   (`extractXMP`, `extractXMPFromMeta`, `extractXMPViaItem`)
 - **Diagnosis**: Exif item extraction works → item-finding plumbing is
   fine. XMP item extraction is separate and failing for Apple HEIC.
@@ -55,9 +55,9 @@ All four HEIC stills issues land together. Test file:
 - **Effort**: ~30–60 LOC.
 
 ### 1.3 — HEIC ICCProfile:Description not parsed
-- **Where**: `Sources/SwiftExif/Binary/ISOBMFFMetadata.swift:52–61`
+- **Where**: `Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift:52–61`
   (`extractICCProfile` exists) +
-  `Sources/SwiftExif/API/ImageMetadata.swift` HEIF read path (mirror
+  `Sources/SwiftMediaMetadata/API/ImageMetadata.swift` HEIF read path (mirror
   AVIF at line 1440).
 - **Diagnosis**: `extractICCProfile` works for AVIF. HEIF read path
   just doesn't call it. ICC for HEIC is in `colr` box with type `prof`
@@ -68,7 +68,7 @@ All four HEIC stills issues land together. Test file:
 - **Effort**: ~5 LOC.
 
 ### 1.4 — ExposureProgram print conversion
-- **Where**: `Sources/SwiftExif/API/PrintConverter.swift:28`
+- **Where**: `Sources/SwiftMediaMetadata/API/PrintConverter.swift:28`
   (`exposureProgram`)
 - **Diagnosis**: Value 2 ⇒ ExifTool prints `Program AE`, we print
   `Normal Program`. Table fix.
@@ -81,9 +81,9 @@ All four HEIC stills issues land together. Test file:
 ## Phase 2 — JXL dimensions (1 bug, contained)
 
 ### 2.1 — JXL `File:ImageWidth/Height`
-- **Where**: `Sources/SwiftExif/JPEGXL/JXLParser.swift:18–36`,
-  `Sources/SwiftExif/JPEGXL/JXLFile.swift`,
-  `Sources/SwiftExif/API/MetadataExporter.swift` (where File:ImageWidth
+- **Where**: `Sources/SwiftMediaMetadata/JPEGXL/JXLParser.swift:18–36`,
+  `Sources/SwiftMediaMetadata/JPEGXL/JXLFile.swift`,
+  `Sources/SwiftMediaMetadata/API/MetadataExporter.swift` (where File:ImageWidth
   is emitted).
 - **Diagnosis**: JXL has two container forms — bare codestream
   (`FF 0A` magic) and ISOBMFF box format. Dimensions are encoded in a
@@ -104,7 +104,7 @@ All four HEIC stills issues land together. Test file:
 ## Phase 3 — Video parity
 
 ### 3.1 — MOV stream order (ProRes RAW swap, more)
-- **Where**: `Sources/SwiftExif/Video/MP4Parser.swift:423–510`
+- **Where**: `Sources/SwiftMediaMetadata/Video/MP4Parser.swift:423–510`
   (`parseTrak`); the merge into output streams (find `videoStreams +
   audioStreams`).
 - **Diagnosis**: `parseTrak` appends to separate `videoStreams` and
@@ -119,7 +119,7 @@ All four HEIC stills issues land together. Test file:
 - **Side effect**: also fixes ordering for chapter/data tracks.
 
 ### 3.2 — Chapter test files (10–12 streams vs 4–6)
-- **Where**: `Sources/SwiftExif/Video/MP4Parser.swift:121–137`
+- **Where**: `Sources/SwiftMediaMetadata/Video/MP4Parser.swift:121–137`
   (`parseChapterTracks` / `parseCHPL`).
 - **Diagnosis**: Line 666 already excludes the chapter text track from
   `subtitleStreams`. Yet swift reports way more streams than ffprobe,
@@ -131,8 +131,8 @@ All four HEIC stills issues land together. Test file:
 - **Effort**: ~20–40 LOC after diagnosis.
 
 ### 3.3 — MP3 / M4A return zero streams in `--streams` mode
-- **Where**: `Sources/SwiftExif/Audio/ID3Parser.swift`,
-  `Sources/SwiftExif/API/AudioMetadata.swift:98–122`, plus the format
+- **Where**: `Sources/SwiftMediaMetadata/Audio/ID3Parser.swift`,
+  `Sources/SwiftMediaMetadata/API/AudioMetadata.swift:98–122`, plus the format
   dispatch in `--streams` output (likely `ReadCommand.swift`).
 - **Diagnosis**: M4A parses via the MP4 reader internally but
   `audioStreams` doesn't surface in the audio path. MP3 has no MPEG
@@ -146,7 +146,7 @@ All four HEIC stills issues land together. Test file:
 - **Effort**: M4A ~20 LOC, MP3 ~100 LOC. Independent.
 
 ### 3.4 — MKV stream classification (Interstellar bug)
-- **Where**: `Sources/SwiftExif/Video/MatroskaReader.swift:602–701`
+- **Where**: `Sources/SwiftMediaMetadata/Video/MatroskaReader.swift:602–701`
   (track type dispatch) + `1875–1903` (codec name table).
 - **Diagnosis**: The pattern of swaps in our Interstellar report
   (stream[3] dts↔ac3, [4] ac3↔dts, [8] dts↔ac3, [15] audio/ac3 ↔
@@ -160,7 +160,7 @@ All four HEIC stills issues land together. Test file:
 - **Effort**: ~30 min diagnosis, then 10–30 LOC of fix.
 
 ### 3.5 — HDR_MultiAudioTrack missing data track (5 vs 6)
-- **Where**: `Sources/SwiftExif/Video/MP4Parser.swift:684–696`
+- **Where**: `Sources/SwiftMediaMetadata/Video/MP4Parser.swift:684–696`
   (handler dispatch).
 - **Diagnosis**: ffprobe sees `[video, audio, audio, audio, audio,
   data]`. Swift sees 5 — `data`/`meta`/`tmcd` handlers have no match

@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct SetGPSCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -24,6 +24,7 @@ struct SetGPSCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Flag(name: .long, help: "Create backup of original file before writing.")
     var backup = false
@@ -42,7 +43,10 @@ struct SetGPSCommand: ParsableCommand {
 
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
-        let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
+        let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+            atomic: true,
+            createBackup: backup && !overwriteOriginal
+        ))
         var succeeded = 0
         var failed = 0
 

@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct SidecarCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -93,15 +93,18 @@ struct SidecarWrite: ParsableCommand {
     @Option(name: .shortAndLong, help: "Output .xmp file path (default: alongside image).")
     var output: String?
 
+    @OptionGroup var fileTimestamps: FileTimestampOptions
+
     func run() throws {
         let url = URL(fileURLWithPath: file)
         let metadata = try ImageMetadata.read(from: url)
+        let options = fileTimestamps.applying(to: .default)
 
         if let output {
-            try metadata.writeSidecar(to: URL(fileURLWithPath: output))
+            try metadata.writeSidecar(to: URL(fileURLWithPath: output), options: options)
             print("Sidecar written: \(output)")
         } else {
-            try metadata.writeSidecar(for: url)
+            try metadata.writeSidecar(for: url, options: options)
             let sidecarName = url.deletingPathExtension().lastPathComponent + ".xmp"
             print("Sidecar written: \(sidecarName)")
         }
@@ -118,9 +121,11 @@ struct SidecarEmbed: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
+        let options = fileTimestamps.applying(to: .default)
         var succeeded = 0
         var failed = 0
 
@@ -134,7 +139,7 @@ struct SidecarEmbed: ParsableCommand {
                 }
                 var metadata = try ImageMetadata.read(from: url)
                 try metadata.embedSidecar(from: sidecarURL)
-                try metadata.write(to: url)
+                try metadata.write(to: url, options: options)
                 succeeded += 1
             } catch {
                 printError("Error embedding \(url.lastPathComponent): \(error)")
@@ -156,12 +161,14 @@ struct SidecarSync: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .long, help: "Sync direction: sidecar (sidecar wins) or image (embedded wins). Omit to just compare.")
     var direction: String?
 
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
+        let options = fileTimestamps.applying(to: .default)
 
         for url in urls {
             let sidecarURL = XMPSidecar.sidecarURL(for: url)
@@ -193,9 +200,9 @@ struct SidecarSync: ParsableCommand {
 
             if let dir = direction {
                 let syncDir: ImageMetadata.SyncDirection = dir == "sidecar" ? .sidecarToImage : .imageToSidecar
-                try metadata.syncWithSidecar(at: sidecarURL, direction: syncDir)
+                try metadata.syncWithSidecar(at: sidecarURL, direction: syncDir, options: options)
                 if syncDir == .sidecarToImage {
-                    try metadata.write(to: url)
+                    try metadata.write(to: url, options: options)
                 }
                 print("  Synced (\(dir) wins)")
             }

@@ -1,10 +1,33 @@
 # Changelog
 
-All notable changes to swift-exif (CLI) and the SwiftExif library.
+All notable changes to swift-exif (CLI) and the SwiftMediaMetadata library.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
+
+## [2.0.0] — 2026-09-01
+
+### Added
+
+- `ImageMetadata.WriteOptions.FileModificationDatePolicy` controls filesystem
+  modification dates independently of timestamps embedded in media metadata.
+  Use `.preserveExisting` for in-place edits or `.set(Date)` when a new output
+  should inherit a source file's date. Image, video, audio, XMP sidecar, and
+  batch writes share the policy.
+- Mutating CLI commands accept `-P` / `--preserve-file-modification-date`.
+
+### Changed
+
+- **Breaking:** the Swift package, library product, importable module, source
+  target, and test targets are renamed from `SwiftExif` to
+  `SwiftMediaMetadata`. Clients must use the renamed GitHub repository, depend
+  on the `SwiftMediaMetadata` product, and replace `import SwiftExif` with
+  `import SwiftMediaMetadata`. The installed `swift-exif` CLI command is
+  unchanged.
+- Image, video, audio, and XMP sidecar writes now use one internal filesystem
+  transaction for atomic replacement, backups, temporary-file cleanup, and
+  file attributes.
 
 ## [1.9.8] — 2026-06-23
 
@@ -15,12 +38,12 @@ the CLI; the library target follows the same numbering.
   was already the source of truth in the embedded database (alpha-3 is derived
   from it) but was discarded during lookup; it is now surfaced so callers can
   drive Foundation's offline country-name localization.
-  ([`Sources/SwiftExif/Geolocation/ReverseGeocoder.swift`](Sources/SwiftExif/Geolocation/ReverseGeocoder.swift))
+  ([`Sources/SwiftMediaMetadata/Geolocation/ReverseGeocoder.swift`](Sources/SwiftMediaMetadata/Geolocation/ReverseGeocoder.swift))
 - **`GeoLocation.localizedCountry(_:)`** returns the country name localized into
   a given `Locale` (defaulting to `.current`), resolved offline via Foundation
   from `countryCodeAlpha2`, falling back to the English `country` field for
   unknown codes. City and region names remain English-only.
-  ([`Sources/SwiftExif/Geolocation/ReverseGeocoder.swift`](Sources/SwiftExif/Geolocation/ReverseGeocoder.swift))
+  ([`Sources/SwiftMediaMetadata/Geolocation/ReverseGeocoder.swift`](Sources/SwiftMediaMetadata/Geolocation/ReverseGeocoder.swift))
 
 ### Fixed
 
@@ -51,7 +74,7 @@ the CLI; the library target follows the same numbering.
   IPTC text undeclared and mojibaked on readers defaulting to ISO-8859-1. One
   canonical UTF-8 marker is now emitted unconditionally when non-ASCII content is
   present, idempotent across repeated writes. Adds `CodedCharacterSetMarkerTests`.
-  ([`Sources/SwiftExif/IPTC/IPTCWriter.swift`](Sources/SwiftExif/IPTC/IPTCWriter.swift))
+  ([`Sources/SwiftMediaMetadata/IPTC/IPTCWriter.swift`](Sources/SwiftMediaMetadata/IPTC/IPTCWriter.swift))
 
 ## [1.9.6] — 2026-06-17
 
@@ -80,14 +103,14 @@ the CLI; the library target follows the same numbering.
   giving those boxes a home. A bare file with nothing to embed is returned
   unchanged, and re-writing an already-wrapped file replaces its metadata boxes
   in place rather than wrapping again.
-  ([`Sources/SwiftExif/JPEGXL/JXLWriter.swift`](Sources/SwiftExif/JPEGXL/JXLWriter.swift))
+  ([`Sources/SwiftMediaMetadata/JPEGXL/JXLWriter.swift`](Sources/SwiftMediaMetadata/JPEGXL/JXLWriter.swift))
 
 ### Added
 
 - **`JXLFile.rawCodestream`** retains the original bare-codestream bytes
   (including the `FF 0A` signature) at parse time so the writer can wrap them on
   demand; nil for container files.
-  ([`Sources/SwiftExif/JPEGXL/JXLFile.swift`](Sources/SwiftExif/JPEGXL/JXLFile.swift))
+  ([`Sources/SwiftMediaMetadata/JPEGXL/JXLFile.swift`](Sources/SwiftMediaMetadata/JPEGXL/JXLFile.swift))
 
 ## [1.9.4] — 2026-06-13
 
@@ -106,7 +129,7 @@ the CLI; the library target follows the same numbering.
   DNG/GPR (Adobe's open, writable TIFF spec) and CR3 (ISOBMFF, its own writer)
   are unaffected. The format is detected from parsed content, with the target
   extension as a backstop for odd/truncated variants.
-  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
+  ([`Sources/SwiftMediaMetadata/API/ImageMetadata.swift`](Sources/SwiftMediaMetadata/API/ImageMetadata.swift))
 
 ### Added
 
@@ -114,7 +137,7 @@ the CLI; the library target follows the same numbering.
   embedding for callers that have verified a specific format round-trips
   losslessly, and **`MetadataError.rawWriteUnsupported(ImageFormat.RawFormat)`**
   to surface the refusal with the offending format.
-  ([`Sources/SwiftExif/API/MetadataError.swift`](Sources/SwiftExif/API/MetadataError.swift))
+  ([`Sources/SwiftMediaMetadata/API/MetadataError.swift`](Sources/SwiftMediaMetadata/API/MetadataError.swift))
 
 ## [1.9.3] — 2026-06-12
 
@@ -127,7 +150,7 @@ the CLI; the library target follows the same numbering.
   while silently never matching. Documented the convention on `XMPValue` and
   added `subscript(namespace:property:)` and `simpleField(namespace:property:)`
   on `[String: XMPValue]`, mirroring `XMPData.value`/`setValue`.
-  ([`Sources/SwiftExif/XMP/XMPData.swift`](Sources/SwiftExif/XMP/XMPData.swift))
+  ([`Sources/SwiftMediaMetadata/XMP/XMPData.swift`](Sources/SwiftMediaMetadata/XMP/XMPData.swift))
 - **Namespace-block APIs on `XMPData`** for whole-block operations like crs
   (Camera Raw settings) replacement: `properties(in:)` returns a namespace's
   properties keyed by local name, `removeAll(namespace:)` drops every property
@@ -137,7 +160,7 @@ the CLI; the library target follows the same numbering.
   namespace-exact, not raw prefix: Adobe URIs nest (`xmpRights`, `xmpMM`,
   `stEvt` all start with the `xmp` URI), so removing the `xmp` block leaves
   those untouched.
-  ([`Sources/SwiftExif/XMP/XMPData.swift`](Sources/SwiftExif/XMP/XMPData.swift))
+  ([`Sources/SwiftMediaMetadata/XMP/XMPData.swift`](Sources/SwiftMediaMetadata/XMP/XMPData.swift))
 
 ### Fixed
 
@@ -156,8 +179,8 @@ the CLI; the library target follows the same numbering.
   `swift-exif write` rewrite now match what ExifTool itself writes for
   `dc:creator` (Seq), `dc:subject` (Bag), `xmpMM:History` (Seq of structs),
   and `XMP-digiKam:TagsList` (Seq).
-  ([`Sources/SwiftExif/XMP/XMPWriter.swift`](Sources/SwiftExif/XMP/XMPWriter.swift),
-  [`Sources/SwiftExif/XMP/XMPReader.swift`](Sources/SwiftExif/XMP/XMPReader.swift))
+  ([`Sources/SwiftMediaMetadata/XMP/XMPWriter.swift`](Sources/SwiftMediaMetadata/XMP/XMPWriter.swift),
+  [`Sources/SwiftMediaMetadata/XMP/XMPReader.swift`](Sources/SwiftMediaMetadata/XMP/XMPReader.swift))
 
 - **XMP properties in unknown namespaces survive a rewrite.** The XMP reader
   accepts any namespace the document declares (it honors live `xmlns`
@@ -170,7 +193,7 @@ the CLI; the library target follows the same numbering.
   original declaration). Verified end-to-end: `XMP-digiKam:ColorLabel` and
   `TagsList` written by ExifTool survive a `swift-exif write` rewrite and read
   back identically in ExifTool.
-  ([`Sources/SwiftExif/XMP/XMPWriter.swift`](Sources/SwiftExif/XMP/XMPWriter.swift))
+  ([`Sources/SwiftMediaMetadata/XMP/XMPWriter.swift`](Sources/SwiftMediaMetadata/XMP/XMPWriter.swift))
 - **Newlines and tabs in simple XMP values survive a round-trip.** Simple
   properties are serialized as XML attributes, and conforming XML parsers
   normalize literal tab/LF/CR in attribute values to spaces (XML 1.0 §3.3.3) —
@@ -201,7 +224,7 @@ the CLI; the library target follows the same numbering.
   are unaffected. Regression test uses the exact shape Camera Raw 18.3.2
   writes. *(This section documents the already-pushed `1.9.2` tag, which
   shipped without a changelog entry.)*
-  ([`Sources/SwiftExif/XMP/XMPReader.swift`](Sources/SwiftExif/XMP/XMPReader.swift))
+  ([`Sources/SwiftMediaMetadata/XMP/XMPReader.swift`](Sources/SwiftMediaMetadata/XMP/XMPReader.swift))
 
 ## [1.9.1] — 2026-06-05
 
@@ -230,8 +253,8 @@ the CLI; the library target follows the same numbering.
   aborting. Verified end-to-end on two real ILCE-1 C2PA ARWs (Exif APP1 shrank
   from ~1.6 MB to 43,786 bytes, MakerNote retained). Regression tests in
   `OversizedExifTests`.
-  ([`Sources/SwiftExif/Exif/ExifWriter.swift`](Sources/SwiftExif/Exif/ExifWriter.swift),
-  [`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
+  ([`Sources/SwiftMediaMetadata/Exif/ExifWriter.swift`](Sources/SwiftMediaMetadata/Exif/ExifWriter.swift),
+  [`Sources/SwiftMediaMetadata/API/ImageMetadata.swift`](Sources/SwiftMediaMetadata/API/ImageMetadata.swift))
 
 ## [1.9.0] — 2026-06-03
 
@@ -249,17 +272,17 @@ the CLI; the library target follows the same numbering.
   recovered by walking the frame table; a stream that ends in an incomplete
   frame (a file that is truncated or still being encoded) is tolerated and
   flagged via `VideoMetadata.warnings` rather than rejected.
-  ([`Sources/SwiftExif/Video/IVFReader.swift`](Sources/SwiftExif/Video/IVFReader.swift))
+  ([`Sources/SwiftMediaMetadata/Video/IVFReader.swift`](Sources/SwiftMediaMetadata/Video/IVFReader.swift))
 - **GoPro `.GPR` files are now recognized** as a DNG/TIFF-based RAW format. A
   new `RawFormat.gpr` case is detected via the `.gpr` extension or a GoPro
   `Make` (so the data-only API works too), and `FileFormat` now reports GPR.
-  ([`Sources/SwiftExif/RAW`](Sources/SwiftExif))
+  ([`Sources/SwiftMediaMetadata/RAW`](Sources/SwiftMediaMetadata))
 - **Sony `.ARW` files are now recognized by content**, not just extension. A
   non-DNG TIFF whose `Make` is "SONY" is detected as `RawFormat.arw` (mirroring
   the existing Olympus→ORF and Pentax→PEF heuristics), so `FileFormat` reports
   ARW and the data-only API routes through the RAW reader instead of labeling
   the file a generic TIFF.
-  ([`Sources/SwiftExif/API/FormatDetector.swift`](Sources/SwiftExif/API/FormatDetector.swift))
+  ([`Sources/SwiftMediaMetadata/API/FormatDetector.swift`](Sources/SwiftMediaMetadata/API/FormatDetector.swift))
 - **Expanded Sony MakerNote tag coverage** from ~15 to ~50 directly-readable
   tags, verified against ExifTool's `Sony.pm` Main table on a real ILCE-1 ARW.
   New tags include `Contrast`, `Saturation`, `Sharpness`, `Brightness`, `HDR`,
@@ -276,7 +299,7 @@ the CLI; the library target follows the same numbering.
   is `0x200F` (was `0x200D`), and `0xB026` `ImageStabilization` (was an
   unreachable `ImageStabilizationOld`). Scalar tags now emit `.int` uniformly
   (previously a mix of `.int`/`.uint`).
-  ([`Sources/SwiftExif/MakerNote/SonyMakerNote.swift`](Sources/SwiftExif/MakerNote/SonyMakerNote.swift))
+  ([`Sources/SwiftMediaMetadata/MakerNote/SonyMakerNote.swift`](Sources/SwiftMediaMetadata/MakerNote/SonyMakerNote.swift))
 - **C2PA / Content Credentials are now surfaced in `read` output** under the
   `C2PA:` group (the `read --group c2pa` filter previously matched nothing). The
   exporter emits manifest count, active-manifest label, claim generator,
@@ -285,7 +308,7 @@ the CLI; the library target follows the same numbering.
   parser), the assertion labels, and the first `c2pa.actions` action with its
   digital-source type and software agent — mirroring the existing video
   exporter's keys. Regression test `testC2PASurfacedInExportedDictionary`.
-  ([`Sources/SwiftExif/API/MetadataExporter.swift`](Sources/SwiftExif/API/MetadataExporter.swift))
+  ([`Sources/SwiftMediaMetadata/API/MetadataExporter.swift`](Sources/SwiftMediaMetadata/API/MetadataExporter.swift))
 - **Expanded DNG structural-tag extraction**, benefiting all DNG/RAW files.
   New tags: `BlackLevel`, `WhiteLevel`, `ActiveArea`, `DefaultScale`,
   `DefaultUserCrop`, `LocalizedCameraModel`, `AnalogBalance`, `BayerGreenSplit`,
@@ -314,7 +337,7 @@ the CLI; the library target follows the same numbering.
   `Rating` CLI tag now maps to `xmp:Rating` instead of being skipped as unknown.
   Regression tests `testWritePreservesOverLengthIPTCWhenSettingRating` and the
   reworked over-length cases in `IPTCWriterTests`.
-  ([`Sources/SwiftExif/IPTC/IPTCWriter.swift`](Sources/SwiftExif/IPTC/IPTCWriter.swift))
+  ([`Sources/SwiftMediaMetadata/IPTC/IPTCWriter.swift`](Sources/SwiftMediaMetadata/IPTC/IPTCWriter.swift))
 - **Writing metadata to a CR3 no longer corrupts the file.** CR3 stores
   absolute file offsets in each track's `co64`/`stco` chunk table and in the
   Canon `CTBO` box. Rebuilding `moov` (re-serialized `CMT1`/`CMT2`/`CMT4`) or
@@ -330,7 +353,7 @@ the CLI; the library target follows the same numbering.
   CR3 handling. Regression test `testWriteFixesChunkAndCTBOOffsets` builds a
   CR3 with real `co64`/`CTBO` tables and asserts both track the relocated
   `mdat` after writing.
-  ([`Sources/SwiftExif/CR3/CR3Writer.swift`](Sources/SwiftExif/CR3/CR3Writer.swift))
+  ([`Sources/SwiftMediaMetadata/CR3/CR3Writer.swift`](Sources/SwiftMediaMetadata/CR3/CR3Writer.swift))
 - **Canon MakerNotes are now read from CR3 files.** CR3 carries the Canon
   MakerNotes as the `CMT3` IFD, not as a JPEG/TIFF `0x927C` blob, so the
   `MakerNoteReader` dispatch never fired and `read --group makernote` returned
@@ -338,7 +361,7 @@ the CLI; the library target follows the same numbering.
   `CanonMakerNote` (refactored to expose an IFD entry point), surfacing
   `FirmwareVersion`, `LensModel`, body/internal serial numbers, `ShutterCount`,
   `CameraTemperature`, AF info, focal-length data, and more.
-  ([`Sources/SwiftExif/Canon/CanonUUIDBoxes.swift`](Sources/SwiftExif/Canon/CanonUUIDBoxes.swift))
+  ([`Sources/SwiftMediaMetadata/Canon/CanonUUIDBoxes.swift`](Sources/SwiftMediaMetadata/Canon/CanonUUIDBoxes.swift))
 - **CR3 thumbnail/preview extraction now works on current Canon bodies.**
   `extractThumbnail()` returned `nil` for CR3 because it required an Exif IFD1
   (which CR3 has not), short-circuiting before the `THMB` box was ever consulted;
@@ -347,7 +370,7 @@ the CLI; the library target follows the same numbering.
   the EOS R1 use 16) — it locates the `0xFFD8` SOI marker instead — and the
   preview `uuid`, which sits at the top level rather than inside `moov` in real
   files, is now scanned there too.
-  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
+  ([`Sources/SwiftMediaMetadata/API/ImageMetadata.swift`](Sources/SwiftMediaMetadata/API/ImageMetadata.swift))
 - **Wrong DNG tag constants above `0xC630`** are corrected. ~17 `DNGTag`
   constants pointed at the wrong tag IDs (sourced from a bad table), so the
   corresponding fields silently parsed to `nil` on every DNG file — e.g.
@@ -366,7 +389,7 @@ the CLI; the library target follows the same numbering.
   applied to the ISOBMFF box parser and BRAW frame window. The out-of-range
   chunk is dropped gracefully. Regression test
   `testCTMDRejectsOverflowingCo64ChunkOffset`.
-  ([`Sources/SwiftExif/Video/CRMReader.swift`](Sources/SwiftExif/Video/CRMReader.swift))
+  ([`Sources/SwiftMediaMetadata/Video/CRMReader.swift`](Sources/SwiftMediaMetadata/Video/CRMReader.swift))
 - **Out-of-memory abort from a fabricated CRM sample-table count** is fixed. The
   `stsz`/`stsc`/`stco`/`co64` parsers fed the file's 32-bit entry count straight
   into `reserveCapacity(Int(count))` / `Array(repeating:count:)`, so a tiny file
@@ -376,7 +399,7 @@ the CLI; the library target follows the same numbering.
   the size-less `stsz` form that has no payload to bound against — matching the
   count-capping convention already used in `MP4Chapters`, `MXFMCAReader`, and
   `MPEGBitstream`. Regression test `testCTMDRejectsFabricatedSampleCount`.
-  ([`Sources/SwiftExif/Video/CRMReader.swift`](Sources/SwiftExif/Video/CRMReader.swift))
+  ([`Sources/SwiftMediaMetadata/Video/CRMReader.swift`](Sources/SwiftMediaMetadata/Video/CRMReader.swift))
 - **Relocated MakerNote (0x927C) internal offsets are now fixed up** on every
   write path that rebuilds a TIFF block — `TIFFWriter` (TIFF/DNG) **and**
   `ExifWriter` (embedded EXIF in JPEG/PNG/AVIF/HEIF/JPEG XL/WebP). Modeled on
@@ -396,11 +419,11 @@ the CLI; the library target follows the same numbering.
   TIFF-relative source offset on `IFDEntry.sourceOffset` (excluded from
   equality) to compute the delta. New tests: `MakerNoteRelocatorTests` plus
   end-to-end coverage in `TIFFWriterTests` and `ExifRoundTripTests`.
-  ([`Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift`](Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift),
-  [`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift),
-  [`Sources/SwiftExif/Exif/ExifWriter.swift`](Sources/SwiftExif/Exif/ExifWriter.swift),
-  [`Sources/SwiftExif/Exif/IFDParser.swift`](Sources/SwiftExif/Exif/IFDParser.swift),
-  [`Sources/SwiftExif/Exif/IFDEntry.swift`](Sources/SwiftExif/Exif/IFDEntry.swift))
+  ([`Sources/SwiftMediaMetadata/MakerNote/MakerNoteRelocator.swift`](Sources/SwiftMediaMetadata/MakerNote/MakerNoteRelocator.swift),
+  [`Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift`](Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift),
+  [`Sources/SwiftMediaMetadata/Exif/ExifWriter.swift`](Sources/SwiftMediaMetadata/Exif/ExifWriter.swift),
+  [`Sources/SwiftMediaMetadata/Exif/IFDParser.swift`](Sources/SwiftMediaMetadata/Exif/IFDParser.swift),
+  [`Sources/SwiftMediaMetadata/Exif/IFDEntry.swift`](Sources/SwiftMediaMetadata/Exif/IFDEntry.swift))
 - **`co64` chunk offsets are bounded before `Int` conversion in the RTMD, BRAW,
   and MP4 chapter readers.** `Int(offset)` traps when a `co64` chunk offset
   exceeds `Int64.max`, and `sampleFileOffsets` accumulates with wrapping `&+`,
@@ -412,9 +435,9 @@ the CLI; the library target follows the same numbering.
   overflow (a new `RTMDReader.sampleByteRange` helper also closes a pre-existing
   `off + size` overflow in the old guard). Regression test drives an
   out-of-range `co64` offset through the BRAW `mebx` motion path.
-  ([`Sources/SwiftExif/Video/RTMDReader.swift`](Sources/SwiftExif/Video/RTMDReader.swift),
-  [`Sources/SwiftExif/Video/BRAWFrameReader.swift`](Sources/SwiftExif/Video/BRAWFrameReader.swift),
-  [`Sources/SwiftExif/Video/MP4Chapters.swift`](Sources/SwiftExif/Video/MP4Chapters.swift))
+  ([`Sources/SwiftMediaMetadata/Video/RTMDReader.swift`](Sources/SwiftMediaMetadata/Video/RTMDReader.swift),
+  [`Sources/SwiftMediaMetadata/Video/BRAWFrameReader.swift`](Sources/SwiftMediaMetadata/Video/BRAWFrameReader.swift),
+  [`Sources/SwiftMediaMetadata/Video/MP4Chapters.swift`](Sources/SwiftMediaMetadata/Video/MP4Chapters.swift))
 - **`co64` chunk offset bounded before `Int` conversion in `brawFrameWindow`.**
   The function did `Int(chunkOffset)` before any bounds check on a raw 64-bit
   `co64` value, so a crafted BRAW-codec MP4 with an offset ≥ 2⁶³ trapped on the
@@ -438,7 +461,7 @@ the CLI; the library target follows the same numbering.
   `startIndex` and indexed past `endIndex`, trapping. The walk is now seeded
   with `0 ..< data.count` — identical for the common `startIndex == 0` case,
   correct for slices. Regression test traps (signal 5) without the fix.
-  ([`Sources/SwiftExif/Video/GPMFReader.swift`](Sources/SwiftExif/Video/GPMFReader.swift))
+  ([`Sources/SwiftMediaMetadata/Video/GPMFReader.swift`](Sources/SwiftMediaMetadata/Video/GPMFReader.swift))
 - **Integer-overflow traps in `MP4Parser`'s top-level box walker** are fixed —
   the same extended-size flaw already hardened in `ISOBMFFBoxReader`, but in the
   parallel `parseTopLevelBoxes` behind the public `MP4Parser.parse` that the
@@ -450,7 +473,7 @@ the CLI; the library target follows the same numbering.
   rewritten in overflow-safe subtraction form; the oversized box is dropped
   gracefully. Regression test `testParseRejectsOverflowingExtendedSize` traps
   (signal 5) without the fix.
-  ([`Sources/SwiftExif/Video/MP4Parser.swift`](Sources/SwiftExif/Video/MP4Parser.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MP4Parser.swift`](Sources/SwiftMediaMetadata/Video/MP4Parser.swift))
 - **`ARRIJSONParser` out-of-bounds trap on a sliced `Data` input** is fixed. The
   public `findEmbeddedJSONBlobs(in:)` scanned with a zero-based cursor
   (`data[i]`, `data.subdata(in: payloadStart..<payloadEnd)`), so a caller passing
@@ -459,7 +482,7 @@ the CLI; the library target follows the same numbering.
   rebase every subscript and `subdata` range onto `data.startIndex` — identical
   for the common `startIndex == 0` case, correct for slices. Regression test
   traps (signal 5) without the fix.
-  ([`Sources/SwiftExif/Video/ARRIJSONParser.swift`](Sources/SwiftExif/Video/ARRIJSONParser.swift))
+  ([`Sources/SwiftMediaMetadata/Video/ARRIJSONParser.swift`](Sources/SwiftMediaMetadata/Video/ARRIJSONParser.swift))
 - **Trap converting an out-of-range AIFF sample rate to `Int`** is fixed. A
   `COMM` chunk carries the sample rate as an 80-bit IEEE-754 extended float; an
   exponent below the `0x7FFF` Inf/NaN sentinel can still overflow `pow` to
@@ -470,7 +493,7 @@ the CLI; the library target follows the same numbering.
   caller range-checks `rate` before each narrowing conversion (computing bitrate
   in `Double`, which saturates instead of trapping). Regression test
   `testCommChunkRejectsOutOfRangeSampleRate` traps (signal 5) without the fix.
-  ([`Sources/SwiftExif/Audio/AIFFParser.swift`](Sources/SwiftExif/Audio/AIFFParser.swift))
+  ([`Sources/SwiftMediaMetadata/Audio/AIFFParser.swift`](Sources/SwiftMediaMetadata/Audio/AIFFParser.swift))
 - **Int64-overflow trap deriving an MXF aspect ratio** is fixed.
   `parsePictureDescriptor` computed DAR/SAR by multiplying four
   attacker-controlled, `UInt32`-derived values (`StoredWidth`/`StoredHeight` and
@@ -480,7 +503,7 @@ the CLI; the library target follows the same numbering.
   now use `multipliedReportingOverflow`, and the non-essential DAR/SAR derivation
   is skipped on absurd values, matching the keep-what-parsed degradation posture
   used elsewhere. Regression test in `MXFReaderTests`.
-  ([`Sources/SwiftExif/Video/MXFReader.swift`](Sources/SwiftExif/Video/MXFReader.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MXFReader.swift`](Sources/SwiftMediaMetadata/Video/MXFReader.swift))
 - **Eager over-allocation from a DNG `numericArray` element count** is fixed.
   `numericArray` called `reserveCapacity(entry.count)` from the
   attacker-controlled `UInt32` count before validating that the value bytes
@@ -488,7 +511,7 @@ the CLI; the library target follows the same numbering.
   count could force a huge allocation ahead of the per-element reads bailing out.
   It now applies the same `valueData.count >= total * unitSize` guard its sibling
   decoders (`srationals`/`rationals`/`longArray`/`doubleArray`) already use.
-  ([`Sources/SwiftExif/RAW/DNGMetadata.swift`](Sources/SwiftExif/RAW/DNGMetadata.swift))
+  ([`Sources/SwiftMediaMetadata/RAW/DNGMetadata.swift`](Sources/SwiftMediaMetadata/RAW/DNGMetadata.swift))
 - **ID3 frame decoders now index relative to `startIndex`.** `decodeTextFrame`,
   `decodeCommentFrame`, and `extractAPIC` indexed their `Data` parameter with
   zero-based offsets and bounded against `data.count`, which would trap on any
@@ -501,7 +524,7 @@ the CLI; the library target follows the same numbering.
   TIFF/RAW silently dropped its manufacturer MakerNote (the JPEG path already
   parsed it). It now parses the MakerNote from the Exif sub-IFD exactly as the
   JPEG path does. Regression coverage builds an absolute-offset Sony note.
-  ([`Sources/SwiftExif/TIFF/TIFFFileParser.swift`](Sources/SwiftExif/TIFF/TIFFFileParser.swift))
+  ([`Sources/SwiftMediaMetadata/TIFF/TIFFFileParser.swift`](Sources/SwiftMediaMetadata/TIFF/TIFFFileParser.swift))
 - **Modern Sony ("Sony5") MakerNotes now read correctly.** Sony Alpha/RX/FX
   bodies store their MakerNote IFD's out-of-line value pointers as TIFF-absolute
   offsets, but `SonyMakerNote.parse` re-parsed the isolated note blob with
@@ -512,8 +535,8 @@ the CLI; the library target follows the same numbering.
   the latter. Combined with the MakerNote-relocator fix below, Sony notes also
   survive a metadata rewrite intact. Regression test
   `testSonyAbsoluteOffsetMakerNote`.
-  ([`Sources/SwiftExif/MakerNote/SonyMakerNote.swift`](Sources/SwiftExif/MakerNote/SonyMakerNote.swift),
-  [`Sources/SwiftExif/MakerNote/MakerNoteReader.swift`](Sources/SwiftExif/MakerNote/MakerNoteReader.swift))
+  ([`Sources/SwiftMediaMetadata/MakerNote/SonyMakerNote.swift`](Sources/SwiftMediaMetadata/MakerNote/SonyMakerNote.swift),
+  [`Sources/SwiftMediaMetadata/MakerNote/MakerNoteReader.swift`](Sources/SwiftMediaMetadata/MakerNote/MakerNoteReader.swift))
 - **Relocating a Sony MakerNote on write no longer corrupts it.** The
   MakerNote-relocator classified Sony as relative/verbatim, but Sony5 pointers
   are TIFF-absolute (above), so a write that moved the block left every internal
@@ -522,13 +545,13 @@ the CLI; the library target follows the same numbering.
   relocation delta (non-prefixed Sony5 only; "SONY DSC"/"SONY CAM"-prefixed
   notes fall back to verbatim+warn). Regression tests `testSonyNoteGetsAbsoluteFixUp`
   and `testSonyPrefixedNoteWarnsVerbatim`.
-  ([`Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift`](Sources/SwiftExif/MakerNote/MakerNoteRelocator.swift))
+  ([`Sources/SwiftMediaMetadata/MakerNote/MakerNoteRelocator.swift`](Sources/SwiftMediaMetadata/MakerNote/MakerNoteRelocator.swift))
 - **Sony MakerNote tag `0xB020` is no longer mislabeled `SerialNumber`.** Per
   ExifTool's `Sony.pm` it is the ASCII `CreativeStyle` preset ("Standard",
   "Vivid", …); reading it as a serial number emitted a bogus value that collided
   with the real body serial (ExifIFD `0xA431`). It is now surfaced as
   `CreativeStyle` with trailing NUL/space trimming. Tests updated accordingly.
-  ([`Sources/SwiftExif/MakerNote/SonyMakerNote.swift`](Sources/SwiftExif/MakerNote/SonyMakerNote.swift))
+  ([`Sources/SwiftMediaMetadata/MakerNote/SonyMakerNote.swift`](Sources/SwiftMediaMetadata/MakerNote/SonyMakerNote.swift))
 - **C2PA signing certificates stored under a text `x5chain` label are now
   read.** `parseSignature` looked for the COSE x5chain only under the registered
   integer header label 33; Sony's in-camera C2PA signer places it under the
@@ -536,14 +559,14 @@ the CLI; the library target follows the same numbering.
   signer could not be identified. The header is now searched for both forms, in
   the protected and (as a fallback) the unprotected bucket. Regression test
   `testParseSignatureTextX5Chain`.
-  ([`Sources/SwiftExif/C2PA/C2PAReader.swift`](Sources/SwiftExif/C2PA/C2PAReader.swift))
+  ([`Sources/SwiftMediaMetadata/C2PA/C2PAReader.swift`](Sources/SwiftMediaMetadata/C2PA/C2PAReader.swift))
 - **C2PA v1 claim assertion references are now parsed.** The claim parser only
   read the v2 `created_assertions` / `gathered_assertions` arrays, so a v1 claim
   (e.g. Sony's in-camera `SONY_CAMERA` generator) reported zero assertion
   references even though its assertion store was populated. The v1 `assertions`
   array is now read alongside the v2 keys. Regression test
   `testParseClaimV1AssertionReferences`.
-  ([`Sources/SwiftExif/C2PA/C2PAReader.swift`](Sources/SwiftExif/C2PA/C2PAReader.swift))
+  ([`Sources/SwiftMediaMetadata/C2PA/C2PAReader.swift`](Sources/SwiftMediaMetadata/C2PA/C2PAReader.swift))
 
 ## [1.8.2] — 2026-06-02
 
@@ -557,8 +580,8 @@ the CLI; the library target follows the same numbering.
   internal offsets may no longer resolve (see below). The underlying
   `TIFFWriter.write(_:exif:iptc:xmp:iccProfile:)` gains a sibling overload
   taking a `warnings: inout [String]` out-parameter.
-  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift),
-  [`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+  ([`Sources/SwiftMediaMetadata/API/ImageMetadata.swift`](Sources/SwiftMediaMetadata/API/ImageMetadata.swift),
+  [`Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift`](Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift))
 
 ### Fixed
 
@@ -570,9 +593,9 @@ the CLI; the library target follows the same numbering.
   are patched by the size delta; large-size (64-bit) box headers are now
   preserved on write so those offsets stay valid for Apple/sips files. The
   AVIF read path passes `fileData` so the items round-trip.
-  ([`Sources/SwiftExif/Binary/ISOBMFFMetadata.swift`](Sources/SwiftExif/Binary/ISOBMFFMetadata.swift),
-  [`Sources/SwiftExif/AVIF/AVIFParser.swift`](Sources/SwiftExif/AVIF/AVIFParser.swift),
-  [`Sources/SwiftExif/Binary/ISOBMFFBox.swift`](Sources/SwiftExif/Binary/ISOBMFFBox.swift))
+  ([`Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift`](Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift),
+  [`Sources/SwiftMediaMetadata/AVIF/AVIFParser.swift`](Sources/SwiftMediaMetadata/AVIF/AVIFParser.swift),
+  [`Sources/SwiftMediaMetadata/Binary/ISOBMFFBox.swift`](Sources/SwiftMediaMetadata/Binary/ISOBMFFBox.swift))
 - **`TIFFWriter` no longer drops strip/tile pixel data on write.** Previously
   it left `StripOffsets` pointing past EOF, so any photographic TIFF
   round-tripped through SwiftExif decoded black. It now relocates every block
@@ -581,7 +604,7 @@ the CLI; the library target follows the same numbering.
   whole IFD chain. Exif sub-IFD values (ISO, LensModel, exposure) are now
   serialized into TIFF, and assigned IFD0 camera tags (Make/Model) are written
   while the destination's structural tags are preserved.
-  ([`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+  ([`Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift`](Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift))
 - **`TIFFWriter` now relocates SubIFDs (0x014A) and the Interoperability IFD
   (0xA005) too, not just Exif/GPS.** Child-IFD relocation is now generic:
   Exif (0x8769) and GPS (0x8825) still come from the assigned `exif` model so
@@ -595,7 +618,7 @@ the CLI; the library target follows the same numbering.
   pointer rather than crashing or emitting a dangling offset. New regression
   tests cover SubIFD-array + child-raster survival, a single inline SubIFD,
   Interop-inside-Exif round-trip, and malformed-pointer drop.
-  ([`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+  ([`Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift`](Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift))
 
 ### Known limitations
 
@@ -609,7 +632,7 @@ the CLI; the library target follows the same numbering.
   `writeToDataWithWarnings()` / `write(to:)` return value instead of silently
   emitting a possibly-corrupt note. A proper per-manufacturer fix-up is
   deferred to a future design change.
-  ([`Sources/SwiftExif/TIFF/TIFFWriter.swift`](Sources/SwiftExif/TIFF/TIFFWriter.swift))
+  ([`Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift`](Sources/SwiftMediaMetadata/TIFF/TIFFWriter.swift))
 
 ## [1.8.1] — 2026-05-15
 
@@ -630,9 +653,9 @@ the CLI; the library target follows the same numbering.
   instead of pre-loading `Data(contentsOf:)`, removing the full-file
   allocation at the API boundary too. Covered by new block-boundary,
   streaming-parity, and end-to-end `hash(url:)` tests.
-  ([`Sources/SwiftExif/Binary/FileHasher.swift`](Sources/SwiftExif/Binary/FileHasher.swift),
-  [`Sources/SwiftExif/Binary/PureCrypto.swift`](Sources/SwiftExif/Binary/PureCrypto.swift),
-  [`Sources/SwiftExif/API/MetadataExporter.swift`](Sources/SwiftExif/API/MetadataExporter.swift))
+  ([`Sources/SwiftMediaMetadata/Binary/FileHasher.swift`](Sources/SwiftMediaMetadata/Binary/FileHasher.swift),
+  [`Sources/SwiftMediaMetadata/Binary/PureCrypto.swift`](Sources/SwiftMediaMetadata/Binary/PureCrypto.swift),
+  [`Sources/SwiftMediaMetadata/API/MetadataExporter.swift`](Sources/SwiftMediaMetadata/API/MetadataExporter.swift))
 
 - **`ISO8601DateFormatter` instances hoisted out of hot paths.** Three call
   sites previously allocated a fresh formatter on every invocation —
@@ -644,9 +667,9 @@ the CLI; the library target follows the same numbering.
   `ISO8601DateFormatter` is documented thread-safe for read-only
   `string(from:)` / `date(from:)` but doesn't formally conform to
   `Sendable`, so the opt-out annotation is needed under strict concurrency.
-  ([`Sources/SwiftExif/API/VideoMetadataExporter.swift`](Sources/SwiftExif/API/VideoMetadataExporter.swift),
-  [`Sources/SwiftExif/GPX/GPXParser.swift`](Sources/SwiftExif/GPX/GPXParser.swift),
-  [`Sources/SwiftExif/Video/NRTXMLParser.swift`](Sources/SwiftExif/Video/NRTXMLParser.swift))
+  ([`Sources/SwiftMediaMetadata/API/VideoMetadataExporter.swift`](Sources/SwiftMediaMetadata/API/VideoMetadataExporter.swift),
+  [`Sources/SwiftMediaMetadata/GPX/GPXParser.swift`](Sources/SwiftMediaMetadata/GPX/GPXParser.swift),
+  [`Sources/SwiftMediaMetadata/Video/NRTXMLParser.swift`](Sources/SwiftMediaMetadata/Video/NRTXMLParser.swift))
 
 - **`ImageMetadata.read`, `BRAWFrameReader`, `RTMDReader`,
   `AudioMetadata.read`, and `C2PAData.read(from: URL)` now memory-map
@@ -661,12 +684,12 @@ the CLI; the library target follows the same numbering.
   drives and falls back to a full copy, defeating the win exactly on
   the volumes (USB-C SSDs, NAS, card readers) where it matters most.
   Mirrors the established pattern already in
-  [`VideoMetadata.loadContainerData`](Sources/SwiftExif/API/VideoMetadata.swift).
-  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift),
-  [`Sources/SwiftExif/API/AudioMetadata.swift`](Sources/SwiftExif/API/AudioMetadata.swift),
-  [`Sources/SwiftExif/C2PA/C2PAData.swift`](Sources/SwiftExif/C2PA/C2PAData.swift),
-  [`Sources/SwiftExif/Video/BRAWFrameReader.swift`](Sources/SwiftExif/Video/BRAWFrameReader.swift),
-  [`Sources/SwiftExif/Video/RTMDReader.swift`](Sources/SwiftExif/Video/RTMDReader.swift))
+  [`VideoMetadata.loadContainerData`](Sources/SwiftMediaMetadata/API/VideoMetadata.swift).
+  ([`Sources/SwiftMediaMetadata/API/ImageMetadata.swift`](Sources/SwiftMediaMetadata/API/ImageMetadata.swift),
+  [`Sources/SwiftMediaMetadata/API/AudioMetadata.swift`](Sources/SwiftMediaMetadata/API/AudioMetadata.swift),
+  [`Sources/SwiftMediaMetadata/C2PA/C2PAData.swift`](Sources/SwiftMediaMetadata/C2PA/C2PAData.swift),
+  [`Sources/SwiftMediaMetadata/Video/BRAWFrameReader.swift`](Sources/SwiftMediaMetadata/Video/BRAWFrameReader.swift),
+  [`Sources/SwiftMediaMetadata/Video/RTMDReader.swift`](Sources/SwiftMediaMetadata/Video/RTMDReader.swift))
 
 - **Recursive ISOBMFF `findBox` no longer descends into non-container
   box payloads.** `Binary/ISOBMFFMetadata.findBox` previously called
@@ -682,11 +705,11 @@ the CLI; the library target follows the same numbering.
   — they carry their own header prefix and are handled by dedicated
   paths (`parseMetaChildren`, `extractExifFromMeta`,
   `extractXMPFromMeta`, `CR3Parser`). Locked in by two new tests in
-  [`Tests/SwiftExifTests/Binary/ISOBMFFBoxTests.swift`](Tests/SwiftExifTests/Binary/ISOBMFFBoxTests.swift)
+  [`Tests/SwiftMediaMetadataTests/Binary/ISOBMFFBoxTests.swift`](Tests/SwiftMediaMetadataTests/Binary/ISOBMFFBoxTests.swift)
   confirming that legitimate descent into `moov → udta → Exif` still
   resolves while a fake `Exif` hidden inside `mdat` is correctly
   ignored.
-  ([`Sources/SwiftExif/Binary/ISOBMFFMetadata.swift`](Sources/SwiftExif/Binary/ISOBMFFMetadata.swift))
+  ([`Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift`](Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift))
 
 ### Fixed
 
@@ -702,8 +725,8 @@ the CLI; the library target follows the same numbering.
   `pixelAspectRatio` miscomputation for tkhd-derived rotated streams
   without a `pasp` box (an iPhone H.264 portrait clip would previously
   surface PAR `(81, 256)` instead of `(1, 1)`).
-  ([`Sources/SwiftExif/Video/MP4VisualSampleEntry.swift`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift),
-  [`Sources/SwiftExif/Video/MP4Parser.swift`](Sources/SwiftExif/Video/MP4Parser.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MP4VisualSampleEntry.swift`](Sources/SwiftMediaMetadata/Video/MP4VisualSampleEntry.swift),
+  [`Sources/SwiftMediaMetadata/Video/MP4Parser.swift`](Sources/SwiftMediaMetadata/Video/MP4Parser.swift))
 
 ### Security
 
@@ -715,8 +738,8 @@ the CLI; the library target follows the same numbering.
   and trap on `Data` subscript bounds. The recursive walker now clamps the
   declared range to the buffer length before recursing. Locked in by a new
   malformed-GPMF regression fixture in
-  [`Tests/SwiftExifTests/Video/Phase25GPMFTests.swift`](Tests/SwiftExifTests/Video/Phase25GPMFTests.swift).
-  ([`Sources/SwiftExif/Video/GPMFReader.swift`](Sources/SwiftExif/Video/GPMFReader.swift))
+  [`Tests/SwiftMediaMetadataTests/Video/Phase25GPMFTests.swift`](Tests/SwiftMediaMetadataTests/Video/Phase25GPMFTests.swift).
+  ([`Sources/SwiftMediaMetadata/Video/GPMFReader.swift`](Sources/SwiftMediaMetadata/Video/GPMFReader.swift))
 
 - **GPMF container recursion capped at 32 levels.** Sibling fix to the
   range clamp above: each KLV container header is only 8 bytes, so a
@@ -728,8 +751,8 @@ the CLI; the library target follows the same numbering.
   outermost entries are kept, deeper containers surface with empty
   `children`. Mirrors the existing `XMPReader.maxFrameDepth` convention.
   New deep-nesting regression fixture in
-  [`Tests/SwiftExifTests/Video/Phase25GPMFTests.swift`](Tests/SwiftExifTests/Video/Phase25GPMFTests.swift).
-  ([`Sources/SwiftExif/Video/GPMFReader.swift`](Sources/SwiftExif/Video/GPMFReader.swift))
+  [`Tests/SwiftMediaMetadataTests/Video/Phase25GPMFTests.swift`](Tests/SwiftMediaMetadataTests/Video/Phase25GPMFTests.swift).
+  ([`Sources/SwiftMediaMetadata/Video/GPMFReader.swift`](Sources/SwiftMediaMetadata/Video/GPMFReader.swift))
 
 - **`DateFormatter` race condition on swift-corelibs-foundation (Linux).**
   `ImageMetadata` previously held a `private static let exifDateFormatter`
@@ -749,8 +772,8 @@ the CLI; the library target follows the same numbering.
   `DateFormatter` itself stays per-call to avoid reintroducing the race.
   A new smoke test fans out `shiftExifDateString` across 10k concurrent
   iterations with varied inputs to lock in a regression guard.
-  ([`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift),
-  [`Sources/SwiftExif/API/MetadataRenamer.swift`](Sources/SwiftExif/API/MetadataRenamer.swift))
+  ([`Sources/SwiftMediaMetadata/API/ImageMetadata.swift`](Sources/SwiftMediaMetadata/API/ImageMetadata.swift),
+  [`Sources/SwiftMediaMetadata/API/MetadataRenamer.swift`](Sources/SwiftMediaMetadata/API/MetadataRenamer.swift))
 
 ## [1.8.0] — 2026-05-13
 
@@ -765,8 +788,8 @@ the CLI; the library target follows the same numbering.
   target viewing-room illuminance + white-point chromaticity. Both surface as
   `ContentColourVolume*` / `AmbientViewingEnvironment*` keys on the default
   flat exporter output and on the per-stream report.
-  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift),
-  [`Sources/SwiftExif/API/VideoStream.swift`](Sources/SwiftExif/API/VideoStream.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift`](Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift),
+  [`Sources/SwiftMediaMetadata/API/VideoStream.swift`](Sources/SwiftMediaMetadata/API/VideoStream.swift))
 
 - **HDR static metadata on HEIF / AVIF stills** — `mdcv` and `clli` properties
   inside the `meta → iprp → ipco` hierarchy (iPhone Pro HDR HEIC, AOM HDR AVIF
@@ -776,8 +799,8 @@ the CLI; the library target follows the same numbering.
   `ImageMetadata.hdr` (typed as the same shared `HDRMetadata` used by the
   video side) and as `HDR:MasteringDisplay*` / `HDR:MaxCLL` / `HDR:MaxFALL`
   keys in the flat image exporter.
-  ([`Sources/SwiftExif/Binary/ISOBMFFMetadata.swift`](Sources/SwiftExif/Binary/ISOBMFFMetadata.swift),
-  [`Sources/SwiftExif/API/ImageMetadata.swift`](Sources/SwiftExif/API/ImageMetadata.swift))
+  ([`Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift`](Sources/SwiftMediaMetadata/Binary/ISOBMFFMetadata.swift),
+  [`Sources/SwiftMediaMetadata/API/ImageMetadata.swift`](Sources/SwiftMediaMetadata/API/ImageMetadata.swift))
 
 - **Matroska HDR static metadata** — `MaxCLL` (0x55BC), `MaxFALL` (0x55BD), and
   the `MasteringMetadata` (0x55D0) element group inside the `Colour` master are
@@ -787,7 +810,7 @@ the CLI; the library target follows the same numbering.
   same shape regardless of container. Matroska stores chromaticities and
   luminance as IEEE floats in CIE 1931 xy units and cd/m² respectively, so no
   scaling is needed (unlike MP4's `mdcv` box which uses fixed-point u16/u32).
-  ([`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MatroskaReader.swift`](Sources/SwiftMediaMetadata/Video/MatroskaReader.swift))
 
 - **HDR extraction from HEVC parameter-set NAL arrays** — MakeMKV-style Blu-ray
   HDR10 remuxes carry MaxCLL / MaxFALL and the mastering-display volume in
@@ -799,8 +822,8 @@ the CLI; the library target follows the same numbering.
   recovered VUI color signalling and SMPTE ST 2086 / CTA-861.3 SEIs into
   `VideoStream.hdr`. Verified end-to-end against real HDR Blu-ray remuxes —
   values match `ffprobe` to four decimals.
-  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift),
-  [`Sources/SwiftExif/Video/MP4VisualSampleEntry.swift`](Sources/SwiftExif/Video/MP4VisualSampleEntry.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift`](Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift),
+  [`Sources/SwiftMediaMetadata/Video/MP4VisualSampleEntry.swift`](Sources/SwiftMediaMetadata/Video/MP4VisualSampleEntry.swift))
 
 - **`MasteringDisplay*` / `MaxCLL` / `MaxFALL` keys exposed via the default
   `VideoMetadataExporter` dictionary** — until now, the flat `read` output
@@ -809,7 +832,7 @@ the CLI; the library target follows the same numbering.
   Swift API) to see the HDR side data. The top-level video dictionary now
   reports the same mastering-display chromaticities, luminance bounds, MaxCLL,
   MaxFALL, and Dolby Vision summary that the per-stream report carries.
-  ([`Sources/SwiftExif/API/VideoMetadataExporter.swift`](Sources/SwiftExif/API/VideoMetadataExporter.swift))
+  ([`Sources/SwiftMediaMetadata/API/VideoMetadataExporter.swift`](Sources/SwiftMediaMetadata/API/VideoMetadataExporter.swift))
 
 - **`VideoStream.hdr` row in the README property table** — the per-stream
   `hdr` field is now documented alongside `colorInfo`, listing the container
@@ -826,7 +849,7 @@ the CLI; the library target follows the same numbering.
   defers to the MP4 parser (which also runs the new NAL-array bitstream walker
   above) and re-applies any fields the Matroska `Tracks` master had already
   populated, so the `Tracks` element wins on conflict.
-  ([`Sources/SwiftExif/Video/MatroskaReader.swift`](Sources/SwiftExif/Video/MatroskaReader.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MatroskaReader.swift`](Sources/SwiftMediaMetadata/Video/MatroskaReader.swift))
 
 ### Fixed
 
@@ -839,10 +862,10 @@ the CLI; the library target follows the same numbering.
   (`color_primaries`, `transfer_characteristics`, `matrix_coefficients`,
   `chroma_location`) silently dropped to nil. The fix iterates per spec
   §7.3.4. Locked in by a real-world HDR10 SPS regression fixture in
-  [`Tests/SwiftExifTests/Video/MPEGReaderTests.swift`](Tests/SwiftExifTests/Video/MPEGReaderTests.swift)
+  [`Tests/SwiftMediaMetadataTests/Video/MPEGReaderTests.swift`](Tests/SwiftMediaMetadataTests/Video/MPEGReaderTests.swift)
   asserting BT.2020 / SMPTE 2084 / BT.2020-NCL / topleft chroma — matching
   what ffprobe reports for the same file.
-  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift`](Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift))
 
 - **HEVC SPS `short_term_ref_pic_set()` bailed out on
   `inter_ref_pic_set_prediction_flag = 1`** — the loop used `return f` to abort
@@ -851,7 +874,7 @@ the CLI; the library target follows the same numbering.
   replacement tracks `NumDeltaPocs[stRpsIdx]` for each parsed set and reads
   the correct number of `used_by_curr_pic_flag` / `use_delta_flag` pairs per
   spec §7.4.8.
-  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift`](Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift))
 
 - **HEVC SPS long-term reference pic POC LSB read used a hardcoded 4-bit
   width** — `lt_ref_pic_poc_lsb_sps[i]` is `log2_max_pic_order_cnt_lsb_minus4
@@ -859,7 +882,7 @@ the CLI; the library target follows the same numbering.
   `long_term_ref_pics_present_flag = 1` and `log2_max > 0` would desync the
   cursor before reaching VUI. Fix: save `log2_max_pic_order_cnt_lsb_minus4`
   earlier in the SPS and use it for the long-term POC LSB read.
-  ([`Sources/SwiftExif/Video/MPEGBitstream.swift`](Sources/SwiftExif/Video/MPEGBitstream.swift))
+  ([`Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift`](Sources/SwiftMediaMetadata/Video/MPEGBitstream.swift))
 
 ## [1.7.0] — 2026-05-13
 
@@ -878,7 +901,7 @@ the CLI; the library target follows the same numbering.
   before handing data to the parser, and falls back to stripping trailing
   NULs when no xpacket PI is present (covers bare XMP in TIFF tag 0x02BC,
   PNG iTXt, JPEG XL `xml` boxes, AVIF). Regression tests in
-  [`Tests/SwiftExifTests/XMP/XMPReaderTests.swift`](Tests/SwiftExifTests/XMP/XMPReaderTests.swift).
+  [`Tests/SwiftMediaMetadataTests/XMP/XMPReaderTests.swift`](Tests/SwiftMediaMetadataTests/XMP/XMPReaderTests.swift).
 
 ### Changed
 
@@ -886,7 +909,7 @@ the CLI; the library target follows the same numbering.
   surfaces the same `.description` string the type already produces, so
   errors bridged to `NSError` no longer render as
   `"(SwiftExif.MetadataError error N.)"`. Additive on both Darwin and
-  swift-corelibs-foundation. ([`Sources/SwiftExif/API/MetadataError.swift`](Sources/SwiftExif/API/MetadataError.swift))
+  swift-corelibs-foundation. ([`Sources/SwiftMediaMetadata/API/MetadataError.swift`](Sources/SwiftMediaMetadata/API/MetadataError.swift))
 
 ### Removed
 
@@ -1000,8 +1023,8 @@ the CLI; the library target follows the same numbering.
   the same 8640×5760 / 13014×5784 display geometry ExifTool reports,
   and every NRT acquisition group decodes to typed fields plus a
   faithful catch-all. Implementation reuses the existing
-  [`MXFReader`](Sources/SwiftExif/Video/MXFReader.swift) and
-  [`NRTXMLParser`](Sources/SwiftExif/Video/NRTXMLParser.swift) — no new
+  [`MXFReader`](Sources/SwiftMediaMetadata/Video/MXFReader.swift) and
+  [`NRTXMLParser`](Sources/SwiftMediaMetadata/Video/NRTXMLParser.swift) — no new
   reader file.
 
 - **RED RAW (.R3D) container metadata** — read clip-level metadata from
@@ -1075,7 +1098,7 @@ the CLI; the library target follows the same numbering.
   ```
 
   Implementation lives in
-  [`Sources/SwiftExif/Video/BRAWFrameReader.swift`](Sources/SwiftExif/Video/BRAWFrameReader.swift)
+  [`Sources/SwiftMediaMetadata/Video/BRAWFrameReader.swift`](Sources/SwiftMediaMetadata/Video/BRAWFrameReader.swift)
   and [`Sources/CLI/BRAWFramesCommand.swift`](Sources/CLI/BRAWFramesCommand.swift).
   Reuses `MP4Parser`'s stbl walkers (`stcoOffsets` / `co64Offsets` /
   `sampleFileOffsets` / `sttsSampleStartTicks` / `stszSampleSizes` /
@@ -1085,7 +1108,7 @@ the CLI; the library target follows the same numbering.
   and the new full-walk path can't drift apart.
 
   Coverage: five new tests in
-  [`Tests/SwiftExifTests/Video/BRAWFrameReaderTests.swift`](Tests/SwiftExifTests/Video/BRAWFrameReaderTests.swift)
+  [`Tests/SwiftMediaMetadataTests/Video/BRAWFrameReaderTests.swift`](Tests/SwiftMediaMetadataTests/Video/BRAWFrameReaderTests.swift)
   — multi-frame walk, non-BRAW-throws, gyroscope round-trip,
   accelerometer-absent (returns empty), and key-id-mismatch (partial
   read terminates cleanly). Verified against three real BRAW samples
@@ -1151,7 +1174,7 @@ the CLI; the library target follows the same numbering.
     Per-frame samples themselves are not decoded.
 
   Coverage in
-  [Tests/SwiftExifTests/Video/MP4ParserTests.swift](Tests/SwiftExifTests/Video/MP4ParserTests.swift):
+  [Tests/SwiftMediaMetadataTests/Video/MP4ParserTests.swift](Tests/SwiftMediaMetadataTests/Video/MP4ParserTests.swift):
   the existing `testParseBlackmagicRAWClipMetadata` was extended with
   representative tone-curve / lens / rotation / bitrate / 3D-LUT entries
   (including a high-bit-set type-77 fixture to lock in the unsigned
@@ -1168,16 +1191,16 @@ the CLI; the library target follows the same numbering.
   sample rate, channel layout, and timing on `.ts` / `.m2ts` files without
   ffprobe. New `MPEGBitstream.swift` houses the bit-readers (Exp-Golomb,
   NAL emulation-prevention unescaping, ADTS frame parsing). Real-world HEVC
-  SPS fixture added under `Tests/SwiftExifTests/Video/MPEGReaderTests.swift`.
+  SPS fixture added under `Tests/SwiftMediaMetadataTests/Video/MPEGReaderTests.swift`.
 
 - **SMPTE ST 377-4 MCA audio labels for MXF** — multichannel audio labeling
   per SMPTE ST 377-4 is now decoded out of MXF audio descriptors. New
   `MCAAudioLabeling`, `MCALabelsRenderer`, and `MXFMCAReader` types in
-  `Sources/SwiftExif/Video/`, surfaced through `VideoStream` /
+  `Sources/SwiftMediaMetadata/Video/`, surfaced through `VideoStream` /
   `VideoMetadata` and the JSON exporter. New CLI subcommand
   `swift-exif mxf-labels` emits a bmx-compatible `labels.txt` round-trip
   for production audio workflows. Covered by
-  [Tests/SwiftExifTests/Video/MXFMCALabelsTests.swift](Tests/SwiftExifTests/Video/MXFMCALabelsTests.swift)
+  [Tests/SwiftMediaMetadataTests/Video/MXFMCALabelsTests.swift](Tests/SwiftMediaMetadataTests/Video/MXFMCALabelsTests.swift)
   and the broader `MXFReaderTests` bundle.
 
 - **Apple ecosystem support (Phase 18)** — full delivery of the Apple stack:
@@ -1191,7 +1214,7 @@ the CLI; the library target follows the same numbering.
     pairs can be re-linked after copy/round-trip.
 
 - **Pentax, Leica, and Sigma MakerNote parsers** — three additional vendor
-  MakerNote implementations under `Sources/SwiftExif/MakerNote/`, with
+  MakerNote implementations under `Sources/SwiftMediaMetadata/MakerNote/`, with
   matching writer support in `MakerNoteWriter.swift` and round-trip
   coverage in `MakerNoteReaderTests` / `MakerNoteWriterTests`.
 
@@ -1280,7 +1303,7 @@ the CLI; the library target follows the same numbering.
 - **GIF parser sub-block handling** — regression tests added covering the
   earlier sub-block-overrun hardening (truncated extension blocks, malformed
   image descriptors, unterminated sub-block chains). See
-  [Tests/SwiftExifTests/GIF/GIFParserTests.swift](Tests/SwiftExifTests/GIF/GIFParserTests.swift)
+  [Tests/SwiftMediaMetadataTests/GIF/GIFParserTests.swift](Tests/SwiftMediaMetadataTests/GIF/GIFParserTests.swift)
   and `GIFWriterTests`.
 
 ## [1.4.0] — 2026-04-29
@@ -1469,7 +1492,7 @@ Verified end-to-end against:
   BPS/NUMBER_OF_FRAMES invalidation.
 - `VideoStream.isDefault` / `isForced` / `isAttachedPic` always emitted
   so JSON consumers see a stable shape.
-- CLI test harness under `Tests/SwiftExifCLITests` (gated behind
+- CLI test harness under `Tests/SwiftMediaMetadataCLITests` (gated behind
   `SWIFT_EXIF_RUN_CLI_TESTS=1`).
 - Documented Homebrew CLI install path in README.
 
@@ -1480,15 +1503,16 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
-[1.9.0]: https://github.com/aagedal/SwiftExif/compare/1.8.2...1.9.0
-[1.8.2]: https://github.com/aagedal/SwiftExif/compare/1.8.1...1.8.2
-[1.8.1]: https://github.com/aagedal/SwiftExif/compare/1.8.0...1.8.1
-[1.8.0]: https://github.com/aagedal/SwiftExif/compare/1.7.0...1.8.0
-[1.7.0]: https://github.com/aagedal/SwiftExif/compare/1.6.0...1.7.0
-[1.6.0]: https://github.com/aagedal/SwiftExif/compare/1.5.1...1.6.0
-[1.5.1]: https://github.com/aagedal/SwiftExif/compare/1.5.0...1.5.1
-[1.5.0]: https://github.com/aagedal/SwiftExif/compare/1.4.0...1.5.0
-[1.4.0]: https://github.com/aagedal/SwiftExif/compare/1.3.1...1.4.0
-[1.3.1]: https://github.com/aagedal/SwiftExif/compare/1.3.0...1.3.1
-[1.3.0]: https://github.com/aagedal/SwiftExif/compare/1.2.0...1.3.0
-[1.2.0]: https://github.com/aagedal/SwiftExif/compare/1.1.0...1.2.0
+[2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...2.0.0
+[1.9.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.8.2...1.9.0
+[1.8.2]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.8.1...1.8.2
+[1.8.1]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.8.0...1.8.1
+[1.8.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.7.0...1.8.0
+[1.7.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.6.0...1.7.0
+[1.6.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.5.1...1.6.0
+[1.5.1]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.5.0...1.5.1
+[1.5.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.4.0...1.5.0
+[1.4.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.3.1...1.4.0
+[1.3.1]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.3.0...1.3.1
+[1.3.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.2.0...1.3.0
+[1.2.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.1.0...1.2.0

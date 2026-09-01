@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct ImportCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -15,6 +15,7 @@ struct ImportCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .long, help: "Match mode: filename (default) or sequential.")
     var match: String = "filename"
@@ -64,7 +65,10 @@ struct ImportCommand: ParsableCommand {
         let filter: TagFilter? = (!tags.isEmpty || !excludeTags.isEmpty)
             ? TagFilter(tags: tags, excludeTags: excludeTags) : nil
 
-        let writeOpts = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
+        let writeOpts = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+            atomic: true,
+            createBackup: backup && !overwriteOriginal
+        ))
         let result = try MetadataImporter.importToFiles(
             records: records, files: destURLs, matching: matching, filter: filter, writeOptions: writeOpts
         )

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 // MARK: - Configuration
 
@@ -136,8 +136,8 @@ func benchmarkExiftoolOneByOne(files: [URL]) -> Double {
     return elapsed
 }
 
-func benchmarkSwiftExif(files: [URL]) -> Double {
-    let elapsed = measureTime("SwiftExif") {
+func benchmarkSwiftMediaMetadata(files: [URL]) -> Double {
+    let elapsed = measureTime("SwiftMediaMetadata") {
         for file in files {
             do {
                 var metadata = try ImageMetadata.read(from: file)
@@ -163,8 +163,8 @@ func benchmarkSwiftExif(files: [URL]) -> Double {
     return elapsed
 }
 
-func benchmarkSwiftExifBatch(files: [URL]) -> Double {
-    let elapsed = measureTime("SwiftExif-batch") {
+func benchmarkSwiftMediaMetadataBatch(files: [URL]) -> Double {
+    let elapsed = measureTime("SwiftMediaMetadata-batch") {
         let result = try? BatchProcessor.processFiles(files) { metadata in
             metadata.iptc.headline = headline
             metadata.iptc.byline = byline
@@ -203,8 +203,8 @@ func benchmarkExiftoolRead(files: [URL]) -> Double {
     return elapsed
 }
 
-func benchmarkSwiftExifRead(files: [URL]) -> Double {
-    let elapsed = measureTime("SwiftExif-read") {
+func benchmarkSwiftMediaMetadataRead(files: [URL]) -> Double {
+    let elapsed = measureTime("SwiftMediaMetadata-read") {
         for file in files {
             let _ = try? ImageMetadata.read(from: file)
         }
@@ -213,8 +213,8 @@ func benchmarkSwiftExifRead(files: [URL]) -> Double {
     return elapsed
 }
 
-func benchmarkSwiftExifReadBatch(files: [URL]) -> Double {
-    let elapsed = measureTime("SwiftExif-read-batch") {
+func benchmarkSwiftMediaMetadataReadBatch(files: [URL]) -> Double {
+    let elapsed = measureTime("SwiftMediaMetadata-read-batch") {
         let _ = try? BatchProcessor.processFiles(files) { _ in }
     }
 
@@ -490,7 +490,7 @@ guard let sourceJPEG = findSourceJPEG() else {
 let sourceSize = (try? FileManager.default.attributesOfItem(atPath: sourceJPEG.path)[.size] as? Int) ?? 0
 
 print("╔══════════════════════════════════════════════════════════╗")
-print("║       SwiftExif vs exiftool — Write Benchmark           ║")
+print("║       SwiftMediaMetadata vs exiftool — Write Benchmark           ║")
 print("╠══════════════════════════════════════════════════════════╣")
 print("║  Source:  \(sourceJPEG.lastPathComponent)")
 print("║  Size:    \(String(format: "%.1f", Double(sourceSize) / 1024))  KB")
@@ -516,17 +516,17 @@ let exifSeqTime = benchmarkExiftoolOneByOne(files: exifSeqFiles)
 verify(files: exifSeqFiles)
 print(String(format: "   %.3f s  (%.1f ms/file)\n", exifSeqTime, exifSeqTime / Double(fileCount) * 1000))
 
-// --- SwiftExif sequential ---
-print("3) SwiftExif — sequential")
+// --- SwiftMediaMetadata sequential ---
+print("3) SwiftMediaMetadata — sequential")
 let swiftSeqFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "swift_seq", count: fileCount)
-let swiftSeqTime = benchmarkSwiftExif(files: swiftSeqFiles)
+let swiftSeqTime = benchmarkSwiftMediaMetadata(files: swiftSeqFiles)
 verify(files: swiftSeqFiles)
 print(String(format: "   %.3f s  (%.1f ms/file)\n", swiftSeqTime, swiftSeqTime / Double(fileCount) * 1000))
 
-// --- SwiftExif batch (concurrent) ---
-print("4) SwiftExif — batch (concurrent, \(ProcessInfo.processInfo.activeProcessorCount) cores)")
+// --- SwiftMediaMetadata batch (concurrent) ---
+print("4) SwiftMediaMetadata — batch (concurrent, \(ProcessInfo.processInfo.activeProcessorCount) cores)")
 let swiftBatchFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "swift_batch", count: fileCount)
-let swiftBatchTime = benchmarkSwiftExifBatch(files: swiftBatchFiles)
+let swiftBatchTime = benchmarkSwiftMediaMetadataBatch(files: swiftBatchFiles)
 verify(files: swiftBatchFiles)
 print(String(format: "   %.3f s  (%.1f ms/file)\n", swiftBatchTime, swiftBatchTime / Double(fileCount) * 1000))
 
@@ -536,15 +536,15 @@ print("│  Write Results                                           │")
 print("├──────────────────────────────────────────────────────────┤")
 print(String(format: "│  exiftool batch:        %7.3f s  (%5.1f ms/file)       │", exifBatchTime, exifBatchTime / Double(fileCount) * 1000))
 print(String(format: "│  exiftool sequential:   %7.3f s  (%5.1f ms/file)       │", exifSeqTime, exifSeqTime / Double(fileCount) * 1000))
-print(String(format: "│  SwiftExif sequential:  %7.3f s  (%5.1f ms/file)       │", swiftSeqTime, swiftSeqTime / Double(fileCount) * 1000))
-print(String(format: "│  SwiftExif batch:       %7.3f s  (%5.1f ms/file)       │", swiftBatchTime, swiftBatchTime / Double(fileCount) * 1000))
+print(String(format: "│  SwiftMediaMetadata sequential:  %7.3f s  (%5.1f ms/file)       │", swiftSeqTime, swiftSeqTime / Double(fileCount) * 1000))
+print(String(format: "│  SwiftMediaMetadata batch:       %7.3f s  (%5.1f ms/file)       │", swiftBatchTime, swiftBatchTime / Double(fileCount) * 1000))
 print("├──────────────────────────────────────────────────────────┤")
 
 let fastest = min(swiftSeqTime, swiftBatchTime)
 let slowest = max(exifBatchTime, exifSeqTime)
 let speedup = slowest / fastest
 
-print(String(format: "│  SwiftExif is %.0fx faster than exiftool (best vs worst) │", speedup))
+print(String(format: "│  SwiftMediaMetadata is %.0fx faster than exiftool (best vs worst) │", speedup))
 
 let fairSpeedup = exifSeqTime / swiftSeqTime
 print(String(format: "│  Sequential comparison: %.0fx faster                      │", fairSpeedup))
@@ -555,7 +555,7 @@ print("└───────────────────────�
 // ==========================================================================
 print()
 print("╔══════════════════════════════════════════════════════════╗")
-print("║       SwiftExif vs exiftool — Read Benchmark            ║")
+print("║       SwiftMediaMetadata vs exiftool — Read Benchmark            ║")
 print("╚══════════════════════════════════════════════════════════╝")
 print()
 
@@ -565,16 +565,16 @@ let exifReadFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "exif_rea
 let exifReadTime = benchmarkExiftoolRead(files: exifReadFiles)
 print(String(format: "   %.3f s  (%.1f ms/file)\n", exifReadTime, exifReadTime / Double(fileCount) * 1000))
 
-// --- SwiftExif read sequential ---
-print("6) SwiftExif — read sequential")
+// --- SwiftMediaMetadata read sequential ---
+print("6) SwiftMediaMetadata — read sequential")
 let swiftReadSeqFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "swift_read_seq", count: fileCount)
-let swiftReadSeqTime = benchmarkSwiftExifRead(files: swiftReadSeqFiles)
+let swiftReadSeqTime = benchmarkSwiftMediaMetadataRead(files: swiftReadSeqFiles)
 print(String(format: "   %.3f s  (%.1f ms/file)\n", swiftReadSeqTime, swiftReadSeqTime / Double(fileCount) * 1000))
 
-// --- SwiftExif read batch (concurrent) ---
-print("7) SwiftExif — read batch (concurrent, \(ProcessInfo.processInfo.activeProcessorCount) cores)")
+// --- SwiftMediaMetadata read batch (concurrent) ---
+print("7) SwiftMediaMetadata — read batch (concurrent, \(ProcessInfo.processInfo.activeProcessorCount) cores)")
 let swiftReadBatchFiles = copyFiles(source: sourceJPEG, to: tempDir, prefix: "swift_read_batch", count: fileCount)
-let swiftReadBatchTime = benchmarkSwiftExifReadBatch(files: swiftReadBatchFiles)
+let swiftReadBatchTime = benchmarkSwiftMediaMetadataReadBatch(files: swiftReadBatchFiles)
 print(String(format: "   %.3f s  (%.1f ms/file)\n", swiftReadBatchTime, swiftReadBatchTime / Double(fileCount) * 1000))
 
 // --- Read Summary ---
@@ -582,13 +582,13 @@ print("┌───────────────────────�
 print("│  Read Results                                            │")
 print("├──────────────────────────────────────────────────────────┤")
 print(String(format: "│  exiftool batch:        %7.3f s  (%5.1f ms/file)       │", exifReadTime, exifReadTime / Double(fileCount) * 1000))
-print(String(format: "│  SwiftExif sequential:  %7.3f s  (%5.1f ms/file)       │", swiftReadSeqTime, swiftReadSeqTime / Double(fileCount) * 1000))
-print(String(format: "│  SwiftExif batch:       %7.3f s  (%5.1f ms/file)       │", swiftReadBatchTime, swiftReadBatchTime / Double(fileCount) * 1000))
+print(String(format: "│  SwiftMediaMetadata sequential:  %7.3f s  (%5.1f ms/file)       │", swiftReadSeqTime, swiftReadSeqTime / Double(fileCount) * 1000))
+print(String(format: "│  SwiftMediaMetadata batch:       %7.3f s  (%5.1f ms/file)       │", swiftReadBatchTime, swiftReadBatchTime / Double(fileCount) * 1000))
 print("├──────────────────────────────────────────────────────────┤")
 
 let readFastest = min(swiftReadSeqTime, swiftReadBatchTime)
 let readSpeedup = exifReadTime / readFastest
-print(String(format: "│  SwiftExif is %.0fx faster than exiftool (read)          │", readSpeedup))
+print(String(format: "│  SwiftMediaMetadata is %.0fx faster than exiftool (read)          │", readSpeedup))
 print("└──────────────────────────────────────────────────────────┘")
 
 // ==========================================================================

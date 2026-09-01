@@ -1,4 +1,4 @@
-# SwiftExif
+# SwiftMediaMetadata
 
 A native Swift library for reading and writing image and video metadata — Exif, IPTC (IIM), XMP, C2PA, MakerNotes, and ICC profiles — with no external dependencies.
 
@@ -56,19 +56,26 @@ brew install swift-exif
 
 ### Swift Package
 
-Add SwiftExif to your `Package.swift`:
+Add SwiftMediaMetadata to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/yourusername/SwiftExif.git", from: "0.1.0"),
+    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "2.0.0"),
 ]
 ```
 
 Then add it as a dependency to your target:
 
 ```swift
-.target(name: "YourApp", dependencies: ["SwiftExif"]),
+.target(name: "YourApp", dependencies: ["SwiftMediaMetadata"]),
 ```
+
+### Migrating from 1.x
+
+Version 2.0 renames the package, library product, and importable module from
+`SwiftExif` to `SwiftMediaMetadata`. Update the package URL and target dependency
+above, then replace `import SwiftExif` with `import SwiftMediaMetadata`. The
+installed CLI command remains `swift-exif`.
 
 ## Building from source
 
@@ -142,7 +149,7 @@ the Static Linux SDK).
 ### Reading Metadata
 
 ```swift
-import SwiftExif
+import SwiftMediaMetadata
 
 // From a file URL
 let metadata = try readMetadata(from: imageURL)
@@ -181,6 +188,30 @@ metadata.iptc.setValues(["news", "politics"], for: .keywords)
 
 try metadata.write(to: outputURL)
 ```
+
+Filesystem modification dates update by default. Preserve the destination's
+existing date for an in-place metadata edit, or assign the date of a separate
+source file when producing a new destination:
+
+```swift
+// In-place edit
+let preserve = ImageMetadata.WriteOptions(
+    fileModificationDate: .preserveExisting
+)
+try metadata.write(to: imageURL, options: preserve)
+
+// Source → new destination
+let values = try sourceURL.resourceValues(forKeys: [.contentModificationDateKey])
+if let sourceDate = values.contentModificationDate {
+    let copyDate = ImageMetadata.WriteOptions(
+        fileModificationDate: .set(sourceDate)
+    )
+    try metadata.write(to: outputURL, options: copyDate)
+}
+```
+
+The CLI equivalent for in-place writes is `-P` or
+`--preserve-file-modification-date`.
 
 ### XMP Sidecar Files
 
@@ -600,7 +631,7 @@ Convenience top-level functions parse on a detached task so callers can
 rather than throwing — reserve errors for I/O and hard parse failures.
 
 ```swift
-import SwiftExif
+import SwiftMediaMetadata
 
 // C2PA manifests embedded in MP4/MOV (same JUMBF path as AVIF/HEIF).
 if let c2pa = try await readVideoC2PAMetadata(from: videoURL) {
@@ -628,7 +659,7 @@ let video = try await readVideoMetadata(from: videoURL)
 
 #### Sidecar auto-discovery
 
-When reading `CLIP.MP4` or `CLIP.MXF`, SwiftExif automatically probes for
+When reading `CLIP.MP4` or `CLIP.MXF`, SwiftMediaMetadata automatically probes for
 a Sony NonRealTimeMeta sidecar (`CLIP.XML`, `CLIP.xml`, `CLIP.M01`) next
 to the clip. If found, its parsed contents populate `camera`.
 
@@ -928,7 +959,7 @@ print("\(result.succeeded) files updated, \(result.failed.count) errors")
 ## Architecture
 
 ```
-Sources/SwiftExif/
+Sources/SwiftMediaMetadata/
 ├── API/            # Public API: ImageMetadata, BatchProcessor, FormatDetector,
 │                   #   MetadataExporter, CSVExporter, PrintConverter,
 │                   #   MetadataRenamer, CompositeTagCalculator
@@ -969,12 +1000,12 @@ Measured with `Sources/Benchmark/main.swift` (release build) against a 382 KB JP
 
 **Write / Read (100 files)**
 
-| Operation | exiftool batch | exiftool sequential | SwiftExif sequential | SwiftExif batch |
+| Operation | exiftool batch | exiftool sequential | SwiftMediaMetadata sequential | SwiftMediaMetadata batch |
 |-----------|---------------:|--------------------:|---------------------:|----------------:|
 | Write     | 18.0 ms/file   | 267.7 ms/file       | 8.2 ms/file          | **2.8 ms/file** |
 | Read      | 22.6 ms/file   | —                   | 4.5 ms/file          | **2.8 ms/file** |
 
-SwiftExif batch write is ~6× faster than exiftool batch and ~95× faster than exiftool sequential. Read is ~8× faster than exiftool batch.
+SwiftMediaMetadata batch write is ~6× faster than exiftool batch and ~95× faster than exiftool sequential. Read is ~8× faster than exiftool batch.
 
 **C2PA JUMBF parse (1 000 iterations)**
 
@@ -992,12 +1023,12 @@ SwiftExif batch write is ~6× faster than exiftool batch and ~95× faster than e
 | Medium  | 5.4 KB    | 122.7 µs  |
 | Large   | 27.5 KB   | 604.0 µs  |
 
-<sup>Tested 2026-04-19 on macOS 26.4.1 (Apple M1 Max, 10 cores). SwiftExif @ `c84bfee` (main). ExifTool 13.55 via Homebrew.</sup>
+<sup>Tested 2026-04-19 on macOS 26.4.1 (Apple M1 Max, 10 cores). SwiftMediaMetadata @ `c84bfee` (main). ExifTool 13.55 via Homebrew.</sup>
 
 ## Acknowledgements
 
 - **GeoNames** (https://www.geonames.org/) — The reverse geocoding database is built from GeoNames geographical data, licensed under [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/). The embedded city database contains ~33,500 cities with population >= 15,000.
-- **ExifTool** by Phil Harvey (https://exiftool.org/) — The reference implementation for image metadata processing. SwiftExif aims to provide equivalent functionality as a native Swift library.
+- **ExifTool** by Phil Harvey (https://exiftool.org/) — The reference implementation for image metadata processing. SwiftMediaMetadata aims to provide equivalent functionality as a native Swift library.
 
 ## License
 

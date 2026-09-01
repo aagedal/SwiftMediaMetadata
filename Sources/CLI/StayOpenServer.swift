@@ -90,17 +90,17 @@ struct StayOpenServer {
             let expandedArgs = try expandArgfiles(fullArgs)
             // Parse and run through ArgumentParser.
             // We catch the exit to prevent the process from terminating.
-            var command = try SwiftExifCLI.parseAsRoot(expandedArgs)
+            var command = try SwiftMediaMetadataCLI.parseAsRoot(expandedArgs)
             try command.run()
         } catch {
             // ArgumentParser throws CleanExit for --help/--version.
             if case let cleanExit as CleanExit = error {
-                let message = SwiftExifCLI.message(for: cleanExit)
+                let message = SwiftMediaMetadataCLI.message(for: cleanExit)
                 if !message.isEmpty {
                     print(message)
                 }
             } else {
-                let message = SwiftExifCLI.fullMessage(for: error)
+                let message = SwiftMediaMetadataCLI.fullMessage(for: error)
                 printError(message)
             }
         }

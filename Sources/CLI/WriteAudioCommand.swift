@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct WriteAudioCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -10,6 +10,8 @@ struct WriteAudioCommand: ParsableCommand {
 
     @Argument(help: "Audio files to modify.")
     var files: [String]
+
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .long, help: "Set the title.")
     var title: String?
@@ -79,14 +81,11 @@ struct WriteAudioCommand: ParsableCommand {
                 if let aa = albumArtist { metadata.albumArtist = aa }
                 if let co = composer { metadata.composer = co }
 
-                if backup {
-                    let backupURL = ImageMetadata.backupURL(for: url)
-                    let fm = FileManager.default
-                    try? fm.removeItem(at: backupURL)
-                    try fm.copyItem(at: url, to: backupURL)
-                }
-
-                try metadata.write(to: url)
+                let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+                    atomic: true,
+                    createBackup: backup
+                ))
+                try metadata.write(to: url, options: options)
                 succeeded += 1
             } catch {
                 printError("Error writing \(url.lastPathComponent): \(error.localizedDescription)")

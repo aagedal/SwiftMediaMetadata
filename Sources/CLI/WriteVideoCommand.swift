@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct WriteVideoCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -12,6 +12,7 @@ struct WriteVideoCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .long, help: "Set the title.")
     var title: String?
@@ -81,7 +82,10 @@ struct WriteVideoCommand: ParsableCommand {
                     metadata.gpsAltitude = altitude
                 }
 
-                let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup)
+                let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+                    atomic: true,
+                    createBackup: backup
+                ))
                 try metadata.write(to: url, options: options)
                 succeeded += 1
             } catch {

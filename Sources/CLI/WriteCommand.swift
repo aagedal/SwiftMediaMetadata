@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct WriteCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -12,6 +12,7 @@ struct WriteCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .shortAndLong, help: "Tag to set (Key=Value), append (Key+=Value), or remove (Key-=Value). Can be repeated.")
     var tag: [String] = []
@@ -38,7 +39,10 @@ struct WriteCommand: ParsableCommand {
         let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
         let tags = try parseTags(tag)
-        let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
+        let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+            atomic: true,
+            createBackup: backup && !overwriteOriginal
+        ))
 
         var succeeded = 0
         var failed = 0

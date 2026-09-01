@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct ReadCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -358,7 +358,7 @@ struct ReadCommand: ParsableCommand {
 
     /// Map container-native video codec ids onto ffmpeg's short codec names
     /// (e.g. "hvc1" / "V_MPEGH/ISO/HEVC" → "hevc"). Consumers that already key
-    /// off ffprobe output can drop SwiftExif in without a translation table.
+    /// off ffprobe output can drop SwiftMediaMetadata in without a translation table.
     private func ffprobeShortVideoCodec(_ codec: String) -> String? {
         switch codec {
         case "V_MPEG4/ISO/AVC", "avc1", "avc3": return "h264"

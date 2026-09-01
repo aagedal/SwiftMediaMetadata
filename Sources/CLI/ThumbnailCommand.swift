@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct ThumbnailCommand: ParsableCommand {
     static let configuration = CommandConfiguration(

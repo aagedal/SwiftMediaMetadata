@@ -173,7 +173,7 @@ print("String tables: \(regionTable.count) regions, \(countryTable.count) countr
 // Generate Swift file
 print("Generating Swift source...")
 
-let outputPath = FileManager.default.currentDirectoryPath + "/Sources/SwiftExif/Geolocation/GeoLocationDatabase.swift"
+let outputPath = FileManager.default.currentDirectoryPath + "/Sources/SwiftMediaMetadata/Geolocation/GeoLocationDatabase.swift"
 
 var out = """
 // GeoLocationDatabase.swift

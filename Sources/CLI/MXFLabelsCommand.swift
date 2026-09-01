@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 /// `swift-exif mxf-labels file.mxf [--output labels.txt]`
 ///

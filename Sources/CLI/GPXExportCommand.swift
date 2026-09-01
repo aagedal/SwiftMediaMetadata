@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct GPXExportCommand: ParsableCommand {
     static let configuration = CommandConfiguration(

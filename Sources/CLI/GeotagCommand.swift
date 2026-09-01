@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct GeotagCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -15,6 +15,7 @@ struct GeotagCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .long, help: "Maximum time offset in seconds for matching (default: 60).")
     var maxOffset: Double = 60
@@ -35,6 +36,10 @@ struct GeotagCommand: ParsableCommand {
         let gpxURL = URL(fileURLWithPath: gpx)
         let track = try GPXParser.parse(from: gpxURL)
         let urls = try resolveFiles(files, filter: fileFilter)
+        let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+            atomic: true,
+            createBackup: backup && !overwriteOriginal
+        ))
 
         print("Loaded GPX track: \(track.trackpoints.count) trackpoints")
         if let range = track.timeRange {
@@ -52,7 +57,6 @@ struct GeotagCommand: ParsableCommand {
                 var metadata = try ImageMetadata.read(from: url)
                 let applied = metadata.applyGPX(track, maxOffset: maxOffset, timeZoneOffset: tzOffset * 3600)
 
-                let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
                 if applied {
                     if fillLocation {
                         metadata.fillLocationFromGPS(overwrite: true)

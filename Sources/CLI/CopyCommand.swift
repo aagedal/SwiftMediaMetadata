@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct CopyCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -15,6 +15,7 @@ struct CopyCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Option(name: .long, help: "Metadata groups to copy (comma-separated): exif, iptc, xmp, c2pa, icc. Default: all.")
     var groups: String?
@@ -62,7 +63,10 @@ struct CopyCommand: ParsableCommand {
             groupSet = nil
         }
 
-        let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
+        let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+            atomic: true,
+            createBackup: backup && !overwriteOriginal
+        ))
         let mappings = try parseTagMappings(map)
         // Pre-build a flat read of the source dict; -map looks up SRC keys
         // here and applies their values via the same write path -tag uses.

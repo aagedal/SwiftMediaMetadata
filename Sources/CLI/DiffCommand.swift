@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct DiffCommand: ParsableCommand {
     static let configuration = CommandConfiguration(

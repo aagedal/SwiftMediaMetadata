@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftExif
+import SwiftMediaMetadata
 
 struct StripCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -12,6 +12,7 @@ struct StripCommand: ParsableCommand {
     var files: [String]
 
     @OptionGroup var fileFilter: FileFilterOptions
+    @OptionGroup var fileTimestamps: FileTimestampOptions
 
     @Flag(name: .long, help: "Strip all metadata.")
     var all = false
@@ -55,7 +56,10 @@ struct StripCommand: ParsableCommand {
     func run() throws {
         let urls = try resolveFiles(files, filter: fileFilter)
         let condition = try parseConditions(self.if)
-        let options = ImageMetadata.WriteOptions(atomic: true, createBackup: backup && !overwriteOriginal)
+        let options = fileTimestamps.applying(to: ImageMetadata.WriteOptions(
+            atomic: true,
+            createBackup: backup && !overwriteOriginal
+        ))
 
         var succeeded = 0
         var failed = 0
