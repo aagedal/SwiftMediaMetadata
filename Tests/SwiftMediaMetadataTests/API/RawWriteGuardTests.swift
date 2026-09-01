@@ -59,4 +59,17 @@ final class RawWriteGuardTests: XCTestCase {
             "allowUnsafeRawEmbed must permit the write"
         )
     }
+
+    func testRenderedSonyTIFFRemainsWritableWithoutUnsafeOverride() throws {
+        let url = tempURL("tiff")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try TestFixtures.tiffWithExif(make: "SONY", model: "ILCE-7RM5").write(to: url)
+
+        var metadata = try ImageMetadata.read(from: url)
+        XCTAssertEqual(metadata.format, .tiff)
+        metadata.iptc.headline = "Rendered output"
+
+        XCTAssertNoThrow(try metadata.write(to: url))
+        XCTAssertEqual(try ImageMetadata.read(from: url).iptc.headline, "Rendered output")
+    }
 }

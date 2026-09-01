@@ -17,8 +17,40 @@ public indirect enum XMPValue: Equatable, Sendable {
     case simple(String)
     case array([String])                       // rdf:Bag or rdf:Seq
     case langAlternative(String)               // rdf:Alt with xml:lang="x-default"
+    case languageAlternative([XMPLanguageAlternative]) // ordered rdf:Alt, retaining xml:lang
     case structure([String: XMPValue])         // Single rdf:Description with fields
     case structuredArray([[String: XMPValue]]) // rdf:Bag of rdf:Description items
+}
+
+/// One ordered item in an XMP language alternative.
+///
+/// `language` is the exact `xml:lang` value observed on read (normally a BCP 47
+/// tag or XMP's `x-default` pseudo-tag).
+public struct XMPLanguageAlternative: Equatable, Sendable {
+    public var language: String
+    public var value: String
+
+    public init(language: String, value: String) {
+        self.language = language
+        self.value = value
+    }
+}
+
+/// A lossless mutation of one XMP structure.
+///
+/// Keys are namespace-qualified, matching `XMPValue.structure`. Values not
+/// mentioned by the patch are retained, including unknown third-party fields.
+public struct XMPStructurePatch: Equatable, Sendable {
+    public var values: [String: XMPValue]
+    public var removedKeys: Set<String>
+
+    public init(
+        values: [String: XMPValue] = [:],
+        removedKeys: Set<String> = []
+    ) {
+        self.values = values
+        self.removedKeys = removedKeys
+    }
 }
 
 public extension Dictionary where Key == String, Value == XMPValue {
@@ -35,6 +67,10 @@ public extension Dictionary where Key == String, Value == XMPValue {
     func simpleField(namespace: String, property: String) -> String? {
         switch self[namespace: namespace, property: property] {
         case .simple(let s), .langAlternative(let s): return s
+        case .languageAlternative(let items):
+            return items.first(where: {
+                $0.language.caseInsensitiveCompare("x-default") == .orderedSame
+            })?.value ?? items.first?.value
         default: return nil
         }
     }
@@ -142,7 +178,25 @@ public struct XMPData: Equatable, Sendable {
     public func simpleValue(namespace: String, property: String) -> String? {
         if case .simple(let s) = value(namespace: namespace, property: property) { return s }
         if case .langAlternative(let s) = value(namespace: namespace, property: property) { return s }
+        if case .languageAlternative(let items) = value(namespace: namespace, property: property) {
+            return items.first(where: {
+                $0.language.caseInsensitiveCompare("x-default") == .orderedSame
+            })?.value ?? items.first?.value
+        }
         return nil
+    }
+
+    /// Get every ordered language alternative without collapsing non-default languages.
+    public func languageAlternativeValue(
+        namespace: String,
+        property: String
+    ) -> [XMPLanguageAlternative]? {
+        switch value(namespace: namespace, property: property) {
+        case .languageAlternative(let items): return items
+        case .langAlternative(let value):
+            return [XMPLanguageAlternative(language: "x-default", value: value)]
+        default: return nil
+        }
     }
 
     /// Get an array value.
@@ -163,6 +217,35 @@ public struct XMPData: Equatable, Sendable {
     public func structuredArrayValue(namespace: String, property: String) -> [[String: XMPValue]]? {
         if case .structuredArray(let items) = value(namespace: namespace, property: property) { return items }
         return nil
+    }
+
+    /// Patch a structure while retaining every field the patch does not mention.
+    public mutating func patchStructure(
+        namespace: String,
+        property: String,
+        with patch: XMPStructurePatch
+    ) {
+        var fields = structureValue(namespace: namespace, property: property) ?? [:]
+        for key in patch.removedKeys { fields.removeValue(forKey: key) }
+        for (key, value) in patch.values { fields[key] = value }
+        setValue(.structure(fields), namespace: namespace, property: property)
+    }
+
+    /// Patch one item in a structured array while retaining unknown sibling fields.
+    /// Returns `false` when the property or item index does not exist.
+    @discardableResult
+    public mutating func patchStructuredArrayItem(
+        namespace: String,
+        property: String,
+        at index: Int,
+        with patch: XMPStructurePatch
+    ) -> Bool {
+        guard var items = structuredArrayValue(namespace: namespace, property: property),
+              items.indices.contains(index) else { return false }
+        for key in patch.removedKeys { items[index].removeValue(forKey: key) }
+        for (key, value) in patch.values { items[index][key] = value }
+        setValue(.structuredArray(items), namespace: namespace, property: property)
+        return true
     }
 
     /// Convenience view that down-casts a structure's `XMPValue` fields to `String`, dropping
@@ -193,6 +276,38 @@ public struct XMPData: Equatable, Sendable {
     /// Wrap each entry in a flat `[String: String]` as `.simple`, producing the recursive form.
     public static func wrapSimple(_ fields: [String: String]) -> [String: XMPValue] {
         fields.mapValues { .simple($0) }
+    }
+
+    private mutating func setTypedStructure(
+        _ fields: [String: String],
+        knownKeys: Set<String>,
+        namespace: String,
+        property: String
+    ) {
+        var merged = structureValue(namespace: namespace, property: property) ?? [:]
+        for key in knownKeys { merged.removeValue(forKey: key) }
+        for (key, value) in Self.wrapSimple(fields) { merged[key] = value }
+        setValue(.structure(merged), namespace: namespace, property: property)
+    }
+
+    private mutating func setTypedStructuredArray(
+        _ items: [[String: String]],
+        knownKeys: Set<String>,
+        namespace: String,
+        property: String
+    ) {
+        let existing = structuredArrayValue(namespace: namespace, property: property) ?? []
+        let merged = items.enumerated().map { index, fields -> [String: XMPValue] in
+            var item = existing.indices.contains(index) ? existing[index] : [:]
+            for key in knownKeys { item.removeValue(forKey: key) }
+            for (key, value) in Self.wrapSimple(fields) { item[key] = value }
+            return item
+        }
+        setValue(.structuredArray(merged), namespace: namespace, property: property)
+    }
+
+    private static func qualifiedKeys(_ namespace: String, _ names: [String]) -> Set<String> {
+        Set(names.map { namespace + $0 })
     }
 
     /// All property keys.
@@ -427,7 +542,17 @@ public struct XMPData: Equatable, Sendable {
             return IPTCCreatorContactInfo(fields: fields)
         }
         set {
-            if let v = newValue { setValue(.structure(Self.wrapSimple(v.toFields())), namespace: XMPNamespace.iptcCore, property: "CreatorContactInfo") }
+            if let v = newValue {
+                setTypedStructure(
+                    v.toFields(),
+                    knownKeys: Self.qualifiedKeys(XMPNamespace.iptcCore, [
+                        "CiAdrCity", "CiAdrCtry", "CiAdrExtadr", "CiAdrPcode",
+                        "CiAdrRegion", "CiEmailWork", "CiTelWork", "CiUrlWork",
+                    ]),
+                    namespace: XMPNamespace.iptcCore,
+                    property: "CreatorContactInfo"
+                )
+            }
             else { removeValue(namespace: XMPNamespace.iptcCore, property: "CreatorContactInfo") }
         }
     }
@@ -554,7 +679,14 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "LocationCreated") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "LocationCreated") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.iptcExt, [
+                    "City", "CountryCode", "CountryName", "ProvinceState", "Sublocation", "WorldRegion",
+                ]),
+                namespace: XMPNamespace.iptcExt,
+                property: "LocationCreated"
+            ) }
         }
     }
 
@@ -566,7 +698,14 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "LocationShown") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "LocationShown") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.iptcExt, [
+                    "City", "CountryCode", "CountryName", "ProvinceState", "Sublocation", "WorldRegion",
+                ]),
+                namespace: XMPNamespace.iptcExt,
+                property: "LocationShown"
+            ) }
         }
     }
 
@@ -578,7 +717,12 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "RegistryId") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "RegistryId") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.iptcExt, ["RegItemId", "RegOrgId"]),
+                namespace: XMPNamespace.iptcExt,
+                property: "RegistryId"
+            ) }
         }
     }
 
@@ -590,7 +734,14 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "ArtworkOrObject") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "ArtworkOrObject") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.iptcExt, [
+                    "AOTitle", "AOCreator", "AODateCreated", "AOSource", "AOSourceInvNo", "AOCopyrightNotice",
+                ]),
+                namespace: XMPNamespace.iptcExt,
+                property: "ArtworkOrObject"
+            ) }
         }
     }
 
@@ -602,7 +753,12 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.iptcExt, property: "ImageCreator") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.iptcExt, property: "ImageCreator") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.iptcExt, ["ImageCreatorID", "ImageCreatorName"]),
+                namespace: XMPNamespace.iptcExt,
+                property: "ImageCreator"
+            ) }
         }
     }
 
@@ -624,7 +780,12 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "CopyrightOwner") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.plus, property: "CopyrightOwner") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.plus, ["CopyrightOwnerID", "CopyrightOwnerName"]),
+                namespace: XMPNamespace.plus,
+                property: "CopyrightOwner"
+            ) }
         }
     }
 
@@ -636,7 +797,16 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "Licensor") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.plus, property: "Licensor") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.plus, [
+                    "LicensorID", "LicensorName", "LicensorStreetAddress", "LicensorExtendedAddress",
+                    "LicensorCity", "LicensorRegion", "LicensorPostalCode", "LicensorCountry",
+                    "LicensorTelephone1", "LicensorTelephone2", "LicensorEmail", "LicensorURL",
+                ]),
+                namespace: XMPNamespace.plus,
+                property: "Licensor"
+            ) }
         }
     }
 
@@ -678,7 +848,12 @@ public struct XMPData: Equatable, Sendable {
         }
         set {
             if newValue.isEmpty { removeValue(namespace: XMPNamespace.plus, property: "ImageSupplier") }
-            else { setValue(.structuredArray(newValue.map { Self.wrapSimple($0.toFields()) }), namespace: XMPNamespace.plus, property: "ImageSupplier") }
+            else { setTypedStructuredArray(
+                newValue.map { $0.toFields() },
+                knownKeys: Self.qualifiedKeys(XMPNamespace.plus, ["ImageSupplierID", "ImageSupplierName"]),
+                namespace: XMPNamespace.plus,
+                property: "ImageSupplier"
+            ) }
         }
     }
 

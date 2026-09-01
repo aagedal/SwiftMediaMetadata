@@ -623,6 +623,8 @@ public struct MetadataExporter: Sendable {
                     dict[exportKey] = items
                 case .langAlternative(let s):
                     dict[exportKey] = s
+                case .languageAlternative(let items):
+                    dict[exportKey] = items.map { ["language": $0.language, "value": $0.value] }
                 case .structure(let fields):
                     dict[exportKey] = renderStructFields(fields)
                 case .structuredArray(let items):
@@ -694,6 +696,8 @@ public struct MetadataExporter: Sendable {
         switch value {
         case .simple(let s): return s
         case .langAlternative(let s): return s
+        case .languageAlternative(let items):
+            return items.map { ["language": $0.language, "value": $0.value] }
         case .array(let items): return items
         case .structure(let fields): return renderStructFields(fields)
         case .structuredArray(let items): return items.map(renderStructFields)

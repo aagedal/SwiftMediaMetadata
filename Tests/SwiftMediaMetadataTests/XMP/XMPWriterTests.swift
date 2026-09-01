@@ -189,6 +189,24 @@ final class XMPWriterTests: XCTestCase {
         XCTAssertFalse(xml.contains("<rdf:Bag>"))
     }
 
+    func testPLUSImageSupplierWrittenAsSeq() {
+        var xmp = XMPData()
+        xmp.imageSupplier = [IPTCImageSupplier(
+            imageSupplierID: "supplier-id",
+            imageSupplierName: "News Agency"
+        )]
+
+        let xml = XMPWriter.generateXML(xmp)
+        XCTAssertNotNil(xml.range(
+            of: "<plus:ImageSupplier>\\s*<rdf:Seq>",
+            options: .regularExpression
+        ))
+        XCTAssertNil(xml.range(
+            of: "<plus:ImageSupplier>\\s*<rdf:Bag>",
+            options: .regularExpression
+        ))
+    }
+
     func testSubjectStaysBag() {
         var xmp = XMPData()
         xmp.subject = ["news"]

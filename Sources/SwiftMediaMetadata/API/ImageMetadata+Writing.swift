@@ -22,6 +22,19 @@ extension ImageMetadata {
             case set(Date)
         }
 
+        /// Policy for the filesystem creation date of the written file.
+        public enum FileCreationDatePolicy: Sendable, Equatable {
+            /// Let the filesystem assign the creation date when bytes are installed.
+            case update
+
+            /// Preserve the destination's creation date when it already exists.
+            /// A newly created destination uses the filesystem-assigned date.
+            case preserveExisting
+
+            /// Assign a specific creation date, when supported by the filesystem.
+            case set(Date)
+        }
+
         /// Write to a temporary file then atomically rename (prevents corruption on crash).
         /// Default: true.
         public var atomic: Bool
@@ -48,6 +61,10 @@ extension ImageMetadata {
         /// Default: `.update`.
         public var fileModificationDate: FileModificationDatePolicy
 
+        /// Controls the filesystem creation date after a successful write.
+        /// Metadata-only rewrites preserve an existing destination's date by default.
+        public var fileCreationDate: FileCreationDatePolicy
+
         public init(
             atomic: Bool = true,
             createBackup: Bool = false,
@@ -55,11 +72,34 @@ extension ImageMetadata {
             allowUnsafeRawEmbed: Bool = false,
             fileModificationDate: FileModificationDatePolicy = .update
         ) {
+            self.init(
+                atomic: atomic,
+                createBackup: createBackup,
+                backupSuffix: backupSuffix,
+                allowUnsafeRawEmbed: allowUnsafeRawEmbed,
+                fileModificationDate: fileModificationDate,
+                fileCreationDate: .preserveExisting
+            )
+        }
+
+        /// Create write options with an explicit filesystem creation-date policy.
+        ///
+        /// `fileCreationDate` is intentionally required on this overload so the
+        /// exact pre-2.1 initializer remains available to existing clients.
+        public init(
+            atomic: Bool = true,
+            createBackup: Bool = false,
+            backupSuffix: String = "_original",
+            allowUnsafeRawEmbed: Bool = false,
+            fileModificationDate: FileModificationDatePolicy = .update,
+            fileCreationDate: FileCreationDatePolicy
+        ) {
             self.atomic = atomic
             self.createBackup = createBackup
             self.backupSuffix = backupSuffix
             self.allowUnsafeRawEmbed = allowUnsafeRawEmbed
             self.fileModificationDate = fileModificationDate
+            self.fileCreationDate = fileCreationDate
         }
 
         /// Default options: atomic write, no backup.

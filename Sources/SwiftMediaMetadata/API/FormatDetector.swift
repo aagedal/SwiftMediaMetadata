@@ -210,8 +210,9 @@ public struct FormatDetector: Sendable {
             }
         }
 
-        // For DNG/NEF/ARW: need to scan IFD0 for distinguishing tags.
-        // This is a quick heuristic scan, not a full IFD parse.
+        // DNG carries a format marker in IFD0. Proprietary TIFF-based RAW
+        // formats without an unambiguous signature are resolved from the file
+        // extension by ImageMetadata.read(from:), not from camera Make.
         if let format = detectRAWFromIFD(data) {
             return format
         }
@@ -281,28 +282,13 @@ public struct FormatDetector: Sendable {
                 return .raw(.dng)
             }
 
-            // Use Make to distinguish ORF (Olympus), PEF (Pentax) and ARW (Sony).
-            if let make = makeString?.uppercased() {
-                if make.contains("OLYMPUS") {
-                    return .raw(.orf)
-                }
-                if make.contains("PENTAX") || make.contains("RICOH") {
-                    return .raw(.pef)
-                }
-                // Sony's only TIFF-structured raw is ARW (the legacy SR2/SRF
-                // predate any modern body). A non-DNG TIFF with Make "SONY" is an
-                // ARW — without this it falls through to a generic .tiff label.
-                if make.contains("SONY") {
-                    return .raw(.arw)
-                }
-            }
         } catch {
             return nil
         }
 
-        // NEF is still hard to distinguish from plain TIFF without parsing
-        // MakerNotes (Make "NIKON" also appears on NRW and Nikon-authored TIFFs),
-        // so it falls back to extension-based detection.
+        // Camera Make is deliberately not a container signature: rendered TIFFs
+        // commonly retain the originating camera's Make and Model. Ambiguous
+        // TIFF-based RAW formats fall back to extension-aware URL detection.
         return nil
     }
 

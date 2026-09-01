@@ -327,6 +327,7 @@ final class SafeWriteTests: XCTestCase {
         XCTAssertFalse(opts.createBackup)
         XCTAssertEqual(opts.backupSuffix, "_original")
         XCTAssertEqual(opts.fileModificationDate, .update)
+        XCTAssertEqual(opts.fileCreationDate, .preserveExisting)
     }
 
     func testWriteOptionsSafe() {
@@ -476,6 +477,44 @@ final class SafeWriteTests: XCTestCase {
         XCTAssertGreaterThan(try modificationDate(for: fileURL), oldDate)
     }
 
+    func testDefaultAtomicWritePreservesExistingCreationDate() throws {
+        let tempDir = try createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let fileURL = tempDir.appendingPathComponent("preserve-creation.jpg")
+        try makeMinimalJPEG().write(to: fileURL)
+        let originalDate = Date(timeIntervalSince1970: 1_577_930_645)
+        try setCreationDate(originalDate, for: fileURL)
+
+        var metadata = try ImageMetadata.read(from: fileURL)
+        metadata.iptc.headline = "Preserved"
+        try metadata.write(to: fileURL)
+
+        XCTAssertEqual(try creationDate(for: fileURL).timeIntervalSince1970,
+                       originalDate.timeIntervalSince1970,
+                       accuracy: 0.001)
+    }
+
+    func testWriteToNewFileAssignsExplicitCreationDate() throws {
+        let tempDir = try createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sourceURL = tempDir.appendingPathComponent("source-creation.jpg")
+        try makeMinimalJPEG().write(to: sourceURL)
+        let metadata = try ImageMetadata.read(from: sourceURL)
+        let destinationURL = tempDir.appendingPathComponent("destination-creation.jpg")
+        let requestedDate = Date(timeIntervalSince1970: 1_609_459_200)
+
+        try metadata.write(
+            to: destinationURL,
+            options: .init(fileCreationDate: .set(requestedDate))
+        )
+
+        XCTAssertEqual(try creationDate(for: destinationURL).timeIntervalSince1970,
+                       requestedDate.timeIntervalSince1970,
+                       accuracy: 0.001)
+    }
+
     func testNonAtomicWritePreservesExistingModificationDate() throws {
         let tempDir = try createTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -542,6 +581,15 @@ final class SafeWriteTests: XCTestCase {
     private func modificationDate(for url: URL) throws -> Date {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         return try XCTUnwrap(attributes[.modificationDate] as? Date)
+    }
+
+    private func setCreationDate(_ date: Date, for url: URL) throws {
+        try FileManager.default.setAttributes([.creationDate: date], ofItemAtPath: url.path)
+    }
+
+    private func creationDate(for url: URL) throws -> Date {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try XCTUnwrap(attributes[.creationDate] as? Date)
     }
 }
 

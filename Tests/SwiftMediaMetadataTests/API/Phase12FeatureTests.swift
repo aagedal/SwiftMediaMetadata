@@ -57,23 +57,21 @@ final class Phase12FeatureTests: XCTestCase {
         XCTAssertEqual(format, .rw2)
     }
 
-    // MARK: - ORF Detection via Make Tag
+    // MARK: - Camera Make is not a container signature
 
-    func testDetectORFFromMakeTag() {
+    func testOlympusAuthoredTIFFRemainsTIFF() {
         let data = TestFixtures.tiffWithExif(make: "OLYMPUS CORPORATION", model: "E-M1X")
-        XCTAssertEqual(FormatDetector.detect(data), .raw(.orf))
+        XCTAssertEqual(FormatDetector.detect(data), .tiff)
     }
 
-    // MARK: - PEF Detection via Make Tag
-
-    func testDetectPEFFromMakeTag() {
+    func testPentaxAuthoredTIFFRemainsTIFF() {
         let data = TestFixtures.tiffWithExif(make: "PENTAX", model: "K-1 Mark II")
-        XCTAssertEqual(FormatDetector.detect(data), .raw(.pef))
+        XCTAssertEqual(FormatDetector.detect(data), .tiff)
     }
 
-    func testDetectPEFFromRicoh() {
+    func testRicohAuthoredTIFFRemainsTIFF() {
         let data = TestFixtures.tiffWithExif(make: "RICOH IMAGING", model: "PENTAX K-3 III")
-        XCTAssertEqual(FormatDetector.detect(data), .raw(.pef))
+        XCTAssertEqual(FormatDetector.detect(data), .tiff)
     }
 
     // MARK: - ORF/PEF Read via ImageMetadata

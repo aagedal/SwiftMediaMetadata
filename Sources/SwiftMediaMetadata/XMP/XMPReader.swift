@@ -75,6 +75,8 @@ private final class XMPXMLParser: PureXMLEvents {
     private var inSeq = false
     private var inAlt = false
     private var currentArrayItems: [String] = []
+    private var currentLanguageAlternatives: [XMPLanguageAlternative] = []
+    private var currentAlternativeLanguage = "x-default"
     private var currentArrayProperty = ""
     private var currentArrayNamespace = ""
     private var parseError: Error?
@@ -123,6 +125,8 @@ private final class XMPXMLParser: PureXMLEvents {
         let savedCurrentStructureFields: [String: XMPValue]
         let savedCurrentStructuredArrayItems: [[String: XMPValue]]
         let savedCurrentArrayItems: [String]
+        let savedCurrentLanguageAlternatives: [XMPLanguageAlternative]
+        let savedCurrentAlternativeLanguage: String
         let savedCurrentArrayProperty: String
         let savedCurrentArrayNamespace: String
         let savedInBag: Bool
@@ -341,8 +345,15 @@ private final class XMPXMLParser: PureXMLEvents {
             inAlt = true
             inPendingProperty = false
             currentArrayItems = []
+            currentLanguageAlternatives = []
+            currentAlternativeLanguage = "x-default"
         } else if elementName == "li" {
             currentText = ""
+            if inAlt {
+                currentAlternativeLanguage = attributeDict["xml:lang"]
+                    ?? attributeDict["lang"]
+                    ?? "x-default"
+            }
             // Inside a Bag or Seq, prepare for a potential structured item. ACR writes
             // structured arrays as rdf:Seq, and an item's fields may be attribute-form
             // directly on the li (<rdf:li crs:Top="..."/>) with no Description child.
@@ -517,7 +528,13 @@ private final class XMPXMLParser: PureXMLEvents {
             } else {
                 inStructuredItem = false
                 let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
+                if inAlt {
+                    currentLanguageAlternatives.append(XMPLanguageAlternative(
+                        language: currentAlternativeLanguage,
+                        value: trimmed
+                    ))
+                    currentAlternativeLanguage = "x-default"
+                } else if !trimmed.isEmpty {
                     currentArrayItems.append(trimmed)
                 }
             }
@@ -552,17 +569,27 @@ private final class XMPXMLParser: PureXMLEvents {
                 currentStructuredArrayItems = []
             }
         } else if elementName == "Alt" {
-            let builtValue: XMPValue = .langAlternative(currentArrayItems.first ?? "")
+            // Retain the scalar carrier for the common single x-default form.
+            // Localized, repeated, or empty alternatives use the lossless ordered carrier.
+            let builtValue: XMPValue
+            if currentLanguageAlternatives.count == 1,
+               let only = currentLanguageAlternatives.first,
+               only.language.caseInsensitiveCompare("x-default") == .orderedSame {
+                builtValue = .langAlternative(only.value)
+            } else {
+                builtValue = .languageAlternative(currentLanguageAlternatives)
+            }
             if let frame = frameStack.last, frame.triggeringElement == "Alt" {
                 ascend(value: builtValue)
-            } else if let first = currentArrayItems.first,
-                      !currentArrayNamespace.isEmpty, !currentArrayProperty.isEmpty {
-                properties["\(currentArrayNamespace)\(currentArrayProperty)"] = .langAlternative(first)
+            } else if !currentArrayNamespace.isEmpty, !currentArrayProperty.isEmpty {
+                properties["\(currentArrayNamespace)\(currentArrayProperty)"] = builtValue
                 inAlt = false
                 currentArrayItems = []
+                currentLanguageAlternatives = []
             } else {
                 inAlt = false
                 currentArrayItems = []
+                currentLanguageAlternatives = []
             }
         } else if inDescription && !inBag && !inSeq && !inAlt {
             inPendingProperty = false
@@ -648,6 +675,8 @@ private final class XMPXMLParser: PureXMLEvents {
             savedCurrentStructureFields: currentStructureFields,
             savedCurrentStructuredArrayItems: currentStructuredArrayItems,
             savedCurrentArrayItems: currentArrayItems,
+            savedCurrentLanguageAlternatives: currentLanguageAlternatives,
+            savedCurrentAlternativeLanguage: currentAlternativeLanguage,
             savedCurrentArrayProperty: currentArrayProperty,
             savedCurrentArrayNamespace: currentArrayNamespace,
             savedInBag: inBag,
@@ -675,6 +704,8 @@ private final class XMPXMLParser: PureXMLEvents {
         currentStructureFields = [:]
         currentStructuredArrayItems = []
         currentArrayItems = []
+        currentLanguageAlternatives = []
+        currentAlternativeLanguage = "x-default"
         currentArrayProperty = ""
         currentArrayNamespace = ""
         propertyStructureFields = [:]
@@ -713,6 +744,8 @@ private final class XMPXMLParser: PureXMLEvents {
         currentStructureFields = frame.savedCurrentStructureFields
         currentStructuredArrayItems = frame.savedCurrentStructuredArrayItems
         currentArrayItems = frame.savedCurrentArrayItems
+        currentLanguageAlternatives = frame.savedCurrentLanguageAlternatives
+        currentAlternativeLanguage = frame.savedCurrentAlternativeLanguage
         currentArrayProperty = frame.savedCurrentArrayProperty
         currentArrayNamespace = frame.savedCurrentArrayNamespace
         inBag = frame.savedInBag

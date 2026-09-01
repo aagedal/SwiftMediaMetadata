@@ -33,6 +33,22 @@ final class FormatDetectorTests: XCTestCase {
         XCTAssertEqual(FormatDetector.detect(tiff), .tiff)
     }
 
+    func testSonyAuthoredRenderedTIFFRemainsTIFF() {
+        let tiff = TestFixtures.tiffWithExif(make: "SONY", model: "ILCE-7RM5")
+        XCTAssertEqual(FormatDetector.detect(tiff), .tiff)
+    }
+
+    func testARWExtensionDisambiguatesAmbiguousTIFFBytes() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("format-detector-\(UUID().uuidString)")
+            .appendingPathExtension("arw")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try TestFixtures.tiffWithExif(make: "SONY", model: "ILCE-7RM5").write(to: url)
+
+        let metadata = try ImageMetadata.read(from: url)
+        XCTAssertEqual(metadata.format, .raw(.arw))
+    }
+
     func testDetectCR2() {
         let cr2 = TestFixtures.minimalCR2()
         XCTAssertEqual(FormatDetector.detect(cr2), .raw(.cr2))

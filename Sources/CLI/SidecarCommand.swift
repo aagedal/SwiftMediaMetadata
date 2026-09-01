@@ -46,6 +46,8 @@ struct SidecarRead: ParsableCommand {
             case .simple(let s): display = s
             case .array(let items): display = items.joined(separator: "; ")
             case .langAlternative(let s): display = s
+            case .languageAlternative(let items):
+                display = items.map { "\($0.language)=\($0.value)" }.joined(separator: "; ")
             case .structure(let fields):
                 display = XMPData.flatten(fields).values.sorted().joined(separator: "; ")
             case .structuredArray(let items):

@@ -10,6 +10,26 @@ the CLI; the library target follows the same numbering.
 
 ### Added
 
+- `XMPValue.languageAlternative` and `XMPLanguageAlternative` retain every
+  ordered `rdf:Alt` item, its exact `xml:lang` tag, duplicate languages, and
+  empty values. The reader, writer, exporter, sidecar display, and embedded XMP
+  paths round-trip the lossless representation; the existing scalar
+  `langAlternative` case remains the carrier for one `x-default` value. Clients
+  with an exhaustive switch over `XMPValue` must handle the new case.
+- `IPTCXMPSynchronizationOptions` and synchronization reports provide explicit
+  merge, replace, clear, title, and date-precision policies for standards-aware
+  IPTC-IIM ↔ XMP synchronization. The existing legacy synchronization methods
+  remain available unchanged.
+- `PhotoMetadata` provides an XMP-preferred, IIM/Exif-fallback projection that
+  retains every carrier candidate and reports disagreements. Canonical edits
+  can be applied with `PhotoMetadataMutation` without discarding the raw XMP
+  graph.
+- `XMPStructurePatch` and structured-array patching let callers update selected
+  XMP members while retaining unknown sibling fields. The typed IPTC Extension
+  and PLUS setters now use the same lossless merge behavior.
+- `ImageMetadata.WriteOptions.FileCreationDatePolicy` preserves a destination's
+  creation date by default and can explicitly update or assign it independently
+  of the modification-date policy.
 - `MetadataWriteResult<Output>` provides one source-compatible result contract
   for image, video, audio, XMP sidecar, and single-file batch writes. The result
   carries either serialized `Data` or the committed destination `URL` together
@@ -23,6 +43,21 @@ the CLI; the library target follows the same numbering.
 - The image API implementation is split into focused reading, writing, editing,
   extraction, sidecar, location, and format extensions. The public API remains
   source compatible.
+- `plus:ImageSupplier` structured arrays serialize as the standard-required
+  `rdf:Seq` rather than `rdf:Bag`.
+- Ambiguous TIFF byte signatures remain TIFF regardless of camera Make. A
+  proprietary TIFF-based RAW is classified from a known RAW filename extension
+  when reading from a URL, preventing rendered Sony/Olympus/Pentax TIFFs from
+  being incorrectly blocked by the RAW write guard.
+
+### Fixed
+
+- Atomic image, video, audio, and sidecar writes explicitly restore the
+  destination's prior filesystem visibility. This prevents iCloud Drive and
+  similar providers from carrying a dot-prefixed staging file's hidden flag
+  onto the installed file.
+- Atomic and direct writes restore the selected file creation date after the
+  filesystem transaction.
 
 ## [2.0.0] — 2026-09-01
 

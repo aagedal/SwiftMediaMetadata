@@ -239,9 +239,8 @@ for warning in written.warnings {
 `writeResult(to:options:)`; `XMPSidecar` exposes the equivalent static methods.
 The earlier `writeToData()` and `write(to:)` methods remain supported.
 
-Filesystem modification dates update by default. Preserve the destination's
-existing date for an in-place metadata edit, or assign the date of a separate
-source file when producing a new destination:
+Filesystem modification dates update by default, while creation dates are
+preserved by default. Either timestamp can be assigned independently:
 
 ```swift
 // In-place edit
@@ -254,7 +253,8 @@ try metadata.write(to: imageURL, options: preserve)
 let values = try sourceURL.resourceValues(forKeys: [.contentModificationDateKey])
 if let sourceDate = values.contentModificationDate {
     let copyDate = ImageMetadata.WriteOptions(
-        fileModificationDate: .set(sourceDate)
+        fileModificationDate: .set(sourceDate),
+        fileCreationDate: .set(sourceDate)
     )
     try metadata.write(to: outputURL, options: copyDate)
 }
@@ -274,19 +274,71 @@ metadata.syncIPTCToXMP()
 try metadata.writeSidecar(for: rawFileURL) // creates IMG_001.xmp
 
 // Read XMP sidecar
-let xmp = try readXMPSidecar(for: rawFileURL)
+var xmp = try readXMPSidecar(for: rawFileURL)
 print(xmp.headline)
+```
+
+Localized `rdf:Alt` values retain their original order, language tags,
+duplicates, and empty entries:
+
+```swift
+let titles = xmp.languageAlternativeValue(
+    namespace: XMPNamespace.dc,
+    property: "title"
+)
+
+xmp.setValue(
+    .languageAlternative([
+        XMPLanguageAlternative(language: "x-default", value: "Default title"),
+        XMPLanguageAlternative(language: "nb-NO", value: "Norsk tittel"),
+    ]),
+    namespace: XMPNamespace.dc,
+    property: "title"
+)
 ```
 
 ### IPTC / XMP Sync
 
 ```swift
-// Copy IPTC values into XMP
+// Compatibility behavior: copy the legacy mappings directly
 metadata.syncIPTCToXMP()
 
 // Or the other way around
 metadata.syncXMPToIPTC()
+
+// Standards-aware merge: preserve localized dc:title and full-precision dates,
+// carry explicit clear intent, and inspect pre-existing carrier disagreements.
+let report = metadata.synchronizeIPTCToXMP(options: .init(
+    explicitlyClearedTags: [.headline]
+))
+print(report.conflicts)
 ```
+
+Use `IPTCXMPSynchronizationOptions.replace` when missing source values should
+remove mapped destination values. The standards-aware API preserves `dc:title`
+instead of treating it as IIM Object Name unless `titlePolicy` is explicitly
+set to `.mirrorObjectName`.
+
+For a carrier-independent view, `photoMetadata` prefers XMP, falls back to
+IPTC-IIM and Exif, and retains all candidates so conflicts remain visible:
+
+```swift
+let photo = metadata.photoMetadata
+print(photo.string(.headline) ?? "")
+print(photo[.headline]?.source as Any)
+print(photo.conflicts.keys)
+
+let mutation = PhotoMetadataMutation(
+    values: [.keywords: .strings(["news", "portrait"])],
+    clearedFields: [.credit]
+)
+let mutationReport = try metadata.applyPhotoMetadataMutation(mutation)
+print(mutationReport.unappliedFields)
+```
+
+Structured XMP setters retain unknown sibling fields. For app-specific
+structures, use `patchStructure` or `patchStructuredArrayItem` with an
+`XMPStructurePatch` to replace and remove only named members.
 
 ### Video Metadata
 

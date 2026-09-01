@@ -181,6 +181,10 @@ extension ImageMetadata {
                     case .simple(let s): return s
                     case .array(let arr): return arr.joined(separator: "; ")
                     case .langAlternative(let s): return s
+                    case .languageAlternative(let items):
+                        return items.first(where: {
+                            $0.language.caseInsensitiveCompare("x-default") == .orderedSame
+                        })?.value ?? items.first?.value ?? ""
                     case .structure(let fields):
                         return XMPData.flatten(fields).values.sorted().joined(separator: "; ")
                     case .structuredArray(let items):

@@ -18,6 +18,17 @@ extension ImageMetadata {
         var format = FormatDetector.detect(data)
             ?? FormatDetector.detectFromExtension(url.pathExtension)
 
+        // A standards-compliant rendered TIFF may retain camera Make/Model and
+        // must remain TIFF. Conversely, proprietary RAW formats such as ARW and
+        // NEF share TIFF's header and often have no unambiguous container marker.
+        // Only when the bytes are otherwise plain TIFF do we use a TIFF-based RAW
+        // extension as the disambiguating signal.
+        if format == .tiff,
+           case .raw(let raw)? = FormatDetector.detectFromExtension(url.pathExtension),
+           Self.isAmbiguousTIFFBasedRAW(raw) {
+            format = .raw(raw)
+        }
+
         // GPR is DNG-structured, so content detection may report generic DNG. The
         // .gpr extension disambiguates it (content detection already upgrades files
         // with a GoPro Make on its own).
@@ -30,6 +41,15 @@ extension ImageMetadata {
         }
 
         return try read(from: data, format: format)
+    }
+
+    private static func isAmbiguousTIFFBasedRAW(_ format: ImageFormat.RawFormat) -> Bool {
+        switch format {
+        case .dng, .gpr, .cr2, .nef, .nrw, .arw, .orf, .pef, .srw, .raw, .threefr, .fff:
+            return true
+        case .cr3, .raf, .rw2, .iiq, .x3f, .mrw:
+            return false
+        }
     }
 
     /// Read all metadata from image data in memory.

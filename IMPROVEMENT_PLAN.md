@@ -14,6 +14,8 @@ changes still belong in `CHANGELOG.md`.
 - [x] 6. Add persistent fuzz and property testing for binary parsers/writers
 - [x] 7. Split oversized API files without breaking the public API
 - [x] 8. Prepare and publish the 2.0 release
+- [x] 9. Land the first standards-aware photo-metadata APIs for 2.1
+- [ ] 10. Complete the remaining 2.1 metadata workflow requests
 
 ## 1. Unified filesystem writes and modification dates
 
@@ -204,6 +206,8 @@ Status: Completed 2026-09-01
   source-compatible step; retain existing methods as compatibility wrappers.
 - [x] Cover the common result contract, warning propagation, sidecar writes,
   and single-file batch processing with focused tests.
+- [x] Reconcile Photo Agent's local fork: preserve ordered localized `rdf:Alt`
+  values and filesystem visibility across atomic commits.
 - [x] Run the full package, opt-in CLI, and iOS compile verification.
 
 Completion notes:
@@ -216,9 +220,16 @@ Completion notes:
   audio, and XMP writers. Existing write APIs delegate to the new contract.
 - `FileCommitter` owns only the filesystem transaction and receives bytes that
   have already been serialized.
-- Verified 1,655 package tests (48 skipped, 0 failures), all 50 opt-in CLI
-  tests (0 failures), the arm64 iOS 16 library build, and SwiftPM's exported-API
-  comparison against the 2.0.0 tag (no breaking changes).
+- Ported Photo Agent's localized-title carrier and atomic visibility fixes from
+  its source-preserving 1.9.10 fork, including packet, embedded JPEG, exporter,
+  visible-file, hidden-file, and new-destination regressions.
+- Verified 1,688 package tests (48 skipped, 0 failures), all 50 opt-in CLI
+  tests (0 failures), the arm64 iOS 16 library build, and 48 targeted Photo
+  Agent localized-title, embedded-container, and export-visibility tests.
+- SwiftPM's exported-API comparison against 2.0.0 reports the intentional new
+  `XMPValue.languageAlternative` enum case as one breaking change. The 2.1
+  changelog calls out the exhaustive-switch migration requirement; release
+  versioning remains open until the rest of the planned feature set lands.
 
 ## 8. Version 2.0 release
 
@@ -254,3 +265,47 @@ Completion notes:
 - Updated `aagedal/homebrew-tap` to the renamed repository, published archive,
   and matching checksum. A stable macOS 15 workflow installed the formula and
   passed its version and geocoding smoke tests.
+
+## 9. Standards-aware photo metadata APIs
+
+Status: Completed 2026-09-01; unreleased 2.1 work
+
+- [x] Preserve ordered and fully tagged `rdf:Alt` values without weakening the
+  scalar `x-default` convenience case.
+- [x] Write `plus:ImageSupplier` as `rdf:Seq`.
+- [x] Patch structures and structured-array items without dropping unknown
+  sibling members; use that behavior in typed IPTC Extension and PLUS setters.
+- [x] Preserve filesystem creation dates by default across atomic and direct
+  writes, independently of modification-date behavior.
+- [x] Stop using camera Make to classify rendered TIFFs as proprietary RAW;
+  use known RAW URL extensions to disambiguate TIFF-based RAW containers.
+- [x] Add policy-driven IPTC-IIM ↔ XMP synchronization with explicit merge,
+  replace, clear, title, date-precision, and conflict-reporting behavior.
+- [x] Add a typed, conflict-aware `PhotoMetadata` projection and canonical
+  mutation API while retaining the complete raw XMP graph.
+
+Completion notes:
+
+- The compatibility `syncIPTCToXMP()` and `syncXMPToIPTC()` entry points keep
+  their existing behavior. The new `synchronize…` entry points carry the safer
+  policy contract.
+- Photo Agent's 48 localized-title, embedded-container, and export-visibility
+  tests pass against its retained source-preserving fork.
+- Verified 1,688 package tests (48 skipped, 0 failures), all 50 opt-in CLI
+  tests, and the arm64 iOS 16 library build. Exported-API comparison against
+  2.0.0 reports only the intentional exhaustive-enum migration below.
+- This work remains unreleased while the rest of the requested 2.1 scope is
+  evaluated. No 2.1 tag should be created until that review is complete.
+
+## 10. Remaining 2.1 metadata workflow requests
+
+Status: Planned
+
+- [ ] Design a transactional sidecar update that reads the latest disk state,
+  applies a mutation, and commits atomically without a read/write race.
+- [ ] Add semantic comparison and capability reporting so applications can
+  distinguish representational differences from meaningful metadata conflicts.
+- [ ] Add typed XMP GPS accessors and mutations that preserve exact lexical
+  forms where round-trip fidelity matters.
+- [ ] Re-run the exported-API audit and decide release versioning for the new
+  exhaustive `XMPValue.languageAlternative` case before tagging.

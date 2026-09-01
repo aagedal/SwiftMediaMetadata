@@ -92,6 +92,13 @@ public struct XMPWriter: Sendable {
                 complexProps += "    <rdf:li xml:lang=\"x-default\">\(escapeXML(s))</rdf:li>\n"
                 complexProps += "   </rdf:Alt>\n  </\(prefix):\(localName)>"
 
+            case .languageAlternative(let items):
+                complexProps += "\n  <\(prefix):\(localName)>\n   <rdf:Alt>\n"
+                for item in items {
+                    complexProps += "    <rdf:li xml:lang=\"\(escapeXML(item.language))\">\(escapeXML(item.value))</rdf:li>\n"
+                }
+                complexProps += "   </rdf:Alt>\n  </\(prefix):\(localName)>"
+
             case .structure(let fields):
                 complexProps += "\n  <\(prefix):\(localName)>"
                 complexProps += emitStructureBody(fields, indent: "   ", context: context)
@@ -215,6 +222,7 @@ public struct XMPWriter: Sendable {
             "TransferFunction", "WhitePoint", "YCbCrCoefficients", "YCbCrSubSampling")
         add(XMPNamespace.exif, "ComponentsConfiguration", "ISOSpeedRatings",
             "SubjectArea", "SubjectLocation")
+        add(XMPNamespace.plus, "ImageSupplier")
         add(XMPNamespace.crs, "ToneCurve", "ToneCurveRed", "ToneCurveGreen", "ToneCurveBlue",
             "ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue",
             "GradientBasedCorrections", "PaintBasedCorrections", "CircularGradientBasedCorrections",
@@ -302,7 +310,7 @@ public struct XMPWriter: Sendable {
                     collectNamespacesRecursive(child, known: &known, unknown: &unknown)
                 }
             }
-        case .simple, .array, .langAlternative:
+        case .simple, .array, .langAlternative, .languageAlternative:
             return
         }
     }
@@ -357,6 +365,12 @@ public struct XMPWriter: Sendable {
         case .langAlternative(let s):
             xml += "\n\(indent) <rdf:Alt>"
             xml += "\n\(indent)  <rdf:li xml:lang=\"x-default\">\(escapeXML(s))</rdf:li>"
+            xml += "\n\(indent) </rdf:Alt>"
+        case .languageAlternative(let items):
+            xml += "\n\(indent) <rdf:Alt>"
+            for item in items {
+                xml += "\n\(indent)  <rdf:li xml:lang=\"\(escapeXML(item.language))\">\(escapeXML(item.value))</rdf:li>"
+            }
             xml += "\n\(indent) </rdf:Alt>"
         case .structure(let fields):
             xml += emitStructureBody(fields, indent: indent + " ", context: context)
