@@ -16,6 +16,7 @@ changes still belong in `CHANGELOG.md`.
 - [x] 8. Prepare and publish the 2.0 release
 - [x] 9. Land the first standards-aware photo-metadata APIs for 2.1
 - [ ] 10. Complete the remaining 2.1 metadata workflow requests
+- [ ] 11. Validate downstream adoption and prepare the next release
 
 ## 1. Unified filesystem writes and modification dates
 
@@ -301,11 +302,72 @@ Completion notes:
 
 Status: Planned
 
-- [ ] Design a transactional sidecar update that reads the latest disk state,
-  applies a mutation, and commits atomically without a read/write race.
-- [ ] Add semantic comparison and capability reporting so applications can
-  distinguish representational differences from meaningful metadata conflicts.
-- [ ] Add typed XMP GPS accessors and mutations that preserve exact lexical
-  forms where round-trip fidelity matters.
-- [ ] Re-run the exported-API audit and decide release versioning for the new
-  exhaustive `XMPValue.languageAlternative` case before tagging.
+### Transactional sidecar mutation
+
+- [ ] Define a public revision token and stale-revision error that do not rely
+  on modification time alone.
+- [ ] Add an `XMPSidecar.update(...)` operation that reads the latest disk
+  state, preserves unknown XMP, applies a caller mutation, validates the
+  serialized packet, and commits through `FileCommitter`.
+- [ ] Support bounded retries when another writer wins the revision race;
+  never silently overwrite a newer sidecar after the caller's base revision.
+- [ ] Read back the installed sidecar and return its new revision and warnings.
+- [ ] Forward write options so visibility, creation date, modification date,
+  backups, and atomic replacement follow the shared filesystem contract.
+- [ ] Cover two-writer conflicts, retry success/exhaustion, mutation failure,
+  invalid output, unknown-field preservation, and interrupted-write cleanup.
+
+### Semantic comparison and carrier capabilities
+
+- [ ] Expose per-format read, write, and preservation capabilities for Exif,
+  IPTC-IIM, XMP, Camera Raw, ICC, and C2PA metadata domains.
+- [ ] Represent partial support explicitly: readable, directly writable,
+  sidecar-only, preserved opaquely, intentionally stripped, or unsupported.
+- [ ] Define canonical semantic identities for standardized Exif, IPTC-IIM,
+  XMP, Camera Raw, and C2PA values without treating XML ordering, namespace
+  prefixes, equivalent GPS/date spellings, or container layout as conflicts.
+- [ ] Produce a round-trip preservation report containing added, removed,
+  changed, unrepresentable, and opaque-preserved values. The package reports
+  facts; applications retain the policy decision about acceptable differences.
+- [ ] Add cross-container fixtures and write/read comparisons for every
+  advertised writable format, including sidecar-only proprietary RAW.
+
+### Typed XMP GPS conversion
+
+- [ ] Add decimal-degree accessors for XMP latitude, longitude, altitude, and
+  direction/reference fields without discarding the original lexical values.
+- [ ] Parse decimal, directional decimal, degrees/minutes/seconds, and
+  degrees/decimal-minutes forms, including hemisphere suffixes and references.
+- [ ] Emit spec-compliant XMP GPS strings from typed values with documented
+  precision and stable round trips.
+- [ ] Validate coordinate ranges and reject contradictory sign/hemisphere
+  inputs instead of silently changing meaning.
+- [ ] Reconcile typed XMP GPS with Exif GPS in the conflict-aware projection
+  while retaining both carrier candidates when they disagree.
+- [ ] Cover poles, antimeridian, zero coordinates, all hemispheres, malformed
+  input, precision retention, and Exif/XMP disagreement.
+
+## 11. Downstream adoption and next-release readiness
+
+Status: Planned; do not tag while additional 2.1 requests are pending
+
+- [ ] Integrate the new synchronization, `PhotoMetadata`, structured-patch,
+  creation-date, and TIFF-detection APIs into Photo Agent and identify which
+  package workarounds can be removed safely.
+- [ ] Run Photo Agent's localized-title, embedded-container,
+  export-visibility, sidecar-concurrency, and metadata-preservation suites
+  against the package candidate rather than only its 1.9.10-based fork.
+- [ ] Confirm Camera Raw and app-private metadata remain owned by Photo Agent
+  where the package intentionally provides only lossless transport.
+- [ ] Complete API documentation and migration examples for synchronization
+  policy, projection conflicts, structured patches, timestamp behavior, and
+  any newly added sidecar/comparison/GPS APIs.
+- [ ] Re-run the exported-API audit against 2.0.0 and decide release versioning
+  for the exhaustive `XMPValue.languageAlternative` case before tagging.
+- [ ] Run the full package, CLI, iOS, extended parser-hardening, downstream app,
+  archive, checksum, and clean-consumer verification gates.
+- [ ] Update the changelog date, CLI version, release checklist, Homebrew
+  formula, and migration notes only after the final feature set and version are
+  approved.
+- [ ] Create and publish a tag only after every applicable item above is
+  complete; until then, keep the work marked unreleased.
