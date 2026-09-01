@@ -41,11 +41,13 @@ public final class ReverseGeocoder: @unchecked Sendable {
     /// Shared singleton instance. The k-d tree is built lazily on first use.
     public static let shared = ReverseGeocoder()
 
+    private let database: GeoLocationDatabase.Storage
     private let tree: KDTree
 
     /// Initialize with the built-in GeoNames database.
     public init() {
-        let db = GeoLocationDatabase.self
+        let db = GeoLocationDatabase.shared
+        self.database = db
         var points: [KDTree.ECEF] = []
         points.reserveCapacity(db.cityCount)
 
@@ -77,8 +79,8 @@ public final class ReverseGeocoder: @unchecked Sendable {
         let cityIndex = Int(result.point.index)
         let dist = haversineDistance(
             lat1: latitude, lon1: longitude,
-            lat2: Double(GeoLocationDatabase.latitudes[cityIndex]),
-            lon2: Double(GeoLocationDatabase.longitudes[cityIndex])
+            lat2: Double(database.latitudes[cityIndex]),
+            lon2: Double(database.longitudes[cityIndex])
         )
 
         guard dist <= maxDistance else { return nil }
@@ -104,8 +106,8 @@ public final class ReverseGeocoder: @unchecked Sendable {
             let cityIndex = Int(result.point.index)
             let dist = haversineDistance(
                 lat1: latitude, lon1: longitude,
-                lat2: Double(GeoLocationDatabase.latitudes[cityIndex]),
-                lon2: Double(GeoLocationDatabase.longitudes[cityIndex])
+                lat2: Double(database.latitudes[cityIndex]),
+                lon2: Double(database.longitudes[cityIndex])
             )
             guard dist <= maxDistance else { return nil }
             return buildGeoLocation(index: cityIndex, distance: dist)
@@ -115,7 +117,7 @@ public final class ReverseGeocoder: @unchecked Sendable {
     // MARK: - Private
 
     private func buildGeoLocation(index: Int, distance: Double) -> GeoLocation {
-        let db = GeoLocationDatabase.self
+        let db = database
         let regionIdx = Int(db.regionIndices[index])
         let countryIdx = Int(db.countryIndices[index])
         let tzIdx = Int(db.timezoneIndices[index])

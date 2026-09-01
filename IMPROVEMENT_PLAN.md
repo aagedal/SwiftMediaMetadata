@@ -9,8 +9,8 @@ changes still belong in `CHANGELOG.md`.
 - [x] 1. Unify filesystem writes and support modification-date preservation
 - [x] 2. Rename the package and library module for the 2.0 release
 - [x] 3. Add continuous integration for supported products and platforms
-- [ ] 4. Rebaseline roadmap, changelog, and installation documentation
-- [ ] 5. Reduce the compile-time cost of the generated geolocation database
+- [x] 4. Rebaseline roadmap, changelog, and installation documentation
+- [x] 5. Reduce the compile-time cost of the generated geolocation database
 - [ ] 6. Add persistent fuzz and property testing for binary parsers/writers
 - [ ] 7. Split oversized API files without breaking the public API
 
@@ -108,15 +108,15 @@ Completion notes:
 
 ## 4. Roadmap and release documentation
 
-Status: In progress
+Status: Completed 2026-09-01
 
-- [ ] Re-run the ExifTool/ffprobe comparison corpus before replacing the stale
+- [x] Re-run the ExifTool/ffprobe comparison corpus before replacing the stale
   parity snapshot.
 - [x] Add missing changelog entries for tags 1.9.9 and 1.9.10.
 - [x] Audit package and CLI installation instructions against release artifacts.
 - [x] Ensure supported-format tables and known limitations agree with the code.
 
-Progress notes:
+Completion notes:
 
 - The latest published GitHub release remains 1.6.0, the tap formula points to
   a retired Codeberg 1.8.1 artifact, and no 2.0.0 tag exists yet. README install
@@ -125,17 +125,43 @@ Progress notes:
 - Updated the supported-format table for safe versus unsafe RAW writes, writable
   GIF/PDF/MP4/SVG metadata, and the previously omitted BMP, ARRIRAW, and IVF
   readers.
-- Located both comparison corpora under the current account. Rebaselining is
-  still pending because the `/tmp` harness is gone and ExifTool is not installed.
+- Added `Scripts/parity_report.py` so the comparison contract, tool invocations,
+  discovery scope, and JSON details are reproducible rather than living in a
+  temporary script.
+- Re-ran the top-level corpora with ExifTool and ffprobe: all 18 still images
+  matched the 32-field image contract; 4 of 35 video/audio files had no
+  differences, with 128 field-level differences remaining across the rest.
+- Replaced the stale parity snapshot and grouped the remaining video work by
+  field family in `PARITY_PLAN.md`.
 
 ## 5. Geolocation database build cost
 
-Status: Planned
+Status: Completed 2026-09-01
 
-- Benchmark clean build time and shipped size for the generated Swift literal.
-- Prototype a compact bundled resource with equivalent offline behavior.
-- Adopt it only if lookup performance remains acceptable and packaging works on
+- [x] Benchmark clean build time and shipped size for the generated Swift literal.
+- [x] Prototype a compact bundled resource with equivalent offline behavior.
+- [x] Adopt it only if lookup performance remains acceptable and packaging works on
   every supported platform.
+
+Completion notes:
+
+- Replaced 2.5 MB / 54,156 lines of generated array literals with a versioned,
+  bounds-checked 1.1 MB binary resource and a 229-line lazy decoder.
+- Reduced the geolocation debug object from 12.0 MB to 102 KB. The debug CLI
+  executable fell from 18.3 MB to 11.6 MB, plus the 1.1 MB resource bundle.
+- Reduced a comparable cold scratch build of the library target from 177.35
+  seconds to 37.41 seconds (79%); the SwiftPM-reported build phase fell from
+  176.18 to 35.50 seconds.
+- Kept the 33,536-city in-memory representation and k-d tree unchanged after
+  loading. The first lookup, including decode and tree construction, completed
+  in 0.414 seconds in the geolocation test run; subsequent tested lookups were
+  below XCTest's displayed millisecond precision.
+- Updated `Scripts/build_geolocation.swift` to regenerate the binary format and
+  added database-integrity coverage alongside the existing city, distance,
+  timezone, localization, and GPS-fill tests.
+- Verified all 1,593 library tests (20 skipped, 0 failures), an arm64 iOS 16
+  library build, and the packaged macOS release CLI. The release smoke test
+  loaded the adjacent resource bundle and reverse-geocoded Oslo successfully.
 
 ## 6. Parser and writer hardening
 

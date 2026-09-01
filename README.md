@@ -99,9 +99,11 @@ The supported release target. Builds with the system Swift toolchain
 ./Scripts/build-release.sh
 ```
 
-Output lands at `dist/swift-exif-macos-arm64` — a stripped, single-file
-CLI binary. For a plain development build, `swift build -c release`
-produces the same binary under `.build/release/swift-exif`.
+Output lands at `dist/swift-exif-macos-arm64.tar.gz`. The archive contains the
+stripped CLI and its adjacent SwiftPM resource bundle, which supplies the
+offline geolocation database. Keep both together when installing manually.
+For a plain development build, `swift build -c release` places the executable
+and resource bundle together under `.build/release`.
 
 ### Linux (static musl, unsupported)
 
@@ -139,6 +141,10 @@ the Static Linux SDK).
      -Xlinker "$SDK_ROOT/x86_64/usr/lib/libz.a" \
      --disable-sandbox
    ```
+
+   Keep the generated `SwiftMediaMetadata_SwiftMediaMetadata.bundle` directory
+   next to the executable when copying it out of `.build`; it contains the
+   offline geolocation database.
 
    `-Onone` is mandatory: `-O` with whole-module-optimization stalls the
    swift-6.3.1 musl optimizer indefinitely (frontend pinned at ~100% CPU

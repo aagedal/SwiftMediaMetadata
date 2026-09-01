@@ -4,6 +4,18 @@ import XCTest
 final class ReverseGeocoderTests: XCTestCase {
     let geocoder = ReverseGeocoder()
 
+    func testBundledDatabaseIntegrity() {
+        let database = GeoLocationDatabase.shared
+        XCTAssertEqual(database.cityCount, 33_536)
+        XCTAssertEqual(database.latitudes.count, database.cityCount)
+        XCTAssertEqual(database.longitudes.count, database.cityCount)
+        XCTAssertEqual(database.populations.count, database.cityCount)
+        XCTAssertEqual(database.regionIndices.count, database.cityCount)
+        XCTAssertEqual(database.countryIndices.count, database.cityCount)
+        XCTAssertEqual(database.timezoneIndices.count, database.cityCount)
+        XCTAssertEqual(database.countryCodeIndices.count, database.cityCount)
+    }
+
     // MARK: - Known Cities
 
     func testOslo() {

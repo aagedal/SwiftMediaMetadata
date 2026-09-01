@@ -6,28 +6,61 @@ against ExifTool (stills) and ffprobe (video) on the corpora at:
 - Stills: `/Users/truls.aagedal/Pictures/TestImages/`
 - Video:  `/Users/truls.aagedal/Movies/TestVideo/`
 
-Generated 2026-05-01. Audited 2026-09-01: the corpora are present at the
-updated paths above, but the temporary comparison harness and ExifTool install
-are not. The snapshot below must remain historical until the harness is
-recreated and both corpora are rerun; `ffprobe` is available.
+Generated 2026-05-01. Rebaselined 2026-09-01 with the reproducible comparison
+contract in `Scripts/parity_report.py`. The default scan covers files directly
+in each corpus root, matching the scope of the original audit. Pass
+`--recursive` deliberately to include the much larger nested camera-original
+archive.
 
 ## Status snapshot
 
-After the 2026-05-01 round of fixes (XMP-dc capitalization, LensInfo
-print conversion, body/lens serial numbers, JPEG SOF dimensions,
-PixelXDimension fallback for File:ImageWidth/Height):
+The current contract compares 32 supported still-image fields and the common
+container/stream fields that SwiftMediaMetadata claims to expose. It excludes
+ExifTool-only maker notes and ffprobe decoder internals. A difference is a
+triage item, not automatically a parser bug: some are intentional naming
+choices or values derived from different container evidence.
 
-| Surface | Files | Files matching cleanly | Remaining issues |
+| Surface | Files | Files matching cleanly | Field-level differences |
 |---|---|---|---|
-| Stills | 21 | 16 | 18 (most cosmetic) |
-| Video  | 27 |  5 | 107 |
+| Stills | 18 | 18 | 0 |
+| Video/audio | 35 | 4 | 128 |
 
-Phases below are ordered by impact ÷ effort. Within a phase, items are
-roughly independent — each can land as its own PR.
+Snapshot tools: `swift-exif 2.0.0`, ExifTool 13.55, and ffprobe 9.0.1.
+
+The largest video difference families are:
+
+| Field family | Differences | Next action |
+|---|---:|---|
+| Stream/container duration | 37 | Separate rounding/timescale noise from incorrect track-duration selection |
+| Stream/container bit rate | 30 | Audit packet-size versus whole-file and declared-rate fallbacks by container |
+| Data-track timecode | 15 | Surface the decoded value on `tmcd` data streams as well as clip/video metadata |
+| Channel layout | 14 | Preserve Matroska `5.1(side)` rather than collapsing it to `5.1` |
+| Codec, disposition, and format conventions | 16 | Prioritize TS AAC, APAC, PCM endianness, default flags, and audio long names |
+| Frame/profile/pixel-format details | 16 | Triage cadence, full-range JPEG-family YUV, and intentional HEVC `Rext` naming differences |
+
+Reproduce the snapshot after building the CLI:
+
+```sh
+python3 Scripts/parity_report.py \
+  --images /Users/truls.aagedal/Pictures/TestImages \
+  --videos /Users/truls.aagedal/Movies/TestVideo \
+  --swift-exif .build/debug/swift-exif \
+  --json-output /tmp/swift-media-metadata-parity.json
+```
+
+The detailed JSON records every compared field, difference kind, and tool
+value, making later snapshots reviewable without committing private corpus
+paths or metadata.
+
+## Historical 2026-05-01 implementation phases
+
+The phases below describe the bugs found in the original audit. They have
+landed and remain here as diagnosis history; the current work queue is the
+rebaseline table above.
 
 ---
 
-## Phase 1 — HEIC parity (4 bugs, all in one module)
+## Phase 1 — HEIC parity (completed)
 
 All four HEIC stills issues land together. Test file:
 `IMG_5543_upsideDownFaceThumbnailSource_1.heic`.
@@ -80,7 +113,7 @@ All four HEIC stills issues land together. Test file:
 
 ---
 
-## Phase 2 — JXL dimensions (1 bug, contained)
+## Phase 2 — JXL dimensions (completed)
 
 ### 2.1 — JXL `File:ImageWidth/Height`
 - **Where**: `Sources/SwiftMediaMetadata/JPEGXL/JXLParser.swift:18–36`,
@@ -103,7 +136,7 @@ All four HEIC stills issues land together. Test file:
 
 ---
 
-## Phase 3 — Video parity
+## Phase 3 — Video parity (completed for the original findings)
 
 ### 3.1 — MOV stream order (ProRes RAW swap, more)
 - **Where**: `Sources/SwiftMediaMetadata/Video/MP4Parser.swift:423–510`
@@ -223,7 +256,7 @@ All four HEIC stills issues land together. Test file:
 
 ---
 
-## Suggested PR sequencing
+## Historical PR sequencing
 
 1. **PR 1**: Phase 1 — HEIC parity (~50–80 LOC). Cheapest, biggest
    immediate value.
@@ -235,8 +268,8 @@ All four HEIC stills issues land together. Test file:
 6. **PR 6**: Phase 3.4 — MKV diagnosis + fix (~30 LOC after triage).
 7. **Defer**: Phase 5 (BRAW).
 
-After PRs 1–3, all stills bugs are closed except BRAW. After PRs 4–6,
-all video bugs are closed except BRAW.
+This was the sequence used to close the original snapshot. The 2026-09-01
+rebaseline at the top of this document supersedes its completion claims.
 
 ---
 

@@ -28,6 +28,10 @@ the CLI; the library target follows the same numbering.
 - Image, video, audio, and XMP sidecar writes now use one internal filesystem
   transaction for atomic replacement, backups, temporary-file cleanup, and
   file attributes.
+- The 33,536-city offline geolocation database is now a versioned bundled
+  resource instead of 54,000 lines of generated Swift literals. Reverse
+  geocoding behavior is unchanged, while a measured clean library build is 79%
+  faster and the geolocation debug object shrinks from 12.0 MB to 102 KB.
 
 ## [1.9.10] — 2026-07-01
 

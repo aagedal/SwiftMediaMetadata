@@ -30,6 +30,7 @@ let package = Package(
             name: "SwiftMediaMetadata",
             dependencies: ["CZlib"],
             path: "Sources/SwiftMediaMetadata",
+            resources: [.copy("Resources/GeoLocationDatabase.bin")],
             linkerSettings: [
                 // `-lz` is enough on macOS (default sysroot search finds libz).
                 // For Linux-musl we pass the absolute libz.a path in the build
