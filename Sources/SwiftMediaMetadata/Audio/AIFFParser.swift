@@ -129,15 +129,10 @@ public struct AIFFParser: Sendable {
     private static func readExtendedFloat80(_ data: Data, at offset: Int) -> Double? {
         guard offset + 10 <= data.endIndex else { return nil }
         let exponentSign = (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
-        let mantissa: UInt64 =
-            (UInt64(data[offset + 2]) << 56) |
-            (UInt64(data[offset + 3]) << 48) |
-            (UInt64(data[offset + 4]) << 40) |
-            (UInt64(data[offset + 5]) << 32) |
-            (UInt64(data[offset + 6]) << 24) |
-            (UInt64(data[offset + 7]) << 16) |
-            (UInt64(data[offset + 8]) << 8) |
-            UInt64(data[offset + 9])
+        var mantissa: UInt64 = 0
+        for index in 2..<10 {
+            mantissa = (mantissa << 8) | UInt64(data[offset + index])
+        }
 
         let sign: Double = (exponentSign & 0x8000) != 0 ? -1.0 : 1.0
         let exponent = Int(exponentSign & 0x7FFF)

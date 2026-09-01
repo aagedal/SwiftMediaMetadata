@@ -134,14 +134,10 @@ public struct BinaryReader: Sendable {
             throw MetadataError.unexpectedEndOfData
         }
         let start = data.startIndex + offset
-        let value = UInt64(data[start]) << 56
-            | UInt64(data[start + 1]) << 48
-            | UInt64(data[start + 2]) << 40
-            | UInt64(data[start + 3]) << 32
-            | UInt64(data[start + 4]) << 24
-            | UInt64(data[start + 5]) << 16
-            | UInt64(data[start + 6]) << 8
-            | UInt64(data[start + 7])
+        var value: UInt64 = 0
+        for index in 0..<8 {
+            value = (value << 8) | UInt64(data[start + index])
+        }
         offset += 8
         return value
     }
@@ -151,14 +147,10 @@ public struct BinaryReader: Sendable {
             throw MetadataError.unexpectedEndOfData
         }
         let start = data.startIndex + offset
-        let value = UInt64(data[start])
-            | UInt64(data[start + 1]) << 8
-            | UInt64(data[start + 2]) << 16
-            | UInt64(data[start + 3]) << 24
-            | UInt64(data[start + 4]) << 32
-            | UInt64(data[start + 5]) << 40
-            | UInt64(data[start + 6]) << 48
-            | UInt64(data[start + 7]) << 56
+        var value: UInt64 = 0
+        for index in 0..<8 {
+            value |= UInt64(data[start + index]) << (index * 8)
+        }
         offset += 8
         return value
     }

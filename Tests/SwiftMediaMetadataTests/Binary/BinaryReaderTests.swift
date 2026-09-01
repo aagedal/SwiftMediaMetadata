@@ -61,6 +61,23 @@ final class BinaryReaderTests: XCTestCase {
         XCTAssertThrowsError(try reader.readUInt32BigEndian())
     }
 
+    // MARK: - Reading UInt64
+
+    func testReadUInt64BigEndian() throws {
+        var reader = BinaryReader(data: Data([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]))
+        XCTAssertEqual(try reader.readUInt64BigEndian(), 0x0123456789ABCDEF)
+    }
+
+    func testReadUInt64LittleEndian() throws {
+        var reader = BinaryReader(data: Data([0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01]))
+        XCTAssertEqual(try reader.readUInt64LittleEndian(), 0x0123456789ABCDEF)
+    }
+
+    func testReadUInt64PastEnd() {
+        var reader = BinaryReader(data: Data(repeating: 0, count: 7))
+        XCTAssertThrowsError(try reader.readUInt64BigEndian())
+    }
+
     // MARK: - Reading Bytes
 
     func testReadBytes() throws {
