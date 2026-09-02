@@ -6,11 +6,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
-## [2.1.0] — Unreleased
+## [3.0.0] — Unreleased
 
 ### Added
 
-- `XMPValue.languageAlternative` and `XMPLanguageAlternative` retain every
+- **Breaking:** `XMPValue.languageAlternative` and `XMPLanguageAlternative`
+  retain every
   ordered `rdf:Alt` item, its exact `xml:lang` tag, duplicate languages, and
   empty values. The reader, writer, exporter, sidecar display, and embedded XMP
   paths round-trip the lossless representation; the existing scalar
@@ -1601,7 +1602,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
-[2.1.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/2.0.0...HEAD
+[3.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/2.0.0...HEAD
 [2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...2.0.0
 [1.9.10]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.9...1.9.10
 [1.9.9]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.8...1.9.9

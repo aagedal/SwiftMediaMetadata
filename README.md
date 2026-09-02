@@ -100,6 +100,10 @@ Version 2.0 renames the package, library product, and importable module from
 above, then replace `import SwiftExif` with `import SwiftMediaMetadata`. The
 installed CLI command remains `swift-exif`.
 
+For the unreleased APIs currently on `main`, including exhaustive-enum changes,
+synchronization policies, typed projections, transactional sidecars, semantic
+preservation, and GPS conversion, see the [migration guide](MIGRATION.md).
+
 ## Building from source
 
 ### macOS (arm64)

@@ -383,20 +383,20 @@ Completion notes:
 
 ## 11. Downstream adoption and next-release readiness
 
-Status: Planned; do not tag while additional 2.1 requests are pending
+Status: In progress; do not tag while downstream validation is pending
 
 - [ ] Integrate the new synchronization, `PhotoMetadata`, structured-patch,
   creation-date, and TIFF-detection APIs into Photo Agent and identify which
   package workarounds can be removed safely.
-- [ ] Run Photo Agent's localized-title, embedded-container,
+- [x] Run Photo Agent's localized-title, embedded-container,
   export-visibility, sidecar-concurrency, and metadata-preservation suites
   against the package candidate rather than only its 1.9.10-based fork.
-- [ ] Confirm Camera Raw and app-private metadata remain owned by Photo Agent
+- [x] Confirm Camera Raw and app-private metadata remain owned by Photo Agent
   where the package intentionally provides only lossless transport.
-- [ ] Complete API documentation and migration examples for synchronization
+- [x] Complete API documentation and migration examples for synchronization
   policy, projection conflicts, structured patches, timestamp behavior, and
   any newly added sidecar/comparison/GPS APIs.
-- [ ] Re-run the exported-API audit against 2.0.0 and decide release versioning
+- [x] Re-run the exported-API audit against 2.0.0 and decide release versioning
   for the exhaustive `XMPValue.languageAlternative` and
   `PhotoMetadataValue.number` cases before tagging.
 - [ ] Run the full package, CLI, iOS, extended parser-hardening, downstream app,
@@ -406,3 +406,38 @@ Status: Planned; do not tag while additional 2.1 requests are pending
   approved.
 - [ ] Create and publish a tag only after every applicable item above is
   complete; until then, keep the work marked unreleased.
+
+Progress notes:
+
+- Added `MIGRATION.md` with 1.x-to-2.0 instructions and adoption-oriented examples
+  for every new metadata workflow API. It also records downstream ownership and
+  validation boundaries so applications do not rebuild XMP from the canonical
+  projection or mistake lossless Camera Raw transport for package ownership.
+- Audited Photo Agent's retained 1.9.10 fork integration without modifying its
+  dirty worktree. Candidate removals are the manual `dc:title` save/restore
+  synchronizer, eight creation-date capture/restore blocks, the rendered-TIFF
+  `allowUnsafeRawEmbed` escape hatch, and the private byte-comparison sidecar
+  retry loop. Each remains pending until it is applied in Photo Agent's real
+  worktree and the focused suites are rerun there.
+- Re-ran `swift-api-digester` against freshly built 2.0.0 and current modules
+  with Swift 6.3.3. The only reported source break is the added
+  `XMPValue.languageAlternative` case. `PhotoMetadataValue.number` is part of a
+  type that did not exist in 2.0.0, so it adds no separate baseline break. The
+  next release is therefore planned as 3.0.0; the CLI version, release date,
+  checklist, artifacts, formula, and tag remain unchanged until the downstream
+  and full verification gates pass.
+- Verified the current package suite after the documentation and versioning
+  updates: 1,712 tests ran, 48 optional tests were skipped, and no tests failed.
+- Built a disposable copy of Photo Agent's committed `main` state against this
+  package candidate after applying only the required module/product rename.
+  The first run passed 85 of 86 focused adoption tests; the remaining test
+  expected a Sony-authored `.tiff` to be rejected as proprietary RAW, which is
+  precisely the obsolete behavior replaced by URL-extension classification.
+  Updating that expectation in the disposable copy produced 86 of 86 passing
+  localized-title, embedded-container, export-visibility, sidecar-concurrency,
+  and metadata-preservation tests.
+- Confirmed Photo Agent still owns its typed Camera Raw settings, angled-crop
+  conversion, masks, brush payloads, and private XMP namespace while the
+  package carries their raw graph losslessly. All 14 focused Camera Raw and
+  private-XMP ownership tests passed against the package candidate. No files in
+  Photo Agent's dirty working tree were modified.
