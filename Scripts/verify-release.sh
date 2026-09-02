@@ -62,12 +62,16 @@ grep -q '^swift-exif-macos-arm64/LICENSE$' <<< "$archive_listing"
   shasum -a 256 "$(basename "$artifact")" > "$(basename "$artifact").sha256"
 )
 
-awk '
-  /^## \[2\.0\.0\]/ { in_release = 1; next }
+awk -v version="$expected_version" '
+  $0 == "## [" version "]" || index($0, "## [" version "] — ") == 1 {
+    in_release = 1
+    next
+  }
   in_release && /^## \[/ { exit }
   in_release { print }
 ' CHANGELOG.md > dist/release-notes.md
-grep -q '\*\*Breaking:\*\*' dist/release-notes.md
+grep -Fq "## [$expected_version]" CHANGELOG.md
+test -s dist/release-notes.md
 
 echo
 echo "Release preflight passed for $expected_version"

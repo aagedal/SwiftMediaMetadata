@@ -71,6 +71,9 @@ the CLI; the library target follows the same numbering.
 
 ### Fixed
 
+- Release preflight notes are selected from the requested version's non-empty
+  changelog section instead of always reusing the 2.0.0 notes or requiring a
+  breaking-change entry in every future release.
 - Atomic image, video, audio, and sidecar writes explicitly restore the
   destination's prior filesystem visibility. This prevents iCloud Drive and
   similar providers from carrying a dot-prefixed staging file's hidden flag

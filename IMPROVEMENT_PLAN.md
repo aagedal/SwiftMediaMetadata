@@ -383,9 +383,9 @@ Completion notes:
 
 ## 11. Downstream adoption and next-release readiness
 
-Status: In progress; do not tag while downstream validation is pending
+Status: In progress; do not tag while final release metadata and verification are pending
 
-- [ ] Integrate the new synchronization, `PhotoMetadata`, structured-patch,
+- [x] Integrate the new synchronization, `PhotoMetadata`, structured-patch,
   creation-date, and TIFF-detection APIs into Photo Agent and identify which
   package workarounds can be removed safely.
 - [x] Run Photo Agent's localized-title, embedded-container,
@@ -441,3 +441,44 @@ Progress notes:
   package carries their raw graph losslessly. All 14 focused Camera Raw and
   private-XMP ownership tests passed against the package candidate. No files in
   Photo Agent's dirty working tree were modified.
+- Refreshed the package-side candidate gates on 2026-09-02: all 1,712 package
+  tests passed with 48 expected optional skips, all 50 opt-in CLI tests passed,
+  the 50,000-input deterministic parser-hardening profile passed, and the arm64
+  iOS 16 library cross-compile succeeded.
+- Built and smoke-tested the macOS arm64 archive, verified its license and
+  bundled geolocation database, and recorded candidate SHA-256
+  `b678f00070629b830bee4d218edaa6f0816208ba48e3c5d659266cb4608fac9c`.
+  A clean disposable SwiftPM consumer also compiled `import SwiftMediaMetadata`
+  and exercised the public `ImageMetadata` API. These are candidate results,
+  not the final 3.0.0 release gate: the CLI deliberately remains at 2.0.0 until
+  downstream adoption and release metadata are approved.
+- Generalized `Scripts/verify-release.sh` to extract notes for its requested
+  semantic version. Previously a future 3.0.0 tag would have silently published
+  the 2.0.0 changelog section even though the script accepted arbitrary plain
+  semantic versions. The extracted section must be non-empty, but future
+  non-breaking releases are no longer rejected for omitting a `Breaking:` note.
+- Integrated the 3.0.0 package candidate into Photo Agent on isolated branch
+  `codex/swift-media-metadata-3-adoption` at commit `eb32cf7`, leaving its dirty
+  `main` checkout untouched. The app now exact-pins the upstream
+  `SwiftMediaMetadata` product at candidate revision `4b1c2ff`, removes its
+  1.9.10 vendored fork, and imports the renamed module directly.
+- Replaced Photo Agent's manual IPTC/XMP mirroring, eight creation-date
+  save/restore blocks, rendered-TIFF RAW escape hatch, sidecar byte-comparison
+  retry transaction, and PLUS `rdf:Seq` XML seed with the package's
+  synchronization, filesystem-date restoration, URL-aware TIFF detection,
+  revisioned sidecar update, and typed structured-patch APIs. Its preservation
+  boundary now consumes `PhotoMetadata.rawXMP`, retaining Camera Raw,
+  app-private, unknown, and recursive XMP values.
+- The migrated app builds for testing; its 62-test focused metadata integration
+  set and repository validation script pass. The first complete downstream
+  runs exposed a pre-existing fixed-delay timer assertion that passed alone but
+  starved under the parallel suite. Separate test-only commit `0aae2da` replaced
+  its final 40 ms sleep with the project's bounded eventual-state pattern; no
+  production coordinator code changed. The complete scheme then passed all
+  1,883 tests with no skips.
+- Re-ran the deterministic 50,000-input parser-hardening profile under Address
+  Sanitizer after the downstream migration. All four selected property-test
+  methods passed with no sanitizer failure.
+- Every component of the full candidate gate has now passed. Its checklist item
+  remains open until the approved 3.0.0 CLI/release metadata is applied and the
+  same gates are repeated against those final release inputs.
