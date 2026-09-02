@@ -6,7 +6,7 @@ struct SwiftMediaMetadataCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "swift-exif",
         abstract: "Read, write, and manipulate media metadata.",
-        version: "2.0.0",
+        version: "3.0.0",
         subcommands: [
             ReadCommand.self,
             WriteCommand.self,

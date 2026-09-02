@@ -383,7 +383,7 @@ Completion notes:
 
 ## 11. Downstream adoption and next-release readiness
 
-Status: In progress; do not tag while final release metadata and verification are pending
+Status: Release candidate complete; commit, CI, tag, and publication pending
 
 - [x] Integrate the new synchronization, `PhotoMetadata`, structured-patch,
   creation-date, and TIFF-detection APIs into Photo Agent and identify which
@@ -399,13 +399,14 @@ Status: In progress; do not tag while final release metadata and verification ar
 - [x] Re-run the exported-API audit against 2.0.0 and decide release versioning
   for the exhaustive `XMPValue.languageAlternative` and
   `PhotoMetadataValue.number` cases before tagging.
-- [ ] Run the full package, CLI, iOS, extended parser-hardening, downstream app,
+- [x] Run the full package, CLI, iOS, extended parser-hardening, downstream app,
   archive, checksum, and clean-consumer verification gates.
-- [ ] Update the changelog date, CLI version, release checklist, Homebrew
-  formula, and migration notes only after the final feature set and version are
-  approved.
-- [ ] Create and publish a tag only after every applicable item above is
-  complete; until then, keep the work marked unreleased.
+- [x] Update the changelog date, CLI version, release checklist, and migration
+  notes after approving the final 3.0.0 feature set and version.
+- [ ] Update the Homebrew formula and public installation documentation after
+  the release tag and assets are published.
+- [ ] Create and publish a tag only after the pre-tag checklist, release commit,
+  and required CI checks are complete.
 
 Progress notes:
 
@@ -423,9 +424,9 @@ Progress notes:
   with Swift 6.3.3. The only reported source break is the added
   `XMPValue.languageAlternative` case. `PhotoMetadataValue.number` is part of a
   type that did not exist in 2.0.0, so it adds no separate baseline break. The
-  next release is therefore planned as 3.0.0; the CLI version, release date,
-  checklist, artifacts, formula, and tag remain unchanged until the downstream
-  and full verification gates pass.
+  release was therefore selected as 3.0.0. At that stage the CLI version,
+  release date, checklist, artifacts, formula, and tag were intentionally left
+  unchanged pending the downstream and full verification gates.
 - Verified the current package suite after the documentation and versioning
   updates: 1,712 tests ran, 48 optional tests were skipped, and no tests failed.
 - Built a disposable copy of Photo Agent's committed `main` state against this
@@ -449,9 +450,8 @@ Progress notes:
   bundled geolocation database, and recorded candidate SHA-256
   `b678f00070629b830bee4d218edaa6f0816208ba48e3c5d659266cb4608fac9c`.
   A clean disposable SwiftPM consumer also compiled `import SwiftMediaMetadata`
-  and exercised the public `ImageMetadata` API. These are candidate results,
-  not the final 3.0.0 release gate: the CLI deliberately remains at 2.0.0 until
-  downstream adoption and release metadata are approved.
+  and exercised the public `ImageMetadata` API. These established the candidate
+  results before the final 3.0.0 release metadata was approved and applied.
 - Generalized `Scripts/verify-release.sh` to extract notes for its requested
   semantic version. Previously a future 3.0.0 tag would have silently published
   the 2.0.0 changelog section even though the script accepted arbitrary plain
@@ -479,6 +479,13 @@ Progress notes:
 - Re-ran the deterministic 50,000-input parser-hardening profile under Address
   Sanitizer after the downstream migration. All four selected property-test
   methods passed with no sanitizer failure.
-- Every component of the full candidate gate has now passed. Its checklist item
-  remains open until the approved 3.0.0 CLI/release metadata is applied and the
-  same gates are repeated against those final release inputs.
+- Every component of the preliminary candidate gate passed before the final
+  3.0.0 release metadata was approved and the gates below were repeated.
+- Applied the final 3.0.0 release metadata and repeated the release gates on
+  2026-09-02. `Scripts/verify-release.sh 3.0.0` passed 1,662 library tests with
+  20 expected skips and all 50 CLI tests, built and smoke-tested the macOS arm64
+  archive, and produced SHA-256
+  `6912fecce26d851ebfa1d39c694e930b62cad65af1d702060c113e32b3763763`.
+  The arm64 iOS 16 build, deterministic 50,000-input Address Sanitizer profile,
+  and clean external SwiftPM consumer also passed. Only commit/CI and public
+  release operations remain; Photo Agent adoption stays downstream by design.

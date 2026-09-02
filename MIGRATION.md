@@ -1,8 +1,7 @@
 # SwiftMediaMetadata Migration Guide
 
 This guide covers source migrations that are larger than a release-note entry.
-The APIs described in the 2.0-to-next-release section are currently available
-on `main` and have not been tagged.
+The APIs described below are available in SwiftMediaMetadata 3.0.
 
 ## From SwiftExif 1.x to SwiftMediaMetadata 2.0
 
@@ -30,7 +29,7 @@ The installed command remains `swift-exif`.
 
 ## From 2.0 to 3.0
 
-The next release adds safer APIs alongside the existing entry points. Existing
+Version 3.0 adds safer APIs alongside the existing entry points. Existing
 `write(to:)`, `writeToData()`, `syncIPTCToXMP()`, and `syncXMPToIPTC()` calls
 continue to compile. Adopt the new APIs when the caller needs an explicit
 conflict, preservation, concurrency, or filesystem policy.

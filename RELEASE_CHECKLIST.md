@@ -1,28 +1,37 @@
-# SwiftMediaMetadata 2.0 Release Checklist
+# SwiftMediaMetadata 3.0 Release Checklist
 
-The release workflow publishes a macOS arm64 CLI archive when a plain semantic
-version tag such as `2.0.0` is pushed. SwiftPM clients consume the same tag
+The release workflow publishes a macOS arm64 CLI archive when the plain
+semantic-version tag `3.0.0` is pushed. SwiftPM clients consume the same tag
 directly from the repository.
 
 ## Before tagging
 
-- [x] Review all changes intended for 2.0 and confirm the worktree is clean.
-- [x] Replace `Unreleased` in the 2.0.0 changelog heading with the release date.
-- [x] Confirm `Sources/CLI/SwiftMediaMetadata.swift` reports `2.0.0`.
-- [x] Run `Scripts/verify-release.sh 2.0.0` on macOS. It runs library and CLI
+- [x] Review the intended 3.0 scope and confirm the source-breaking
+  `XMPValue.languageAlternative` addition requires a major release.
+- [x] Date the 3.0.0 changelog section and set the CLI version to `3.0.0`.
+- [x] Review `MIGRATION.md` for exhaustive-switch guidance and adoption examples
+  for synchronization, projection, structured patches, timestamps, transactional
+  sidecars, capabilities, semantic comparison, and typed GPS.
+- [x] Run `Scripts/verify-release.sh 3.0.0` on macOS. It runs library and CLI
   tests, builds the archive, smoke-tests the bundled geolocation resource,
   verifies archive contents/version, and writes the SHA-256 file.
-- [x] Review the 1.x migration note and supported-format table in `README.md`.
-- [x] Commit the final release metadata.
+- [x] Compile the `SwiftMediaMetadata` library target for arm64 iOS 16.
+- [x] Run the 50,000-input parser-hardening profile under Address Sanitizer.
+- [x] Resolve a clean throwaway SwiftPM consumer against the exact release
+  checkout and compile `import SwiftMediaMetadata` plus a public API smoke call.
+- [x] Review the generated archive, checksum, and release notes.
+- [ ] Commit the final release metadata with a clean worktree.
+- [ ] Confirm required CI checks pass for the exact release commit.
 
 ## Publish
 
-- [x] Create an annotated `2.0.0` tag on the reviewed release commit.
-- [x] Push the tag. `.github/workflows/release.yml` reruns the complete preflight
+- [ ] Create an annotated `3.0.0` tag on the reviewed release commit.
+- [ ] Push the tag. `.github/workflows/release.yml` reruns the complete preflight
   and publishes the archive plus checksum to the GitHub release.
-- [x] Confirm the GitHub release is public and its changelog-derived notes
-  accurately describe the breaking module/package rename.
-- [x] Download the published archive on a clean arm64 Mac and run:
+- [ ] Confirm the GitHub release is public and its notes describe the exhaustive
+  `XMPValue` switch migration and the new metadata workflow APIs.
+- [ ] Download the published archive on a clean arm64 Mac, verify its checksum,
+  and run:
 
   ```sh
   ./swift-exif-macos-arm64/swift-exif --version
@@ -31,22 +40,18 @@ directly from the repository.
 
 ## Homebrew and documentation
 
-- [x] Update `aagedal/homebrew-tap` to version 2.0.0 using the published archive
+- [ ] Update `aagedal/homebrew-tap` to version 3.0.0 using the published archive
   URL and SHA-256. Install the executable and
   `SwiftMediaMetadata_SwiftMediaMetadata.bundle` together; geocoding requires
   the adjacent resource bundle.
-- [x] Test a clean `brew install aagedal/tap/swift-exif`, `swift-exif --version`,
+- [ ] Test a clean `brew upgrade aagedal/tap/swift-exif`, `swift-exif --version`,
   and the Oslo geocode smoke command.
-- [x] Replace the README's pre-release `branch: "main"` SwiftPM dependency with
-  `from: "2.0.0"`, restore the verified Homebrew install command, and remove
-  the warning that the 2.0 binary is unpublished.
-- [x] Commit and push the post-release installation-documentation update.
+- [ ] Update the README SwiftPM and direct-download examples from 2.0.0 to 3.0.0
+  only after the public tag and assets exist.
+- [ ] Commit and push the post-release installation-documentation update.
 
-## Final verification
+## Downstream follow-up
 
-- [x] Resolve a throwaway SwiftPM package against `from: "2.0.0"` and compile
-  `import SwiftMediaMetadata`.
-- [x] Confirm the release page, checksum link, README links, and changelog compare
-  link all resolve against the renamed repository.
-- [x] Record any deferred hardening/API-maintainability work in
-  `IMPROVEMENT_PLAN.md`; it is not a reason to silently expand the 2.0 API.
+- [ ] Rebase and merge Photo Agent's SwiftMediaMetadata adoption branch, replace
+  its candidate-revision pin with the published 3.0.0 tag, and rerun its complete
+  release gates. This is intentionally downstream of the package release.
