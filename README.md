@@ -364,6 +364,55 @@ let mutationReport = try metadata.applyPhotoMetadataMutation(mutation)
 print(mutationReport.unappliedFields)
 ```
 
+Each image format exposes an explicit read, write, and preservation contract
+for Exif, IPTC-IIM, XMP, Camera Raw (`crs:`), ICC, and C2PA. This distinguishes
+direct writes from RAW-sidecar workflows and opaque preservation:
+
+```swift
+let capabilities = metadata.metadataCapabilities
+print(capabilities[.xmp].write)          // directlyWritable or sidecarOnly
+print(capabilities[.c2pa].preservation) // preservedOpaquely
+```
+
+Use semantic comparison after a write/read cycle or container conversion. It
+compares expanded XMP namespace names, normalized TIFF values, dates and GPS
+spellings, and canonical C2PA claims rather than raw container layout. The
+report provides facts; the application decides which differences are allowed:
+
+```swift
+let written = try metadata.writeToData()
+let readBack = try ImageMetadata.read(from: written)
+let preservation = metadata.preservationReport(comparedTo: readBack)
+
+print(preservation.added)
+print(preservation.removed)
+print(preservation.changed)
+print(preservation.unrepresentable)
+print(preservation.opaquePreserved)
+```
+
+Typed XMP GPS access retains each packet's original spelling while providing
+validated decimal values. Coordinate writers emit XMP's
+degrees/decimal-minutes form with six fractional minute digits by default;
+altitude and direction use reduced rationals with three fractional digits:
+
+```swift
+var xmp = metadata.xmp ?? XMPData()
+try xmp.setGPSLatitude(59.913868)
+try xmp.setGPSLongitude(-10.752245)
+try xmp.setGPSAltitude(23.5)
+try xmp.setGPSImageDirection(271.25, reference: .trueNorth)
+
+let gps = try xmp.parsedGPS()
+print(gps.latitude?.decimalDegrees as Any)
+print(gps.latitude?.originalLexicalValue as Any)
+```
+
+The parser also accepts decimal, directional decimal, degrees/minutes/seconds,
+and degrees/decimal-minutes input. Invalid ranges and contradictory signs or
+hemispheres throw `XMPGPSParsingError`. `PhotoMetadata` projects the typed XMP
+and Exif GPS candidates together, so carrier disagreements remain visible.
+
 Structured XMP setters retain unknown sibling fields. For app-specific
 structures, use `patchStructure` or `patchStructuredArrayItem` with an
 `XMPStructurePatch` to replace and remove only named members.

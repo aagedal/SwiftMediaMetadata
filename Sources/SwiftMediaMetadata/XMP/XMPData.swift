@@ -116,6 +116,25 @@ public struct XMPData: Equatable, Sendable {
         properties["\(namespace)\(property)"]
     }
 
+    /// Every parsed property keyed by its namespace URI followed by its local
+    /// name. The key is prefix-independent: two packets that spell the same
+    /// namespace with different XML prefixes expose the same entry here.
+    ///
+    /// Most callers should continue to use the typed accessors or
+    /// `properties(in:)`. This view is intended for auditing, comparison, and
+    /// lossless metadata tooling that must also account for unknown schemas.
+    public var allProperties: [String: XMPValue] {
+        properties
+    }
+
+    /// The observed RDF container form for semantic comparison. Kept internal
+    /// because `XMPValue` deliberately abstracts Bag versus Seq from the public
+    /// value model.
+    func arrayForm(forQualifiedKey key: String) -> XMPArrayForm? {
+        if XMPWriter.seqProperties.contains(key) { return .seq }
+        return arrayForms[key]
+    }
+
     public mutating func setValue(_ value: XMPValue, namespace: String, property: String) {
         properties["\(namespace)\(property)"] = value
     }

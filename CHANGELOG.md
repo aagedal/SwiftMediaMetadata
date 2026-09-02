@@ -42,6 +42,19 @@ the CLI; the library target follows the same numbering.
   merge retries, serialized-packet validation, and an installed-state result.
   Transactional and ordinary sidecar writes share a cross-process lock and the
   existing filesystem write-options contract.
+- Per-format metadata capabilities describe read, direct-write, sidecar-only,
+  opaque-preservation, stripping, and unsupported behavior independently for
+  Exif, IPTC-IIM, XMP, Camera Raw, ICC, and C2PA.
+- `semanticMetadata` and `preservationReport(comparedTo:)` compare normalized
+  metadata meaning rather than XML prefixes/order, TIFF byte order/offsets, or
+  equivalent date and GPS spellings. Reports separate added, removed, changed,
+  unrepresentable, and opaque-preserved values.
+- Typed XMP GPS APIs parse decimal, directional decimal, DMS, and
+  degrees/decimal-minutes coordinates; retain original lexical values; validate
+  ranges and hemisphere conflicts; and emit stable XMP coordinate/rational
+  spellings. `PhotoMetadata` now retains typed XMP and Exif GPS candidates via
+  `PhotoMetadataValue.number`; exhaustive switches over that enum must handle
+  the new case.
 
 ### Changed
 

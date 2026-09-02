@@ -8,12 +8,14 @@ public enum PhotoMetadataField: String, CaseIterable, Sendable, Hashable {
     case creatorContactInfo, locationCreated, locationShown, registryID
     case artworkOrObject, imageCreator, copyrightOwner, licensor, imageSupplier
     case cameraMake, cameraModel, lensModel, dateTimeOriginal
+    case gpsLatitude, gpsLongitude, gpsAltitude, gpsImageDirection, gpsImageDirectionReference
 }
 
 /// Carrier-independent value used by the typed photo-metadata projection.
 public enum PhotoMetadataValue: Equatable, Sendable {
     case string(String)
     case strings([String])
+    case number(Double)
     case languageAlternatives([XMPLanguageAlternative])
     case structure([String: XMPValue])
     case structuredArray([[String: XMPValue]])
@@ -81,6 +83,11 @@ public struct PhotoMetadata: Equatable, Sendable {
         case .string(let value): return [value]
         default: return nil
         }
+    }
+
+    public func number(_ field: PhotoMetadataField) -> Double? {
+        if case .number(let value) = fields[field]?.value { return value }
+        return nil
     }
 
     public var conflicts: [PhotoMetadataField: ResolvedPhotoMetadataField] {
@@ -257,6 +264,17 @@ private extension PhotoMetadata {
         addEXIF(.cameraModel, xmpNamespace: XMPNamespace.tiff, property: "Model", value: metadata.exif?.model, to: &result, xmp: metadata.xmp)
         addEXIF(.lensModel, xmpNamespace: XMPNamespace.aux, property: "Lens", value: metadata.exif?.lensModel, to: &result, xmp: metadata.xmp)
         addEXIF(.dateTimeOriginal, xmpNamespace: XMPNamespace.exif, property: "DateTimeOriginal", value: metadata.exif?.dateTimeOriginal, to: &result, xmp: metadata.xmp)
+        addGPS(.gpsLatitude, xmpValue: try? metadata.xmp?.gpsLatitudeCoordinate()?.decimalDegrees,
+               exifValue: metadata.exif?.gpsLatitude, to: &result)
+        addGPS(.gpsLongitude, xmpValue: try? metadata.xmp?.gpsLongitudeCoordinate()?.decimalDegrees,
+               exifValue: metadata.exif?.gpsLongitude, to: &result)
+        addGPS(.gpsAltitude, xmpValue: try? metadata.xmp?.gpsAltitudeValue()?.value,
+               exifValue: metadata.exif?.gpsAltitude, to: &result)
+        addGPS(.gpsImageDirection, xmpValue: try? metadata.xmp?.gpsImageDirectionValue()?.value,
+               exifValue: metadata.exif?.gpsImgDirection, to: &result)
+        addEXIF(.gpsImageDirectionReference, xmpNamespace: XMPNamespace.exif,
+                property: "GPSImgDirectionRef", value: metadata.exif?.gpsImgDirectionRef,
+                to: &result, xmp: metadata.xmp)
         return result
     }
 
@@ -289,6 +307,20 @@ private extension PhotoMetadata {
             result[field] = .init(preferred: preferred, candidates: candidates)
         }
     }
+
+    static func addGPS(
+        _ field: PhotoMetadataField,
+        xmpValue: Double?,
+        exifValue: Double?,
+        to result: inout [PhotoMetadataField: ResolvedPhotoMetadataField]
+    ) {
+        var candidates: [PhotoMetadataCandidate] = []
+        if let xmpValue { candidates.append(.init(source: .xmp, value: .number(xmpValue))) }
+        if let exifValue { candidates.append(.init(source: .exif, value: .number(exifValue))) }
+        if let preferred = candidates.first {
+            result[field] = .init(preferred: preferred, candidates: candidates)
+        }
+    }
 }
 
 private extension PhotoMetadataValue {
@@ -306,6 +338,7 @@ private extension PhotoMetadataValue {
         switch self {
         case .string(let value): return value
         case .strings(let values): return values.first
+        case .number: return nil
         case .languageAlternatives(let values):
             return values.first(where: {
                 $0.language.caseInsensitiveCompare("x-default") == .orderedSame
@@ -319,6 +352,7 @@ private extension PhotoMetadataValue {
         case .languageAlternatives(let values): return .languageAlternative(values)
         case .string(let value): return .langAlternative(value)
         case .strings(let values): return .array(values)
+        case .number(let value): return .simple(String(value))
         case .structure(let fields): return .structure(fields)
         case .structuredArray(let items): return .structuredArray(items)
         }
@@ -326,6 +360,9 @@ private extension PhotoMetadataValue {
 
     func semanticallyEquals(_ other: PhotoMetadataValue) -> Bool {
         if self == other { return true }
+        if case .number(let lhs) = self, case .number(let rhs) = other {
+            return abs(lhs - rhs) <= 0.000_000_001
+        }
         if let lhs = preferredString, let rhs = other.preferredString { return lhs == rhs }
         return false
     }

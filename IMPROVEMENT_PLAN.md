@@ -15,7 +15,7 @@ changes still belong in `CHANGELOG.md`.
 - [x] 7. Split oversized API files without breaking the public API
 - [x] 8. Prepare and publish the 2.0 release
 - [x] 9. Land the first standards-aware photo-metadata APIs for 2.1
-- [ ] 10. Complete the remaining 2.1 metadata workflow requests
+- [x] 10. Complete the remaining 2.1 metadata workflow requests
 - [ ] 11. Validate downstream adoption and prepare the next release
 
 ## 1. Unified filesystem writes and modification dates
@@ -300,7 +300,7 @@ Completion notes:
 
 ## 10. Remaining 2.1 metadata workflow requests
 
-Status: In progress
+Status: Completed 2026-09-01; unreleased 2.1 work
 
 ### Transactional sidecar mutation
 
@@ -334,33 +334,52 @@ Implementation notes:
 
 ### Semantic comparison and carrier capabilities
 
-- [ ] Expose per-format read, write, and preservation capabilities for Exif,
+- [x] Expose per-format read, write, and preservation capabilities for Exif,
   IPTC-IIM, XMP, Camera Raw, ICC, and C2PA metadata domains.
-- [ ] Represent partial support explicitly: readable, directly writable,
+- [x] Represent partial support explicitly: readable, directly writable,
   sidecar-only, preserved opaquely, intentionally stripped, or unsupported.
-- [ ] Define canonical semantic identities for standardized Exif, IPTC-IIM,
+- [x] Define canonical semantic identities for standardized Exif, IPTC-IIM,
   XMP, Camera Raw, and C2PA values without treating XML ordering, namespace
   prefixes, equivalent GPS/date spellings, or container layout as conflicts.
-- [ ] Produce a round-trip preservation report containing added, removed,
+- [x] Produce a round-trip preservation report containing added, removed,
   changed, unrepresentable, and opaque-preserved values. The package reports
   facts; applications retain the policy decision about acceptable differences.
-- [ ] Add cross-container fixtures and write/read comparisons for every
+- [x] Add cross-container fixtures and write/read comparisons for every
   advertised writable format, including sidecar-only proprietary RAW.
 
 ### Typed XMP GPS conversion
 
-- [ ] Add decimal-degree accessors for XMP latitude, longitude, altitude, and
+- [x] Add decimal-degree accessors for XMP latitude, longitude, altitude, and
   direction/reference fields without discarding the original lexical values.
-- [ ] Parse decimal, directional decimal, degrees/minutes/seconds, and
+- [x] Parse decimal, directional decimal, degrees/minutes/seconds, and
   degrees/decimal-minutes forms, including hemisphere suffixes and references.
-- [ ] Emit spec-compliant XMP GPS strings from typed values with documented
+- [x] Emit spec-compliant XMP GPS strings from typed values with documented
   precision and stable round trips.
-- [ ] Validate coordinate ranges and reject contradictory sign/hemisphere
+- [x] Validate coordinate ranges and reject contradictory sign/hemisphere
   inputs instead of silently changing meaning.
-- [ ] Reconcile typed XMP GPS with Exif GPS in the conflict-aware projection
+- [x] Reconcile typed XMP GPS with Exif GPS in the conflict-aware projection
   while retaining both carrier candidates when they disagree.
-- [ ] Cover poles, antimeridian, zero coordinates, all hemispheres, malformed
+- [x] Cover poles, antimeridian, zero coordinates, all hemispheres, malformed
   input, precision retention, and Exif/XMP disagreement.
+
+Completion notes:
+
+- `ImageFormat.metadataCapabilities` separates read, write, and preservation
+  behavior for every advertised image and RAW carrier. Proprietary RAW remains
+  explicitly sidecar-only under the safe default contract.
+- Semantic snapshots use expanded XMP names, normalized Exif numeric values,
+  unordered IIM repeatables, canonical dates/GPS, exact ICC fingerprints, and
+  canonical C2PA CBOR maps/assertion references. Preservation reports keep
+  policy outside the package.
+- `XMPGPSCoordinate` and `XMPGPSMetadata` retain source lexical values while
+  exposing validated decimal coordinates, signed altitude, direction, and
+  references. Writers use stable XMP coordinate and rational forms.
+- Added 16 public-module tests for capabilities, comparison classification,
+  semantic normalization, GPS parsing/emission, edge coordinates, malformed
+  data, and XMP/Exif projection conflicts, alongside the existing per-format
+  writer/read-back fixtures and proprietary-RAW sidecar coverage.
+- Verified 1,712 package tests (48 skipped, 0 failures), all 50 opt-in CLI
+  tests (0 failures), and the arm64 iOS 16 library build.
 
 ## 11. Downstream adoption and next-release readiness
 
@@ -378,7 +397,8 @@ Status: Planned; do not tag while additional 2.1 requests are pending
   policy, projection conflicts, structured patches, timestamp behavior, and
   any newly added sidecar/comparison/GPS APIs.
 - [ ] Re-run the exported-API audit against 2.0.0 and decide release versioning
-  for the exhaustive `XMPValue.languageAlternative` case before tagging.
+  for the exhaustive `XMPValue.languageAlternative` and
+  `PhotoMetadataValue.number` cases before tagging.
 - [ ] Run the full package, CLI, iOS, extended parser-hardening, downstream app,
   archive, checksum, and clean-consumer verification gates.
 - [ ] Update the changelog date, CLI version, release checklist, Homebrew
