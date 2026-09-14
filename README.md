@@ -65,11 +65,11 @@ swift-exif --version
 ```
 
 Or download the archive and checksum directly from the
-[2.0.0 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/2.0.0):
+[3.0.1 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/3.0.1):
 
 ```sh
-curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/2.0.0/swift-exif-macos-arm64.tar.gz
-curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/2.0.0/swift-exif-macos-arm64.tar.gz.sha256
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.0.1/swift-exif-macos-arm64.tar.gz
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.0.1/swift-exif-macos-arm64.tar.gz.sha256
 shasum -a 256 -c swift-exif-macos-arm64.tar.gz.sha256
 tar -xzf swift-exif-macos-arm64.tar.gz
 ./swift-exif-macos-arm64/swift-exif --version
@@ -83,7 +83,7 @@ Add the package to your `Package.swift` with:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "2.0.0"),
+    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "3.0.1"),
 ]
 ```
 
@@ -100,7 +100,7 @@ Version 2.0 renames the package, library product, and importable module from
 above, then replace `import SwiftExif` with `import SwiftMediaMetadata`. The
 installed CLI command remains `swift-exif`.
 
-For the unreleased APIs currently on `main`, including exhaustive-enum changes,
+For the APIs introduced in 3.0, including exhaustive-enum changes,
 synchronization policies, typed projections, transactional sidecars, semantic
 preservation, and GPS conversion, see the [migration guide](MIGRATION.md).
 

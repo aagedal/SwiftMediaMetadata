@@ -234,7 +234,7 @@ public enum RTMDReader {
     }
 
     private static func topLevelBox(named type: String, in fullData: Data) throws -> Data? {
-        let boxes = try ISOBMFFBoxReader.parseBoxes(from: fullData)
+        let boxes = try ISOBMFFBoxReader.parseTopLevelBoxesSkippingMdat(fullData)
         return boxes.first(where: { $0.type == type })?.data
     }
 

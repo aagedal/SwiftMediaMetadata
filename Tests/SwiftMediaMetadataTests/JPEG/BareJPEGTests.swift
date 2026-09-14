@@ -63,6 +63,10 @@ final class BareJPEGTests: XCTestCase {
         guard let url = Bundle.module.url(
             forResource: "bare-cicontext",
             withExtension: "jpg",
+            subdirectory: "Resources"
+        ) ?? Bundle.module.url(
+            forResource: "bare-cicontext",
+            withExtension: "jpg",
             subdirectory: "Fixtures/Resources"
         ) ?? Bundle.module.url(forResource: "bare-cicontext", withExtension: "jpg")
         else {

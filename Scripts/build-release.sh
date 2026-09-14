@@ -20,14 +20,16 @@ build_mac() {
     --arch "$arch" \
     --product swift-exif \
     --disable-sandbox
+  local bin_dir
+  bin_dir="$(swift build -c release --arch "$arch" --show-bin-path --disable-sandbox)"
   local artifact_name="swift-exif-macos-${arch}"
   local out_dir="$DIST/$artifact_name"
   local archive="$DIST/${artifact_name}.tar.gz"
   rm -rf "$out_dir"
   rm -f "$archive"
   mkdir -p "$out_dir"
-  cp ".build/${arch}-apple-macosx/release/swift-exif" "$out_dir/swift-exif"
-  cp -R ".build/${arch}-apple-macosx/release/SwiftMediaMetadata_SwiftMediaMetadata.bundle" "$out_dir/"
+  cp "$bin_dir/swift-exif" "$out_dir/swift-exif"
+  cp -R "$bin_dir/SwiftMediaMetadata_SwiftMediaMetadata.bundle" "$out_dir/"
   cp LICENSE "$out_dir/LICENSE"
   strip -x "$out_dir/swift-exif"
   file "$out_dir/swift-exif"

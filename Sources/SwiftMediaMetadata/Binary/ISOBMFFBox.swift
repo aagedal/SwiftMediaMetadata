@@ -84,8 +84,8 @@ public struct ISOBMFFBoxReader: Sendable {
     /// payload `Data` that is empty for `mdat` (since callers typically only
     /// want metadata and the `mdat` payload can be gigabytes of media data).
     ///
-    /// Used by the CR3 image pipeline and the CRM video reader, both of which
-    /// walk the moov tree but never need the bulk media buffer.
+    /// Used by metadata readers that walk the `moov` tree but do not need to
+    /// materialize the bulk media buffer during top-level discovery.
     public static func parseTopLevelBoxesSkippingMdat(_ data: Data) throws -> [ISOBMFFBox] {
         var reader = BinaryReader(data: data)
         var boxes: [ISOBMFFBox] = []

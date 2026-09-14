@@ -6,6 +6,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [3.0.1] — 2026-09-15
+
+### Fixed
+
+- Sony RTMD track discovery now skips top-level `mdat` payloads instead of
+  copying the complete audio/video payload into memory. Structural boxes and
+  file-absolute RTMD sample offsets retain their existing behavior.
+- The real-world bare-JPEG fixture lookup now supports SwiftPM's current copied
+  resource-directory layout, restoring a clean test run on newer toolchains.
+- Release packaging now discovers SwiftPM's active binary output directory
+  instead of copying a stale executable from a toolchain-specific build path.
+
 ## [3.0.0] — 2026-09-02
 
 ### Added
@@ -1605,6 +1617,7 @@ Verified end-to-end against:
 - `format_long_name` returns `"QuickTime / MOV"` for all ISOBMFF brands
   (isom / mp42 / qt / M4V / …) to match ffprobe.
 
+[3.0.1]: https://github.com/aagedal/SwiftMediaMetadata/compare/3.0.0...3.0.1
 [3.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/2.0.0...3.0.0
 [2.0.0]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.10...2.0.0
 [1.9.10]: https://github.com/aagedal/SwiftMediaMetadata/compare/1.9.9...1.9.10
