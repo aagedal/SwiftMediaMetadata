@@ -65,11 +65,11 @@ swift-exif --version
 ```
 
 Or download the archive and checksum directly from the
-[3.0.1 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/3.0.1):
+[3.0.2 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/3.0.2):
 
 ```sh
-curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.0.1/swift-exif-macos-arm64.tar.gz
-curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.0.1/swift-exif-macos-arm64.tar.gz.sha256
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.0.2/swift-exif-macos-arm64.tar.gz
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.0.2/swift-exif-macos-arm64.tar.gz.sha256
 shasum -a 256 -c swift-exif-macos-arm64.tar.gz.sha256
 tar -xzf swift-exif-macos-arm64.tar.gz
 ./swift-exif-macos-arm64/swift-exif --version
@@ -83,7 +83,7 @@ Add the package to your `Package.swift` with:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "3.0.1"),
+    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "3.0.2"),
 ]
 ```
 
