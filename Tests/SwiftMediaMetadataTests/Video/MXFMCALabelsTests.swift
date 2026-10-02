@@ -136,7 +136,7 @@ final class MXFMCALabelsTests: XCTestCase {
             (key: ULBytes.groupOfGroupsSubDescriptorKey, value: groupOfGroupsSubDescriptorBody),
         ])
 
-        let metadata = try MXFReader.parse(data)
+        let metadata = try parseMXFWithFileParity(data)
 
         let labeling = try XCTUnwrap(metadata.mcaAudioLabeling)
         XCTAssertEqual(labeling.channels.count, 1)

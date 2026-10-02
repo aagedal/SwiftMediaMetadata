@@ -13,7 +13,7 @@ final class VideoContainerTests: XCTestCase {
     func testMP4WithC2PAUUIDBox() throws {
         let jumbf = buildMinimalManifestStore()
         let data = buildMP4WithC2PAUUIDBox(jumbf: jumbf, brand: "mp42")
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
 
         XCTAssertNotNil(metadata.c2pa, "C2PA should be extracted from uuid box in MP4")
         XCTAssertEqual(metadata.c2pa?.manifests.count, 1)
@@ -23,7 +23,7 @@ final class VideoContainerTests: XCTestCase {
     func testMP4WithC2PATopLevelJumb() throws {
         let jumbf = buildMinimalManifestStore()
         let data = buildMP4WithTopLevelJumb(jumbf: jumbf)
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
 
         XCTAssertNotNil(metadata.c2pa)
     }
@@ -31,7 +31,7 @@ final class VideoContainerTests: XCTestCase {
     func testMOVWithC2PAUUIDBox() throws {
         let jumbf = buildMinimalManifestStore()
         let data = buildMP4WithC2PAUUIDBox(jumbf: jumbf, brand: "qt  ")
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
 
         XCTAssertEqual(metadata.format, .mov)
         XCTAssertNotNil(metadata.c2pa)
@@ -39,7 +39,7 @@ final class VideoContainerTests: XCTestCase {
 
     func testPlainMP4HasNoC2PA() throws {
         let data = buildMinimalValidMP4(brand: "isom")
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
 
         XCTAssertNil(metadata.c2pa, "Plain MP4 must not surface C2PA")
         XCTAssertTrue(metadata.warnings.isEmpty)
@@ -326,7 +326,7 @@ final class VideoContainerTests: XCTestCase {
         let payload = uuidUserType + Data(xml.utf8)
         let data = buildMP4WithUUIDBox(uuidPayload: payload)
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertEqual(metadata.camera?.deviceManufacturer, "Sony")
         XCTAssertEqual(metadata.camera?.deviceModelName, "ILCE-1")
     }
@@ -352,7 +352,7 @@ final class VideoContainerTests: XCTestCase {
         """
         let data = buildMinimalMXF(withNRTXML: Data(xml.utf8))
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertEqual(metadata.format, .mxf)
         XCTAssertEqual(metadata.camera?.deviceManufacturer, "Sony")
         XCTAssertEqual(metadata.camera?.deviceModelName, "PMW-F55")
@@ -368,7 +368,7 @@ final class VideoContainerTests: XCTestCase {
         ]
         let data = buildMinimalMXF(extraKLVs: [(key: Data(c2paKey), value: jumbf)])
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertNotNil(metadata.c2pa, "MXF C2PA must be extracted via SMPTE UL")
         XCTAssertEqual(metadata.c2pa?.activeManifest?.claim.claimGenerator, "SwiftMediaMetadata Test")
     }
@@ -378,7 +378,7 @@ final class VideoContainerTests: XCTestCase {
         let jumbf = buildMinimalManifestStore()
         let data = buildMinimalMXF(extraKLVs: [(key: Data(repeating: 0x5A, count: 16), value: jumbf)])
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertNotNil(metadata.c2pa, "MXF C2PA should be found via JUMBF sniff even under Dark KLV")
     }
 
@@ -394,14 +394,14 @@ final class VideoContainerTests: XCTestCase {
             (key: Data(repeating: 0x5A, count: 16), value: jumbf),
         ])
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertEqual(metadata.camera?.deviceModelName, "PMW-F55")
         XCTAssertNotNil(metadata.c2pa)
     }
 
     func testPlainMXFHasNoC2PA() throws {
         let data = buildMinimalMXF(extraKLVs: [])
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertNil(metadata.c2pa)
         XCTAssertNil(metadata.camera)
     }
@@ -433,7 +433,7 @@ final class VideoContainerTests: XCTestCase {
         let metadataKey = Data(repeating: 0x44, count: 16)
         let data = buildMinimalMXF(extraKLVs: [(key: metadataKey, value: klvValue)])
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertEqual(metadata.camera?.deviceManufacturer, "Sony")
         XCTAssertEqual(metadata.camera?.deviceModelName, "PXW-FX9V")
         XCTAssertEqual(metadata.camera?.lensModelName, "FE PZ 28-135mm F4 G OSS")
@@ -457,7 +457,7 @@ final class VideoContainerTests: XCTestCase {
             (key: xmlKey,     value: Data(xml.utf8)),
         ])
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         XCTAssertEqual(metadata.camera?.deviceModelName, "AFTER-ESSENCE")
     }
 
@@ -480,7 +480,7 @@ final class VideoContainerTests: XCTestCase {
             (key: Data(repeating: 0xAA, count: 16), value: Data(xml.utf8)),
         ])
 
-        let metadata = try VideoMetadata.read(from: data)
+        let metadata = try readVideoWithMXFFileParity(data)
         // Must have recovered the second KLV, proving the parser did not
         // choke on the oversized one.
         XCTAssertEqual(metadata.camera?.deviceModelName, "RECOVERED")

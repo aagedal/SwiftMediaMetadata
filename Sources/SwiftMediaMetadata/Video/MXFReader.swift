@@ -38,7 +38,7 @@ public struct MXFReader: Sendable {
     ///
     /// Metadata-bearing KLVs (NRT XML, C2PA manifest stores) are at most a few
     /// MB; raw essence KLVs in a 40 GB XDCAM clip can be many gigabytes. We
-    /// peek at the first 64 bytes of every KLV to decide whether it's worth
+    /// peek at the first 512 bytes of every KLV to decide whether it's worth
     /// reading fully, and cap a full read at this size so a malformed length
     /// field on a giant KLV can't OOM us even if our heuristic mis-fires.
     private static let maxMetadataKLVSize = 32 * 1024 * 1024
@@ -56,7 +56,22 @@ public struct MXFReader: Sendable {
     /// content-type peek — essence (video/audio) KLVs, which can be GBs each
     /// in XDCAM/XAVC files, are skipped via a seek without copying into RAM.
     public static func parse(_ data: Data) throws -> VideoMetadata {
-        guard isMXF(data) else {
+        var reader = BinaryReader(data: data)
+        return try parse(cursor: &reader)
+    }
+
+    /// Read an MXF without mapping or retaining its essence payload. The full
+    /// KLV walk still includes metadata after essence; only values classified
+    /// as metadata (at most 32 MiB) and the 16 MiB fallback prefix are loaded.
+    public static func parse(from url: URL) throws -> VideoMetadata {
+        var reader = try MXFFileCursor(url: url)
+        let metadata = try parse(cursor: &reader)
+        try reader.validateExtent()
+        return metadata
+    }
+
+    static func parse<C: MXFByteCursor>(cursor reader: inout C) throws -> VideoMetadata {
+        guard isMXF(try reader.slice(from: 0, count: min(16, reader.count))) else {
             throw MetadataError.invalidVideo("Not an MXF file — missing partition pack prefix")
         }
 
@@ -75,15 +90,26 @@ public struct MXFReader: Sendable {
         // UID arrays). Filled inside the loop, resolved after the loop.
         var mca = MCAState()
 
-        var reader = BinaryReader(data: data)
         while reader.remainingCount >= 17 {
-            guard let key = try? reader.readBytes(16) else { break }
-            guard let length = try? readBERLength(&reader) else { break }
+            let key: Data
+            let length: Int
+            do {
+                key = try reader.readBytes(16)
+                length = try readBERLength(&reader)
+            } catch MetadataError.unexpectedEndOfData {
+                break
+            } catch MetadataError.invalidVideo {
+                // Preserve the Data parser's tolerant invalid/truncated BER
+                // behavior. Actual file I/O failures propagate to the caller.
+                break
+            }
             guard length <= reader.remainingCount else { break }
 
             let valueStart = reader.offset
             let peekCount = min(length, klvPeekBytes)
-            guard let peek = try? reader.slice(from: valueStart, count: peekCount) else { break }
+            let peek: Data
+            do { peek = try reader.slice(from: valueStart, count: peekCount) }
+            catch MetadataError.unexpectedEndOfData { break }
 
             let keyIsC2PA = isC2PAKey(key)
             let peekIsXML = looksLikeNRTXML(peek)
@@ -104,11 +130,13 @@ public struct MXFReader: Sendable {
             // never this big).
             guard isMetadata, length <= maxMetadataKLVSize else {
                 // Advance past the KLV without copying its value.
-                if (try? reader.seek(to: valueStart + length)) == nil { break }
+                try reader.seek(to: valueStart + length)
                 continue
             }
 
-            guard let value = try? reader.readBytes(length) else { break }
+            let value: Data
+            do { value = try reader.readBytes(length) }
+            catch MetadataError.unexpectedEndOfData { break }
 
             // Sony NRT XML: RDD-18 clip metadata surfaced through MXF.
             if peekIsXML {
@@ -210,13 +238,16 @@ public struct MXFReader: Sendable {
             }
         }
 
+        // Both fallbacks already restrict their search to the first 16 MiB.
+        // Materialize that prefix once, after KLV scratch values are released.
+        let prefix = try reader.slice(from: 0, count: min(reader.count, nrtScanWindow))
         // Fallback: Sony XDCAM/XAVC writers often wrap NRT XML inside an
         // RP 2057 XML Document Set whose value is a local-tag/length/value
         // sequence — the XML bytes therefore live *inside* a KLV value, not
         // at its start, so the top-level peek misses them. Do a bounded
         // substring scan of the header metadata region to catch these.
         if metadata.camera == nil || metadata.camera?.isEmpty == true {
-            if let xml = findEmbeddedNRTXML(in: data) {
+            if let xml = findEmbeddedNRTXML(in: prefix) {
                 if let cam = try? NRTXMLParser.parse(xml), !cam.isEmpty {
                     metadata.camera = cam
                 }
@@ -226,7 +257,7 @@ public struct MXFReader: Sendable {
         // and viewing-LUT metadata as JSON blobs in custom KLV metadata
         // sets. The blob signature `\x80\x7B LL LL {` is unambiguous; scan
         // the same header region NRT XML uses and merge any decoded fields.
-        let arriBlobs = ARRIJSONParser.findEmbeddedJSONBlobs(in: data)
+        let arriBlobs = ARRIJSONParser.findEmbeddedJSONBlobs(in: prefix)
         if !arriBlobs.isEmpty {
             var cam = metadata.camera ?? CameraMetadata()
             ARRIJSONParser.merge(arriBlobs, into: &cam)
@@ -373,7 +404,7 @@ public struct MXFReader: Sendable {
         }
 
         // Container bit_rate fallback (matches ffprobe `format.bit_rate`).
-        let containerBytes = metadata.fileSize ?? Int64(data.count)
+        let containerBytes = metadata.fileSize ?? Int64(reader.count)
         if metadata.bitRate == nil,
            let dur = metadata.duration, dur > 0, containerBytes > 0 {
             metadata.bitRate = Int(Double(containerBytes) * 8.0 / dur)
@@ -499,7 +530,7 @@ public struct MXFReader: Sendable {
     /// Decode a SMPTE ST 379 / BER-encoded length field.
     /// Short form: one byte, top bit clear, value = byte.
     /// Long form: first byte 0x80 | N, followed by N big-endian bytes.
-    static func readBERLength(_ reader: inout BinaryReader) throws -> Int {
+    static func readBERLength<C: MXFByteCursor>(_ reader: inout C) throws -> Int {
         let first = try reader.readUInt8()
         if first & 0x80 == 0 {
             return Int(first)
