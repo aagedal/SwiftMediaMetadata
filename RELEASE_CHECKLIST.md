@@ -5,6 +5,8 @@
   `8297324bb00ad1358b4070575c1ea59e698d3f2f`.
 - [x] Set CLI version, README and changelog to 3.0.2.
 - [ ] Run complete release preflight on the final release tree.
+- [ ] Merge the reviewed release changes into `main` before tagging. The release
+  workflow rejects tags whose commits are not in `main`'s history.
 - [ ] Publish the semantic-version tag and verify CI release checks.
 - [ ] Download and verify the published archive and CLI/resource smoke checks.
 - [ ] Resolve and pin the downstream application from a fresh package cache.
