@@ -142,15 +142,34 @@ public struct VideoMetadata: Sendable {
     /// Memory behaviour: Matroska/WebM files are read via a bounded prefix
     /// (`matroskaReadCap`, 512 MB) since the parser only scans that far and never
     /// looks at the tail — critical when importing Blu-ray-sized MKVs from an
-    /// external volume where `.mappedIfSafe` falls back to an in-RAM load. Other
-    /// containers use `.alwaysMapped` to force mmap (again, external volumes are
+    /// external volume where `.mappedIfSafe` falls back to an in-RAM load.
+    /// MXF uses a bounded file cursor. Other containers use `.alwaysMapped`
+    /// to force mmap (again, external volumes are
     /// treated as "unsafe" by `.mappedIfSafe` and would otherwise load wholly
     /// into RAM). `originalData` is retained only for formats whose writer needs
     /// it (MP4/MOV/M4V); dropping it elsewhere keeps multi-file imports from
     /// accumulating gigabytes of mapped address space.
     public static func read(from url: URL) throws -> VideoMetadata {
-        let data = try loadContainerData(from: url)
-        var metadata = try parseContainer(data)
+        let probe = try FileHandle(forReadingFrom: url)
+        let head: Data
+        do {
+            head = try probe.read(upToCount: 16) ?? Data()
+            try probe.close()
+        } catch {
+            try? probe.close()
+            throw error
+        }
+        // Keep all URL postprocessing below shared between the MXF cursor
+        // and existing container paths (sidecars, promotions, size, timecode).
+        let data: Data
+        var metadata: VideoMetadata
+        if MXFReader.isMXF(head) {
+            data = Data()
+            metadata = try MXFReader.parse(from: url)
+        } else {
+            data = try loadContainerData(from: url)
+            metadata = try parseContainer(data)
+        }
         // Blackmagic RAW shares the QuickTime container layout but has no
         // ftyp brand the parser can latch onto — it'd come back tagged as
         // .mov. Promote it to .braw based on the path so the long-name and

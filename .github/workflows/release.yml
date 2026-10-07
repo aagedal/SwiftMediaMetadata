@@ -27,6 +27,16 @@ jobs:
             exit 1
           fi
 
+      - name: Require release commit on main
+        shell: bash
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          release_commit="$(git rev-parse "$GITHUB_REF^{commit}")"
+          if ! git merge-base --is-ancestor "$release_commit" refs/remotes/origin/main; then
+            echo "Release tag $GITHUB_REF_NAME must point to a commit on main. Merge the release changes before pushing the tag." >&2
+            exit 1
+          fi
+
       - name: Run release preflight
         run: Scripts/verify-release.sh "$GITHUB_REF_NAME"
 

@@ -6,6 +6,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [3.0.2] — 2026-10-02
+
+### Fixed
+
+- File-based MXF metadata parsing now uses bounded positional reads instead of
+  materializing the complete media file. Essence and unneeded KLV payloads are
+  skipped while metadata, MCA labels and file-relative offsets are preserved.
+- MXF reads reject invalid bounds, truncated payloads, and file extent changes;
+  interrupted reads retry. Same-size concurrent writes are not detected.
+- Added parity, bounded-read, sparse-file, malformed-input, and extent-change
+  regression coverage. Caller-owned Data continues to use the existing parser.
+
 ## [3.0.1] — 2026-09-15
 
 ### Fixed
