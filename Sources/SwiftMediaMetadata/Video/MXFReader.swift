@@ -929,6 +929,17 @@ public struct MXFReader: Sendable {
             }
         }
 
+        // Stored dimensions are padded to whole coding blocks (AVC/XAVC
+        // 1920×1080 is stored as 1920×1088). Like ffprobe, report the
+        // displayed picture when the descriptor carries a smaller display
+        // rectangle; otherwise DAR/SAR below derive from the padded height.
+        if let dw = stream.displayWidth, let dh = stream.displayHeight,
+           let sw = stream.width, let sh = stream.height,
+           dw > 0, dh > 0, dw <= sw, dh <= sh {
+            stream.width = dw
+            stream.height = dh
+        }
+
         if let fl = frameLayout {
             stream.fieldOrder = fieldOrderFromLayout(fl, dominance: fieldDominance)
             // FrameLayout 1 (SeparateFields) / 2 (OneField) report StoredHeight

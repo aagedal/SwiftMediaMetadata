@@ -53,6 +53,26 @@ final class MXFReaderTests: XCTestCase {
         XCTAssertEqual(tags, [0x0001])
     }
 
+    // MARK: - Picture descriptor — stored vs display rectangle
+
+    func testParsePictureDescriptorReportsDisplayRectangleOverPaddedStoredHeight() {
+        func u32(_ v: UInt32) -> Data { withUnsafeBytes(of: v.bigEndian) { Data($0) } }
+        // XAVC 1080p: StoredHeight is macroblock-padded to 1088.
+        var body = localTagLV(0x3202, value: u32(1088))
+        body.append(localTagLV(0x3203, value: u32(1920)))
+        body.append(localTagLV(0x3208, value: u32(1080)))
+        body.append(localTagLV(0x3209, value: u32(1920)))
+        body.append(localTagLV(0x320E, value: u32(16) + u32(9)))
+        var stream = VideoStream(index: 0)
+        var duration: TimeInterval? = nil
+        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+        XCTAssertEqual(stream.width, 1920)
+        XCTAssertEqual(stream.height, 1080)
+        XCTAssertEqual(stream.displayWidth, 1920)
+        XCTAssertEqual(stream.pixelAspectRatio?.0, 1)
+        XCTAssertEqual(stream.pixelAspectRatio?.1, 1)
+    }
+
     // MARK: - B. Picture descriptor — codec UL mapping
 
     func testParsePictureDescriptorMapsAVCULToAvc1() {

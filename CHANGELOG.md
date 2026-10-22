@@ -17,6 +17,9 @@ the CLI; the library target follows the same numbering.
   XAVC clip now parses in ~20 ms. Essence KLVs are also no longer peeked, and
   the NRT/ARRI fallback scan is limited to the header metadata. Files without
   a valid partition index keep the previous full walk.
+- MXF picture dimensions now use the descriptor's display rectangle when it is
+  smaller than the stored (coding-block padded) one, matching ffprobe. XAVC
+  1080p was reported as 1920×1088 with a 136:135 pixel aspect ratio.
 
 ## [3.0.2] — 2026-10-02
 
