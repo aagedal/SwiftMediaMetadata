@@ -83,6 +83,80 @@ final class MXFFileCursorTests: XCTestCase {
         }
     }
 
+    /// Frame-wrapped layout: header partition with essence (one picture +
+    /// one sound KLV per frame), then a footer partition carrying metadata.
+    private func frameWrappedMXF(frames: Int, rip: Bool, footerPointer: Bool) -> (data: Data, footerStart: Int) {
+        func u64(_ v: Int) -> Data { withUnsafeBytes(of: UInt64(v).bigEndian) { Data($0) } }
+        func pack(_ kind: UInt8, this: Int, previous: Int, footer: Int) -> Data {
+            var value = Data([0, 1, 0, 3, 0, 0, 0, 1])
+            value += u64(this) + u64(previous) + u64(footer)
+            value += u64(0) + u64(0) + Data([0, 0, 0, 0])
+            value += u64(0) + Data([0, 0, 0, 1])
+            value += Data(repeating: 0, count: 16) + Data([0, 0, 0, 0, 0, 0, 0, 16])
+            return klv(Data([0x06,0x0E,0x2B,0x34,0x02,0x05,0x01,0x01,0x0D,0x01,0x02,0x01,0x01,kind,0x04,0x00]), value)
+        }
+        let picture = Data([0x06,0x0E,0x2B,0x34,0x01,0x02,0x01,0x01,0x0D,0x01,0x03,0x01,0x15,0x01,0x05,0x01])
+        let sound = Data([0x06,0x0E,0x2B,0x34,0x01,0x02,0x01,0x01,0x0D,0x01,0x03,0x01,0x16,0x01,0x01,0x01])
+        var essence = Data()
+        for _ in 0..<frames {
+            essence += klv(picture, Data(repeating: 0x11, count: 2048)) + klv(sound, Data(repeating: 0x22, count: 256))
+        }
+        let headerLength = pack(0x02, this: 0, previous: 0, footer: 0).count
+        let footerStart = headerLength + essence.count
+        var data = pack(0x02, this: 0, previous: 0, footer: footerPointer ? footerStart : 0) + essence
+        data += pack(0x04, this: footerStart, previous: 0, footer: footerStart)
+        data += klv(Data(repeating: 0xAA, count: 16), xml)
+        if rip {
+            let entries = Data([0, 0, 0, 1]) + u64(0) + Data([0, 0, 0, 0]) + u64(footerStart)
+            let ripKey = Data([0x06,0x0E,0x2B,0x34,0x02,0x05,0x01,0x01,0x0D,0x01,0x02,0x01,0x01,0x11,0x01,0x00])
+            let length = entries.count + 4
+            let total = 16 + ber(length).count + length
+            data += ripKey + ber(length) + entries + withUnsafeBytes(of: UInt32(total).bigEndian) { Data($0) }
+        }
+        return (data, footerStart)
+    }
+
+    private func parseCountingReads(_ data: Data) throws -> (VideoMetadata, requests: [(Int, Int)]) {
+        var result: (VideoMetadata, [(Int, Int)])!
+        try withFile(data) { url in
+            var cursor = try MXFFileCursor(url: url)
+            var reads: [(Int, Int)] = []
+            cursor.onRead = { reads.append(($0, $1)) }
+            result = (try MXFReader.parse(cursor: &cursor), reads)
+        }
+        return result
+    }
+
+    func testFrameWrappedEssenceSkippedViaRandomIndexPack() throws {
+        let (data, footerStart) = frameWrappedMXF(frames: 500, rip: true, footerPointer: false)
+        let (metadata, reads) = try parseCountingReads(data)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "Late FX6")
+        // Only the first essence KLV's key and BER length are read.
+        let firstEssenceKLVEnd = 16 + 1 + 88 + 16 + 3
+        XCTAssertFalse(reads.contains { $0.0 >= firstEssenceKLVEnd && $0.0 < footerStart },
+                       "No read may land inside the skipped essence")
+        XCTAssertLessThan(reads.count, 40)
+        try assertMXFFileParity(data)
+    }
+
+    func testFrameWrappedEssenceSkippedViaFooterChainWithoutRIP() throws {
+        let (data, footerStart) = frameWrappedMXF(frames: 500, rip: false, footerPointer: true)
+        let (metadata, reads) = try parseCountingReads(data)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "Late FX6")
+        XCTAssertFalse(reads.contains { $0.0 >= 16 + 1 + 88 + 16 + 3 && $0.0 < footerStart })
+        try assertMXFFileParity(data)
+    }
+
+    func testInvalidRIPFallsBackToFullWalk() throws {
+        var (data, _) = frameWrappedMXF(frames: 20, rip: true, footerPointer: false)
+        // Point the footer entry at the middle of the essence.
+        let entryOffset = data.count - 4 - 8
+        data.replaceSubrange(entryOffset..<entryOffset + 8, with: withUnsafeBytes(of: UInt64(300).bigEndian) { Data($0) })
+        XCTAssertNil({ var r = BinaryReader(data: data); return MXFReader.partitionOffsets(&r) }())
+        let metadata = try parseMXFWithFileParity(data)
+        XCTAssertEqual(metadata.camera?.deviceModelName, "Late FX6")
+    }
+
     func testLateDurationAndTimecodeEncounterOrder() throws {
         func timecode(_ start: UInt64) -> Data {
             local(0x1501, withUnsafeBytes(of: start.bigEndian) { Data($0) })

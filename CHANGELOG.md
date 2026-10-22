@@ -6,6 +6,21 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [3.0.3] — 2026-10-22
+
+### Fixed
+
+- MXF parsing now jumps over essence using the Random Index Pack (or the
+  footer's PreviousPartition chain) instead of visiting every frame's KLVs.
+  Frame-wrapped XAVC/XDCAM clips previously cost one small read per KLV across
+  the whole file — seconds on SSD and far longer on camera cards; a 16 GB
+  XAVC clip now parses in ~20 ms. Essence KLVs are also no longer peeked, and
+  the NRT/ARRI fallback scan is limited to the header metadata. Files without
+  a valid partition index keep the previous full walk.
+- MXF picture dimensions now use the descriptor's display rectangle when it is
+  smaller than the stored (coding-block padded) one, matching ffprobe. XAVC
+  1080p was reported as 1920×1088 with a 136:135 pixel aspect ratio.
+
 ## [3.0.2] — 2026-10-02
 
 ### Fixed
