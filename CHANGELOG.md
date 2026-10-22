@@ -6,6 +6,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [Unreleased]
+
+### Fixed
+
+- MXF parsing now jumps over essence using the Random Index Pack (or the
+  footer's PreviousPartition chain) instead of visiting every frame's KLVs.
+  Frame-wrapped XAVC/XDCAM clips previously cost one small read per KLV across
+  the whole file — seconds on SSD and far longer on camera cards; a 16 GB
+  XAVC clip now parses in ~20 ms. Essence KLVs are also no longer peeked, and
+  the NRT/ARRI fallback scan is limited to the header metadata. Files without
+  a valid partition index keep the previous full walk.
+
 ## [3.0.2] — 2026-10-02
 
 ### Fixed

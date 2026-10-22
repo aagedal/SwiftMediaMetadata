@@ -60,9 +60,11 @@ public struct MXFReader: Sendable {
         return try parse(cursor: &reader)
     }
 
-    /// Read an MXF without mapping or retaining its essence payload. The full
-    /// KLV walk still includes metadata after essence; only values classified
-    /// as metadata (at most 32 MiB) and the 16 MiB fallback prefix are loaded.
+    /// Read an MXF without mapping or retaining its essence payload. When the
+    /// partition layout is known (RIP or footer chain) the walk jumps from a
+    /// partition's first essence KLV to the next partition, so metadata after
+    /// essence is still read; only values classified as metadata (at most
+    /// 32 MiB) and the header-metadata fallback prefix are loaded.
     public static func parse(from url: URL) throws -> VideoMetadata {
         var reader = try MXFFileCursor(url: url)
         let metadata = try parse(cursor: &reader)
@@ -89,8 +91,16 @@ public struct MXFReader: Sendable {
         // tag map + per-subdescriptor parsed fields + per-track SubDescriptors
         // UID arrays). Filled inside the loop, resolved after the loop.
         var mca = MCAState()
+        // Partition offsets (from the Random Index Pack or the footer's
+        // PreviousPartition chain) let the walk jump over a partition's
+        // essence instead of visiting every frame's KLVs. Frame-wrapped
+        // XAVC/XDCAM files carry ~10 KLVs per frame, so without this a
+        // probe touches the whole file — slow on camera cards.
+        let partitions = partitionOffsets(&reader)
+        var firstEssenceOffset: Int?
 
         while reader.remainingCount >= 17 {
+            let keyStart = reader.offset
             let key: Data
             let length: Int
             do {
@@ -106,6 +116,19 @@ public struct MXFReader: Sendable {
             guard length <= reader.remainingCount else { break }
 
             let valueStart = reader.offset
+
+            // Essence never carries the metadata we read: skip it without a
+            // peek, and when partitions are known skip to the next partition.
+            if isEssenceElementKey(key), !isC2PAKey(key) {
+                if firstEssenceOffset == nil { firstEssenceOffset = keyStart }
+                if let partitions {
+                    guard let next = partitions.first(where: { $0 > keyStart }) else { break }
+                    try reader.seek(to: next)
+                } else {
+                    try reader.seek(to: valueStart + length)
+                }
+                continue
+            }
             let peekCount = min(length, klvPeekBytes)
             let peek: Data
             do { peek = try reader.slice(from: valueStart, count: peekCount) }
@@ -238,9 +261,11 @@ public struct MXFReader: Sendable {
             }
         }
 
-        // Both fallbacks already restrict their search to the first 16 MiB.
-        // Materialize that prefix once, after KLV scratch values are released.
-        let prefix = try reader.slice(from: 0, count: min(reader.count, nrtScanWindow))
+        // Both fallbacks already restrict their search to the first 16 MiB,
+        // and to the header metadata when essence was seen. Materialize that
+        // prefix once, after KLV scratch values are released.
+        let prefixLimit = min(reader.count, nrtScanWindow, firstEssenceOffset ?? .max)
+        let prefix = try reader.slice(from: 0, count: prefixLimit)
         // Fallback: Sony XDCAM/XAVC writers often wrap NRT XML inside an
         // RP 2057 XML Document Set whose value is a local-tag/length/value
         // sequence — the XML bytes therefore live *inside* a KLV value, not
@@ -523,6 +548,111 @@ public struct MXFReader: Sendable {
         } catch {
             metadata.warnings.append("MXF C2PA parse error: \(error)")
         }
+    }
+
+    // MARK: - Partitions
+
+    /// Partition pack key prefix (SMPTE 377-1): header 0x02, body 0x03,
+    /// footer 0x04 in byte 13.
+    private static let partitionPackPrefix: [UInt8] = [
+        0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01,
+        0x0D, 0x01, 0x02, 0x01, 0x01,
+    ]
+
+    /// Random Index Pack key (SMPTE 377-1 section 12).
+    private static let randomIndexPackKey: [UInt8] = [
+        0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01,
+        0x0D, 0x01, 0x02, 0x01, 0x01, 0x11, 0x01, 0x00,
+    ]
+
+    /// MXF Generic Container essence element (picture, sound, data and
+    /// system items): 06.0E.2B.34.xx.xx.xx.xx.0D.01.03.01.
+    static func isEssenceElementKey(_ key: Data) -> Bool {
+        guard key.count >= 12 else { return false }
+        let s = key.startIndex
+        return key[s] == 0x06 && key[s + 1] == 0x0E && key[s + 2] == 0x2B && key[s + 3] == 0x34
+            && key[s + 8] == 0x0D && key[s + 9] == 0x01 && key[s + 10] == 0x03 && key[s + 11] == 0x01
+    }
+
+    /// Sorted absolute offsets of every partition after the header, or nil
+    /// when they can't be established reliably (then the walk visits every
+    /// KLV as before). Offsets are validated against partition pack keys.
+    static func partitionOffsets<C: MXFByteCursor>(_ reader: inout C) -> [Int]? {
+        let offsets = ripPartitionOffsets(&reader) ?? footerChainPartitionOffsets(&reader)
+        guard let offsets else { return nil }
+        let sorted = Array(Set(offsets)).sorted()
+        for offset in sorted {
+            guard offset > 0, offset <= reader.count - 16,
+                  let key = try? reader.slice(from: offset, count: 16),
+                  hasPrefix(key, partitionPackPrefix) else { return nil }
+        }
+        return sorted
+    }
+
+    private static func ripPartitionOffsets<C: MXFByteCursor>(_ reader: inout C) -> [Int]? {
+        guard reader.count >= 20,
+              let tail = try? reader.slice(from: reader.count - 4, count: 4) else { return nil }
+        let ripLength = tail.reduce(0) { ($0 << 8) | Int($1) }
+        guard ripLength >= 20, ripLength <= reader.count,
+              let rip = try? reader.slice(from: reader.count - ripLength, count: ripLength),
+              hasPrefix(rip, randomIndexPackKey) else { return nil }
+        var ripReader = BinaryReader(data: rip)
+        guard (try? ripReader.seek(to: 16)) != nil,
+              let length = try? readBERLength(&ripReader),
+              length == ripReader.remainingCount, length >= 4, (length - 4) % 12 == 0 else { return nil }
+        var offsets: [Int] = []
+        for _ in 0..<((length - 4) / 12) {
+            guard (try? ripReader.readBytes(4)) != nil,
+                  let raw = try? ripReader.readBytes(8) else { return nil }
+            let offset = raw.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            guard offset <= UInt64(Int.max) else { return nil }
+            offsets.append(Int(offset))
+        }
+        return offsets.filter { $0 > 0 }
+    }
+
+    /// Fallback for files without a RIP: follow PreviousPartition links back
+    /// from the footer named in the header partition pack.
+    private static func footerChainPartitionOffsets<C: MXFByteCursor>(_ reader: inout C) -> [Int]? {
+        guard let header = partitionPackFields(&reader, at: 0),
+              header.footer > 0 else { return nil }
+        var offsets: [Int] = []
+        var current = header.footer
+        while current > 0 {
+            guard offsets.count < 100_000, !offsets.contains(current),
+                  let fields = partitionPackFields(&reader, at: current),
+                  fields.this == current, fields.previous < current else { return nil }
+            offsets.append(current)
+            current = fields.previous
+        }
+        return offsets
+    }
+
+    private static func partitionPackFields<C: MXFByteCursor>(
+        _ reader: inout C, at offset: Int
+    ) -> (this: Int, previous: Int, footer: Int)? {
+        // Key (16) + BER length (up to 9) + version/KAG (8) + 3 × UInt64.
+        guard offset >= 0, offset <= reader.count - 16,
+              let bytes = try? reader.slice(from: offset, count: min(64, reader.count - offset)),
+              hasPrefix(bytes, partitionPackPrefix) else { return nil }
+        var packReader = BinaryReader(data: bytes)
+        guard (try? packReader.seek(to: 16)) != nil,
+              (try? readBERLength(&packReader)) != nil,
+              (try? packReader.readBytes(8)) != nil,
+              let fields = try? packReader.readBytes(24) else { return nil }
+        func value(_ index: Int) -> Int? {
+            let raw = fields.dropFirst(index * 8).prefix(8).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            return raw <= UInt64(Int.max) ? Int(raw) : nil
+        }
+        guard let this = value(0), let previous = value(1), let footer = value(2) else { return nil }
+        return (this, previous, footer)
+    }
+
+    private static func hasPrefix(_ data: Data, _ prefix: [UInt8]) -> Bool {
+        guard data.count >= prefix.count else { return false }
+        let s = data.startIndex
+        for (i, b) in prefix.enumerated() where data[s + i] != b { return false }
+        return true
     }
 
     // MARK: - BER length
