@@ -6,6 +6,15 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [3.1.0] — 2026-10-30
+
+### Added
+
+- Matroska `Attachments` are now exposed as `VideoMetadata.attachments`
+  (`AttachmentStream`: file name, MIME type, description, size, UID). Indices
+  follow ffmpeg's attachment stream numbering, so callers can address fonts
+  shipped for ASS/SSA subtitles with `t:<index>` specifiers.
+
 ## [3.0.3] — 2026-10-22
 
 ### Fixed
