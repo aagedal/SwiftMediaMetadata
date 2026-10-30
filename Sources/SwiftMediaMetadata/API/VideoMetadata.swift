@@ -69,6 +69,10 @@ public struct VideoMetadata: Sendable {
     /// text-track chapters; Matroska `Chapters` master element). Ordered by
     /// `startTime`. Empty when the container exposes no chapter information.
     public var chapters: [VideoChapter]
+    /// Files attached to the container (Matroska `Attachments`), typically
+    /// fonts referenced by ASS/SSA subtitles. Ordered as ffmpeg exposes them
+    /// as `codec_type=attachment` streams. Empty for other containers.
+    public var attachments: [AttachmentStream]
     /// Overall container bit rate in bits/second, when the container advertises one.
     public var bitRate: Int?
     public var title: String?
@@ -128,6 +132,7 @@ public struct VideoMetadata: Sendable {
         self.streamOrder = []
         self.timecodes = []
         self.chapters = []
+        self.attachments = []
         self.cameraTimeline = []
     }
 

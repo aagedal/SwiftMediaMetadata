@@ -96,6 +96,42 @@ final class MatroskaReaderTests: XCTestCase {
         XCTAssertNil(m.chapters[2].endTime)
     }
 
+    /// Matroska `Attachments` > `AttachedFile` — fonts shipped for ASS
+    /// subtitles. An entry without a MIME type is skipped (as ffmpeg does) so
+    /// indices stay aligned with ffmpeg's `t:<n>` attachment streams.
+    func testMKVAttachmentsDecode() throws {
+        func attachedFile(name: String, mime: String?, description: String?, uid: UInt64, bytes: Int) -> Data {
+            var payload = Data()
+            if let description {
+                payload.append(ebmlElement(id: [0x46, 0x7E], payload: Data(description.utf8)))  // FileDescription
+            }
+            payload.append(ebmlElement(id: [0x46, 0x6E], payload: Data(name.utf8)))             // FileName
+            if let mime {
+                payload.append(ebmlElement(id: [0x46, 0x60], payload: Data(mime.utf8)))         // FileMimeType
+            }
+            payload.append(ebmlElement(id: [0x46, 0x5C], payload: Data(repeating: 0xAB, count: bytes))) // FileData
+            payload.append(ebmlElement(id: [0x46, 0xAE], payload: encodeUInt(uid)))             // FileUID
+            return ebmlElement(id: [0x61, 0xA7], payload: payload)                               // AttachedFile
+        }
+        var ebmlPayload = Data()
+        ebmlPayload.append(ebmlElement(id: [0x42, 0x82], payload: Data("matroska".utf8)))      // DocType
+        let ebmlHeader = ebmlElement(id: [0x1A, 0x45, 0xDF, 0xA3], payload: ebmlPayload)
+        let files = attachedFile(name: "Karaoke.ttf", mime: "font/ttf", description: "Lyrics", uid: 7, bytes: 32)
+            + attachedFile(name: "Broken.otf", mime: nil, description: nil, uid: 8, bytes: 16)
+            + attachedFile(name: "Signs.otf", mime: "application/vnd.ms-opentype", description: nil, uid: 9, bytes: 12)
+        let attachments = ebmlElement(id: [0x19, 0x41, 0xA4, 0x69], payload: files)             // Attachments
+        let segment = ebmlElement(id: [0x18, 0x53, 0x80, 0x67], payload: attachments)          // Segment
+
+        let m = try VideoMetadata.read(from: ebmlHeader + segment)
+        XCTAssertEqual(m.attachments.map(\.index), [0, 1])
+        XCTAssertEqual(m.attachments.map(\.fileName), ["Karaoke.ttf", "Signs.otf"])
+        XCTAssertEqual(m.attachments.map(\.mimeType), ["font/ttf", "application/vnd.ms-opentype"])
+        XCTAssertEqual(m.attachments.map(\.size), [32, 12])
+        XCTAssertEqual(m.attachments[0].fileDescription, "Lyrics")
+        XCTAssertEqual(m.attachments[0].uid, 7)
+        XCTAssertNil(m.attachments[1].fileDescription)
+    }
+
     /// A hidden chapter atom (ChapterFlagHidden=1) is dropped on the floor —
     /// matches ffprobe's behaviour. The remaining chapters are re-indexed so
     /// their `index` field is contiguous.

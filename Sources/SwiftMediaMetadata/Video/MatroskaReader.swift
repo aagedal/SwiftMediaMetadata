@@ -97,6 +97,7 @@ public struct MatroskaReader: Sendable {
         var tagsBlocks: [(start: Int, end: Int)] = []
         var clusterBlocks: [(start: Int, end: Int)] = []
         var chaptersBlocks: [(start: Int, end: Int)] = []
+        var attachmentsBlocks: [(start: Int, end: Int)] = []
 
         while reader.offset < end, reader.remainingCount >= 2 {
             guard let id = try? readEBMLID(&reader),
@@ -127,7 +128,9 @@ public struct MatroskaReader: Sendable {
                 }
             case 0x1043A770: // Chapters (top-level in Segment)
                 chaptersBlocks.append((childStart, childEnd))
-            case 0x1C53BB6B, 0x1941A469: // Cues, Attachments
+            case 0x1941A469: // Attachments
+                attachmentsBlocks.append((childStart, childEnd))
+            case 0x1C53BB6B: // Cues
                 break
             default:
                 break
@@ -146,6 +149,10 @@ public struct MatroskaReader: Sendable {
         // the single top-level `chapters` list, mirroring ffprobe behaviour.
         for (s, e) in chaptersBlocks {
             parseChapters(data, from: s, end: e, into: &metadata)
+        }
+
+        for (s, e) in attachmentsBlocks {
+            parseAttachments(data, from: s, end: e, into: &metadata)
         }
 
         // Clear stale shared BPS / NUMBER_OF_FRAMES tags BEFORE the cluster
@@ -1690,6 +1697,77 @@ public struct MatroskaReader: Sendable {
         for i in 0..<metadata.chapters.count {
             metadata.chapters[i].index = i
         }
+    }
+
+    /// Attachments master (0x1941A469) > AttachedFile (0x61A7). Entries
+    /// missing a name, MIME type or payload are skipped, as ffmpeg does, so
+    /// `index` stays aligned with ffmpeg's attachment stream numbering.
+    private static func parseAttachments(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        into metadata: inout VideoMetadata
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let childStart = reader.offset
+            let childEnd = childStart + Int(size)
+            if id == 0x61A7 { // AttachedFile
+                parseAttachedFile(data, from: childStart, end: childEnd, into: &metadata)
+            }
+            if (try? reader.seek(to: childEnd)) == nil { return }
+        }
+    }
+
+    private static func parseAttachedFile(
+        _ data: Data,
+        from start: Int,
+        end: Int,
+        into metadata: inout VideoMetadata
+    ) {
+        var reader = BinaryReader(data: data)
+        (try? reader.seek(to: start)) ?? ()
+
+        var fileName: String?
+        var mimeType: String?
+        var fileDescription: String?
+        var payloadSize = 0
+        var uid: UInt64?
+
+        while reader.offset < end {
+            guard let id = try? readEBMLID(&reader),
+                  let size = try? readVINT(&reader),
+                  reader.offset + Int(size) <= end else { break }
+            let s = reader.offset
+            let sz = Int(size)
+            switch id {
+            case 0x466E: fileName = readStringPayload(data, offset: s, size: sz)        // FileName
+            case 0x4660: mimeType = readStringPayload(data, offset: s, size: sz)        // FileMimeType
+            case 0x467E: fileDescription = readStringPayload(data, offset: s, size: sz) // FileDescription
+            case 0x465C: payloadSize = sz                                               // FileData
+            case 0x46AE: uid = readUIntPayload(data, offset: s, size: sz)               // FileUID
+            default: break
+            }
+            if (try? reader.seek(to: s + sz)) == nil { break }
+        }
+
+        guard let fileName, !fileName.isEmpty,
+              let mimeType, !mimeType.isEmpty,
+              payloadSize > 0 else { return }
+        var attachment = AttachmentStream(
+            index: metadata.attachments.count,
+            fileName: fileName,
+            mimeType: mimeType,
+            size: payloadSize
+        )
+        attachment.fileDescription = fileDescription
+        attachment.uid = uid
+        metadata.attachments.append(attachment)
     }
 
     private static func parseEditionEntry(

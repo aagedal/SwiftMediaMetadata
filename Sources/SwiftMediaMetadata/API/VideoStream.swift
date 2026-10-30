@@ -519,6 +519,26 @@ public struct DataStream: Sendable, Equatable {
     }
 }
 
+/// A file attached to the container (Matroska `AttachedFile`), such as a font
+/// used by ASS/SSA subtitles. `index` is the position among attachments and
+/// matches ffmpeg's `t:<index>` stream specifier.
+public struct AttachmentStream: Sendable, Equatable {
+    public var index: Int
+    public var fileName: String
+    public var mimeType: String
+    public var fileDescription: String?
+    /// Size of the attached payload in bytes.
+    public var size: Int
+    public var uid: UInt64?
+
+    public init(index: Int, fileName: String, mimeType: String, size: Int) {
+        self.index = index
+        self.fileName = fileName
+        self.mimeType = mimeType
+        self.size = size
+    }
+}
+
 /// Discriminated locator for a per-track stream in `VideoMetadata.streamOrder`.
 /// The associated value is the index into the matching typed array.
 public enum StreamKind: Sendable, Equatable {
