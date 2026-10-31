@@ -6,6 +6,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [3.1.1] — 2026-10-31
+
+### Fixed
+
+- ProRes 4444 / 4444 XQ (`ap4h` / `ap4x`) in MOV/MP4 no longer always report
+  `pixelFormat = "yuva444p12le"`. Alpha is optional in 4444, and most camera
+  and grading masters are opaque. The VisualSampleEntry depth now decides it:
+  32 means alpha (`yuva444p12le`), 24 means opaque (`yuv444p12le`). For any
+  other depth the first frame header's `alpha_channel_type` decides, as in
+  ffprobe; this is a 26-byte read from the mapped file. Without either signal
+  the stream is reported opaque. `hasAlphaChannel` is now set for these
+  streams as well.
+- The sample-entry depth is no longer read as `bitDepth` for ProRes, so
+  4444 stays at 12 bits.
+- FourCC-derived profile, chroma and bit-depth defaults (ProRes, ProRes RAW,
+  APV) now apply to sample entries that have no child boxes.
+
 ## [3.1.0] — 2026-10-30
 
 ### Added

@@ -59,10 +59,15 @@ extension MP4Parser {
         // Most codecs advertise 0x18 (24 = packed RGB 8-bit) here; higher-bit-depth
         // values are rare and unreliable — the codec-specific config box (hvcC,
         // av1C, prores atom …) is the real source of truth, parsed below.
+        // ProRes uses the field as a pixel depth (24 = opaque, 32 = alpha), not
+        // bits per component, so it never feeds bitDepth there.
+        var sampleEntryDepth: Int?
         if stsdData.count >= payloadBase + 76 {
             if (try? reader.seek(to: payloadBase + 74)) != nil,
                let depth = try? reader.readUInt16BigEndian() {
-                if depth > 0, depth != 0x18, depth % 3 == 0, depth <= 96 {
+                sampleEntryDepth = Int(depth)
+                if !isProResFourCC(codec),
+                   depth > 0, depth != 0x18, depth % 3 == 0, depth <= 96 {
                     stream.bitDepth = Int(depth / 3)
                 }
             }
@@ -72,21 +77,40 @@ extension MP4Parser {
         // start 8 bytes after the fixed VisualSampleEntry header at payloadBase + 78.
         let entryEnd = entryStart + Int(entrySize32)
         let childrenStart = payloadBase + 78
-        guard childrenStart < entryEnd, entryEnd <= stsdData.count else { return }
-
-        let childrenData = Data(
-            stsdData[(stsdData.startIndex + childrenStart) ..< (stsdData.startIndex + entryEnd)]
-        )
-        if let kids = try? ISOBMFFBoxReader.parseBoxes(from: childrenData) {
-            for kid in kids {
-                applyVisualChildBox(kid, into: &stream)
+        if childrenStart < entryEnd, entryEnd <= stsdData.count {
+            let childrenData = Data(
+                stsdData[(stsdData.startIndex + childrenStart) ..< (stsdData.startIndex + entryEnd)]
+            )
+            if let kids = try? ISOBMFFBoxReader.parseBoxes(from: childrenData) {
+                for kid in kids {
+                    applyVisualChildBox(kid, into: &stream)
+                }
             }
         }
 
         // Sample entries whose FourCC uniquely identifies the codec variant
         // (ProRes, APV, ProRes RAW) can skip frame-header parsing entirely —
         // fill in profile/chroma/bit_depth from the FourCC.
-        applyFourCCDefaults(codec, into: &stream)
+        applyFourCCDefaults(codec, sampleEntryDepth: sampleEntryDepth, into: &stream)
+    }
+
+    static func isProResFourCC(_ codec: String) -> Bool {
+        switch codec {
+        case "apco", "apcs", "apcn", "apch", "ap4h", "ap4x": return true
+        default: return false
+        }
+    }
+
+    /// ProRes 4444 / 4444 XQ: alpha is optional. QuickTime writers signal it
+    /// through the VisualSampleEntry depth (32 = alpha, 24 = opaque). Any
+    /// other value is inconclusive — `MP4Parser.applyProRes4444FrameHeaderAlpha`
+    /// then checks the first frame header, the field ffprobe decides from.
+    static func proRes4444HasAlpha(sampleEntryDepth depth: Int?) -> Bool? {
+        switch depth {
+        case 32: return true
+        case 24: return false
+        default: return nil
+        }
     }
 
     static func applyVisualChildBox(_ box: ISOBMFFBox, into stream: inout VideoStream) {
@@ -200,12 +224,60 @@ extension MP4Parser {
         }
     }
 
+    /// Fallback for ProRes 4444 / 4444 XQ tracks whose sample-entry depth
+    /// didn't settle alpha: read the first frame header (26 bytes at the first
+    /// chunk offset — the file is memory-mapped, so this touches one page).
+    /// Frame layout (SMPTE RDD 36): frame_size(4) + 'icpf'(4), then the frame
+    /// header — header_size(2) … alpha_channel_type in the low nibble of
+    /// header byte 17. Non-zero means alpha, as in ffmpeg's decoder.
+    static func applyProRes4444FrameHeaderAlpha(
+        stblChildren: [ISOBMFFBox],
+        fullData: Data,
+        into stream: inout VideoStream
+    ) {
+        guard stream.codec == "ap4h" || stream.codec == "ap4x",
+              stream.hasAlphaChannel == nil else { return }
+        let chunkOffset: UInt64? = {
+            if let co64 = stblChildren.first(where: { $0.type == "co64" }) {
+                return parseCO64First(co64.data)
+            }
+            if let stco = stblChildren.first(where: { $0.type == "stco" }) {
+                return parseSTCOFirst(stco.data).map(UInt64.init)
+            }
+            return nil
+        }()
+        guard let offset = chunkOffset,
+              let hasAlpha = proResFrameHeaderHasAlpha(at: offset, in: fullData) else { return }
+        stream.hasAlphaChannel = hasAlpha
+        // Only replace the opaque default applyFourCCDefaults chose.
+        if hasAlpha, stream.pixelFormat == "yuv444p12le" {
+            stream.pixelFormat = "yuva444p12le"
+        }
+    }
+
+    static func proResFrameHeaderHasAlpha(at offset: UInt64, in fullData: Data) -> Bool? {
+        // Bound in UInt64 space first: a crafted co64 value past Int.max
+        // would trap in `Int(offset)`.
+        guard offset <= UInt64(Int.max) else { return nil }
+        let s = Int(offset)
+        guard s <= fullData.count - 26 else { return nil }
+        let b = fullData.startIndex + s
+        guard fullData[(b + 4) ..< (b + 8)].elementsEqual("icpf".utf8) else { return nil }
+        let headerSize = (Int(fullData[b + 8]) << 8) | Int(fullData[b + 9])
+        guard headerSize >= 18 else { return nil }
+        return fullData[b + 8 + 17] & 0x0F != 0
+    }
+
     /// Deterministic pix_fmt / profile / bit_depth for codecs whose sample
     /// entry FourCC uniquely identifies the subcodec — notably ProRes, APV
     /// and ProRes RAW. ffprobe reads the same fields from the frame header,
     /// but every FourCC here maps 1:1 so surfacing them from the container
     /// side matches ffprobe's output without any bitstream parsing.
-    static func applyFourCCDefaults(_ codec: String, into stream: inout VideoStream) {
+    static func applyFourCCDefaults(
+        _ codec: String,
+        sampleEntryDepth: Int? = nil,
+        into stream: inout VideoStream
+    ) {
         switch codec {
         // Apple ProRes (SMPTE RP 2019)
         case "apco": // 422 Proxy
@@ -224,16 +296,17 @@ extension MP4Parser {
             stream.profile = stream.profile ?? "HQ"
             stream.chromaSubsampling = stream.chromaSubsampling ?? "4:2:2"
             stream.bitDepth = stream.bitDepth ?? 10
-        case "ap4h": // 4444 — always carries alpha, 12-bit YUV
-            stream.profile = stream.profile ?? "4444"
+        case "ap4h", "ap4x": // 4444 / 4444 XQ — 12-bit YUV, alpha optional
+            stream.profile = stream.profile ?? (codec == "ap4h" ? "4444" : "4444XQ")
             stream.chromaSubsampling = stream.chromaSubsampling ?? "4:4:4"
             stream.bitDepth = stream.bitDepth ?? 12
-            stream.pixelFormat = stream.pixelFormat ?? "yuva444p12le"
-        case "ap4x": // 4444 XQ
-            stream.profile = stream.profile ?? "4444XQ"
-            stream.chromaSubsampling = stream.chromaSubsampling ?? "4:4:4"
-            stream.bitDepth = stream.bitDepth ?? 12
-            stream.pixelFormat = stream.pixelFormat ?? "yuva444p12le"
+            // Most camera and grading masters are opaque, so an inconclusive
+            // depth falls back to the opaque format (as ffprobe does when the
+            // frame header's alpha_channel_type is 0).
+            let hasAlpha = proRes4444HasAlpha(sampleEntryDepth: sampleEntryDepth)
+            stream.hasAlphaChannel = stream.hasAlphaChannel ?? hasAlpha
+            stream.pixelFormat = stream.pixelFormat
+                ?? (hasAlpha == true ? "yuva444p12le" : "yuv444p12le")
         // Apple ProRes RAW
         case "aprn":
             stream.profile = stream.profile ?? "RAW"

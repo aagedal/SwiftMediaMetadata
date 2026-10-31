@@ -68,6 +68,7 @@ public struct MP4Parser: Sendable {
                 trak.data,
                 movieTimescale: movieTimescale,
                 chapterTrackIDs: chapterReferencedTrackIDs,
+                fullData: data,
                 into: &metadata
             )
         }
