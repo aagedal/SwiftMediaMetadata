@@ -1,10 +1,10 @@
-# SwiftMediaMetadata 3.1.0 release checklist
+# SwiftMediaMetadata 3.1.1 release checklist
 
-- [x] Matroska `Attachments` exposed as `VideoMetadata.attachments`, skipping
-  incomplete entries so indices match ffmpeg's `t:<n>` attachment streams.
-- [x] Verified against an ffmpeg-muxed MKV with three font attachments (names,
-  MIME types and payload sizes match ffmpeg).
-- [x] Set CLI version, README and changelog to 3.1.0.
+- [x] ProRes 4444 / 4444 XQ alpha follows the sample-entry depth (32 alpha,
+  24 opaque), falling back to the first frame header's alpha_channel_type.
+- [x] Verified against ffmpeg-encoded `ap4h` / `ap4x` MOVs with and without
+  alpha, including copies with the depth zeroed: `pixelFormat` matches ffprobe.
+- [x] Set CLI version, README and changelog to 3.1.1.
 - [x] Run complete release preflight on the final release tree.
 - [ ] Merge the reviewed release changes into `main` before tagging. The release
   workflow rejects tags whose commits are not in `main`'s history.

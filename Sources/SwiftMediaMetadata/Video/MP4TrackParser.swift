@@ -17,6 +17,7 @@ extension MP4Parser {
         _ data: Data,
         movieTimescale: UInt32,
         chapterTrackIDs: Set<UInt32> = [],
+        fullData: Data? = nil,
         into metadata: inout VideoMetadata
     ) {
         guard let children = try? ISOBMFFBoxReader.parseBoxes(from: data) else { return }
@@ -174,6 +175,11 @@ extension MP4Parser {
             stream.isDefault = tkhdIsDefault
             stream.rotation = tkhdRotation
             parseVisualSampleEntry(stsdBox.data, into: &stream)
+            if let fullData {
+                applyProRes4444FrameHeaderAlpha(
+                    stblChildren: stblChildren, fullData: fullData, into: &stream
+                )
+            }
             // Blackmagic RAW: pull the three uint32 codec-config atoms
             // (bfdn / ctrn / bver) out of the BRAW sample entry's child
             // boxes and surface them next to the moov.meta clip slate.

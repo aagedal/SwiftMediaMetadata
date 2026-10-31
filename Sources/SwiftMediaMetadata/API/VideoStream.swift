@@ -180,8 +180,10 @@ public struct VideoStream: Sendable, Equatable {
     /// captions (detected from H.264/HEVC SEI A/53 user-data wrappers, or
     /// from MP4 `\u{a9}cca` / Matroska CodecPrivate hints).
     public var hasClosedCaptions: Bool?
-    /// True when the stream signals an alpha (transparency) channel via the
-    /// HEVC `alpha_channel_info` SEI message.
+    /// True when the stream signals an alpha (transparency) channel: the
+    /// HEVC `alpha_channel_info` SEI message, or ProRes 4444 / 4444 XQ with a
+    /// 32-bit sample-entry depth or a non-zero frame-header alpha_channel_type.
+    /// False for ProRes 4444 known to be opaque; nil when nothing signals it.
     public var hasAlphaChannel: Bool?
 
     public init(index: Int) {

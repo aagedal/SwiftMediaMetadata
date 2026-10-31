@@ -744,6 +744,147 @@ final class MP4ParserTests: XCTestCase {
         return writer.data
     }
 
+    // MARK: - ProRes 4444 alpha
+
+    /// Opaque 4444 masters carry depth 24 and must not be reported with an
+    /// alpha plane (ffprobe: yuv444p12le).
+    func testProRes4444Depth24IsOpaque() throws {
+        let metadata = try VideoMetadata.read(from: buildProResMOV(codec: "ap4h", depth: 24))
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        XCTAssertEqual(stream.profile, "4444")
+        XCTAssertEqual(stream.pixelFormat, "yuv444p12le")
+        XCTAssertEqual(stream.hasAlphaChannel, false)
+        XCTAssertEqual(stream.bitDepth, 12)
+        XCTAssertEqual(stream.chromaSubsampling, "4:4:4")
+    }
+
+    /// Depth 32 signals alpha; it must not leak into bitDepth either.
+    func testProRes4444Depth32HasAlpha() throws {
+        let metadata = try VideoMetadata.read(from: buildProResMOV(codec: "ap4h", depth: 32))
+        let stream = try XCTUnwrap(metadata.videoStreams.first)
+        XCTAssertEqual(stream.pixelFormat, "yuva444p12le")
+        XCTAssertEqual(stream.hasAlphaChannel, true)
+        XCTAssertEqual(stream.bitDepth, 12)
+    }
+
+    func testProRes4444XQDepth24And32() throws {
+        let opaque = try XCTUnwrap(
+            VideoMetadata.read(from: buildProResMOV(codec: "ap4x", depth: 24)).videoStreams.first
+        )
+        XCTAssertEqual(opaque.profile, "4444XQ")
+        XCTAssertEqual(opaque.pixelFormat, "yuv444p12le")
+        XCTAssertEqual(opaque.bitDepth, 12)
+        let alpha = try XCTUnwrap(
+            VideoMetadata.read(from: buildProResMOV(codec: "ap4x", depth: 32)).videoStreams.first
+        )
+        XCTAssertEqual(alpha.pixelFormat, "yuva444p12le")
+        XCTAssertEqual(alpha.bitDepth, 12)
+    }
+
+    /// Depth values divisible by 3 must not be read as per-component bit
+    /// depth for ProRes (48 / 3 would otherwise claim 16-bit).
+    func testProRes4444UnusualDepthDoesNotOverrideBitDepth() throws {
+        let stream = try XCTUnwrap(
+            VideoMetadata.read(from: buildProResMOV(codec: "ap4h", depth: 48)).videoStreams.first
+        )
+        XCTAssertEqual(stream.bitDepth, 12)
+        XCTAssertEqual(stream.pixelFormat, "yuv444p12le")
+        XCTAssertNil(stream.hasAlphaChannel)
+    }
+
+    /// Inconclusive depth: the first frame header's alpha_channel_type decides.
+    func testProRes4444MissingDepthUsesFrameHeaderAlpha() throws {
+        let alpha = try XCTUnwrap(VideoMetadata.read(
+            from: buildProResMOV(codec: "ap4h", depth: 0, frameAlphaType: 1)
+        ).videoStreams.first)
+        XCTAssertEqual(alpha.pixelFormat, "yuva444p12le")
+        XCTAssertEqual(alpha.hasAlphaChannel, true)
+
+        let opaque = try XCTUnwrap(VideoMetadata.read(
+            from: buildProResMOV(codec: "ap4h", depth: 0, frameAlphaType: 0)
+        ).videoStreams.first)
+        XCTAssertEqual(opaque.pixelFormat, "yuv444p12le")
+        XCTAssertEqual(opaque.hasAlphaChannel, false)
+    }
+
+    /// Conclusive depth wins over the frame header (no extra read needed).
+    func testProRes4444DepthTakesPrecedenceOverFrameHeader() throws {
+        let stream = try XCTUnwrap(VideoMetadata.read(
+            from: buildProResMOV(codec: "ap4h", depth: 24, frameAlphaType: 1)
+        ).videoStreams.first)
+        XCTAssertEqual(stream.pixelFormat, "yuv444p12le")
+    }
+
+    func testProRes4444MissingDepthAndFrameDefaultsToOpaque() throws {
+        let stream = try XCTUnwrap(
+            VideoMetadata.read(from: buildProResMOV(codec: "ap4h", depth: 0)).videoStreams.first
+        )
+        XCTAssertEqual(stream.pixelFormat, "yuv444p12le")
+        XCTAssertNil(stream.hasAlphaChannel)
+    }
+
+    /// Build a MOV with one ProRes video track. The VisualSampleEntry depth is
+    /// written at payload offset 74. When `frameAlphaType` is set, mdat holds
+    /// a ProRes frame (size + 'icpf' + 20-byte header) referenced by stco.
+    private func buildProResMOV(codec: String, depth: UInt16, frameAlphaType: UInt8? = nil) -> Data {
+        var visual = Data(repeating: 0, count: 78)
+        visual[24] = 0x07; visual[25] = 0x80 // width 1920
+        visual[26] = 0x04; visual[27] = 0x38 // height 1080
+        visual[74] = UInt8(depth >> 8); visual[75] = UInt8(depth & 0xFF)
+        let entry = buildBox(codec, data: visual)
+        var stsdWriter = BinaryWriter(capacity: 16 + entry.count)
+        stsdWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        stsdWriter.writeUInt32BigEndian(1)
+        stsdWriter.writeBytes(entry)
+        let stsdBox = buildBox("stsd", data: stsdWriter.data)
+
+        // ftyp (16) + mdat header (8) → frame starts at 24.
+        var mdatBox = Data()
+        var stcoBox = Data()
+        if let frameAlphaType {
+            var header = Data(repeating: 0, count: 20)
+            header[1] = 20                     // frame_header_size
+            header[17] = frameAlphaType & 0x0F // alpha_channel_type
+            var frame = BinaryWriter(capacity: 28)
+            frame.writeUInt32BigEndian(UInt32(8 + header.count))
+            frame.writeString("icpf", encoding: .ascii)
+            frame.writeBytes(header)
+            mdatBox = buildBox("mdat", data: frame.data)
+
+            var stco = BinaryWriter(capacity: 12)
+            stco.writeBytes([0x00, 0x00, 0x00, 0x00])
+            stco.writeUInt32BigEndian(1)
+            stco.writeUInt32BigEndian(24)
+            stcoBox = buildBox("stco", data: stco.data)
+        }
+
+        var hdlrWriter = BinaryWriter(capacity: 32)
+        hdlrWriter.writeBytes([0x00, 0x00, 0x00, 0x00])
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 4))
+        hdlrWriter.writeString("vide", encoding: .ascii)
+        hdlrWriter.writeBytes(Data(repeating: 0, count: 12))
+        let hdlrBox = buildBox("hdlr", data: hdlrWriter.data)
+
+        let stblBox = buildBox("stbl", data: stsdBox + stcoBox)
+        let minfBox = buildBox("minf", data: stblBox)
+        let mdiaBox = buildBox("mdia", data: hdlrBox + minfBox)
+        let trakBox = buildBox("trak", data: mdiaBox)
+
+        var mvhd = BinaryWriter(capacity: 100)
+        mvhd.writeBytes([0x00, 0x00, 0x00, 0x00])
+        mvhd.writeBytes(Data(repeating: 0, count: 96))
+        let moovBox = buildBox("moov", data: buildBox("mvhd", data: mvhd.data) + trakBox)
+
+        var file = BinaryWriter(capacity: 256)
+        file.writeUInt32BigEndian(16)
+        file.writeString("ftyp", encoding: .ascii)
+        file.writeString("qt  ", encoding: .ascii)
+        file.writeBytes([0x00, 0x00, 0x00, 0x00])
+        file.writeBytes(mdatBox)
+        file.writeBytes(moovBox)
+        return file.data
+    }
+
     // MARK: - tkhd Display-Matrix Rotation
 
     func testIdentityMatrixYieldsNoRotation() throws {

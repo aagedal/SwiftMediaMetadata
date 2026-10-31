@@ -65,11 +65,11 @@ swift-exif --version
 ```
 
 Or download the archive and checksum directly from the
-[3.1.0 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/3.1.0):
+[3.1.1 release](https://github.com/aagedal/SwiftMediaMetadata/releases/tag/3.1.1):
 
 ```sh
-curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.1.0/swift-exif-macos-arm64.tar.gz
-curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.1.0/swift-exif-macos-arm64.tar.gz.sha256
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.1.1/swift-exif-macos-arm64.tar.gz
+curl -LO https://github.com/aagedal/SwiftMediaMetadata/releases/download/3.1.1/swift-exif-macos-arm64.tar.gz.sha256
 shasum -a 256 -c swift-exif-macos-arm64.tar.gz.sha256
 tar -xzf swift-exif-macos-arm64.tar.gz
 ./swift-exif-macos-arm64/swift-exif --version
@@ -83,7 +83,7 @@ Add the package to your `Package.swift` with:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "3.1.0"),
+    .package(url: "https://github.com/aagedal/SwiftMediaMetadata.git", from: "3.1.1"),
 ]
 ```
 
@@ -475,7 +475,8 @@ plus convenience accessors that mirror the first video stream at the top level
 | `bitDepth` | 8 / 10 / 12 from `hvcC` / `av1C` / CDCI / Matroska `BitsPerChannel` or `CodecPrivate` |
 | `chromaSubsampling` | `"4:2:0"`, `"4:2:2"`, `"4:4:4"`, `"4:0:0"`, `"4:1:1"` |
 | `chromaLocation` | `"left"`, `"center"`, `"topleft"`, `"top"`, `"bottomleft"`, `"bottom"` — matches ffprobe `chroma_location` |
-| `pixelFormat` | ffprobe-style `pix_fmt` string — `"yuv420p"`, `"yuv420p10le"`, `"yuvj420p"`, `"yuv444p12le"`, `"gray10le"`, derived from codec + chroma + depth + range |
+| `pixelFormat` | ffprobe-style `pix_fmt` string — `"yuv420p"`, `"yuv420p10le"`, `"yuvj420p"`, `"yuv444p12le"`, `"gray10le"`, derived from codec + chroma + depth + range. ProRes 4444 / 4444 XQ report `"yuva444p12le"` only when the stream carries alpha (sample-entry depth 32, or a non-zero frame-header `alpha_channel_type`), otherwise `"yuv444p12le"` |
+| `hasAlphaChannel` | `true` when alpha is signalled (HEVC `alpha_channel_info` SEI, ProRes 4444 with alpha); `false` for ProRes 4444 known to be opaque; `nil` when nothing signals it |
 | `frameRate` | fps — from `stsz`/`stts` for ISOBMFF, Matroska `DefaultDuration`, MXF `SampleRate`, AVI `dwRate`/`dwScale`, MPEG-2 sequence header |
 | `avgFrameRate` / `rFrameRate` | ffprobe-compatible pair — `avg_frame_rate` (average) and `r_frame_rate` (raw cadence) |
 | `duration` | Per-track duration in seconds |
