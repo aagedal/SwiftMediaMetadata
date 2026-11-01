@@ -1,11 +1,15 @@
-# SwiftMediaMetadata 3.1.2 release checklist
+# SwiftMediaMetadata 3.1.3 release checklist
 
-- [x] MXF AVC Long GOP picture coding labels (`04.01.02.02.01.31.xx.xx`,
-  SMPTE RP 2008) map to `avc1` with the profile from byte 14; MPEG-2 MP@HL /
-  422P@HL labels (`01.03.xx` / `01.04.xx`) map to `mpeg2video`.
-- [x] Verified against Sony/Resolve XAVC Long 4:2:2 10-bit MXF (25p, 50i,
-  59.94p) and XDCAM HD422 MXF: codec and profile match ffprobe.
-- [x] Set CLI version, README and changelog to 3.1.2.
+- [x] MXF essence coding labels decoded by RP 224 category and codec family
+  (cross-checked against FFmpeg's mxf tables and bmx's label table): ProRes,
+  DNxHD/DNxHR, DV, D-10, JPEG 2000, FFV1, VC-1, DNxUncompressed, v210 and
+  compressed sound labels map to ffprobe-style codecs and profiles.
+- [x] ProRes in MXF uses decode depth; 4444 alpha from AlphaSampleDepth or the
+  first frame header.
+- [x] Verified against FFmpeg-written MXF for every codec its muxer supports
+  and Sony/Resolve/XDCAM/DNxHR/FX6 samples: codec, profile and pix_fmt match
+  ffprobe.
+- [x] Set CLI version, README and changelog to 3.1.3.
 - [x] Run complete release preflight on the final release tree.
 - [ ] Merge the reviewed release changes into `main` before tagging. The release
   workflow rejects tags whose commits are not in `main`'s history.
