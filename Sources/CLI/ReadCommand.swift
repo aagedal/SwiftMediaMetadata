@@ -375,6 +375,11 @@ struct ReadCommand: ParsableCommand {
         case "V_THEORA": return "theora"
         case "V_MJPEG", "mjpa", "mjpb", "jpeg": return "mjpeg"
         case "vvc1", "vvi1": return "vvc"
+        // Already ffprobe short names (MXF, MPEG-PS/TS readers).
+        case "mpeg2video", "mpeg4", "dnxhd", "dnxuc", "dvvideo", "jpeg2000",
+             "ffv1", "vc1", "v210", "rawvideo":
+            return codec
+        case "prores": return "prores"
         default: return nil
         }
     }
@@ -388,14 +393,15 @@ struct ReadCommand: ParsableCommand {
     private func ffprobeShortAudioCodec(_ codec: String, bitDepth: Int?) -> String? {
         switch codec {
         case "A_AAC", "A_AAC/MPEG4/LC", "A_AAC/MPEG4/LC/SBR", "mp4a": return "aac"
-        case "A_AC3", "ac-3": return "ac3"
+        case "A_AC3", "ac-3", "ac3": return "ac3"
         case "A_EAC3", "ec-3": return "eac3"
         case "A_DTS", "A_DTS/EXPRESS", "A_DTS/LOSSLESS": return "dts"
         case "A_FLAC", "fLaC": return "flac"
         case "A_OPUS", "Opus": return "opus"
         case "A_VORBIS": return "vorbis"
         case "A_MPEG/L3": return "mp3"
-        case "A_MPEG/L2": return "mp2"
+        case "A_MPEG/L2", "mp2": return "mp2"
+        case "aac", "pcm_alaw", "dolby_e": return codec
         case "A_TRUEHD": return "truehd"
         case "alac": return "alac"
         // PCM family — ffprobe encodes bit depth + endianness in the codec

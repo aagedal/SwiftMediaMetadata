@@ -75,49 +75,122 @@ final class MXFReaderTests: XCTestCase {
 
     // MARK: - B. Picture descriptor — codec UL mapping
 
-    func testParsePictureDescriptorMapsAVCULToAvc1() {
-        let body = localTagLV(0x3201, value: pictureCodingUL(kind: 0x04, variant: 0x31))
+    /// Registered picture coding labels, as written by FFmpeg, bmx, Sony
+    /// cameras and Resolve, against what ffprobe reports for the same files.
+    func testCodecNameForULMapsRegisteredPictureCodingLabels() {
+        let cases: [(ul: String, codec: String, profile: String?)] = [
+            ("060e2b34.04010103.04010202.01011100", "mpeg2video", "Main"),   // MP@ML
+            ("060e2b34.04010101.04010202.01020101", "mpeg2video", "4:2:2"),  // D-10 50 625
+            ("060e2b34.04010103.04010202.01030300", "mpeg2video", "Main"),   // MP@HL Long GOP
+            ("060e2b34.04010103.04010202.01040300", "mpeg2video", "4:2:2"),  // XDCAM HD422
+            ("060e2b34.04010103.04010202.01200203", "mpeg4", nil),           // XDCAM proxy
+            ("060e2b34.0401010d.04010202.01316001", "avc1", "High 4:2:2"),   // XAVC Long
+            ("060e2b34.0401010a.04010202.01323001", "avc1", "High 4:2:2 Intra"),
+            ("060e2b34.0401010d.04010202.01324001", "avc1", "High 4:4:4 Intra"),
+            ("060e2b34.04010101.04010202.02010200", "dvvideo", nil),         // DV25 IEC
+            ("060e2b34.04010101.04010202.02020600", "dvvideo", nil),         // DVCPRO HD
+            ("060e2b34.04010107.04010202.03010100", "jpeg2000", nil),
+            ("060e2b34.04010101.04010202.03020000", "dnxhd", nil),           // VC-3
+            ("060e2b34.0401010d.04010202.03060100", "apco", "Proxy"),
+            ("060e2b34.0401010d.04010202.03060200", "apcs", "LT"),
+            ("060e2b34.0401010d.04010202.03060300", "apcn", "Standard"),
+            ("060e2b34.0401010d.04010202.03060400", "apch", "HQ"),
+            ("060e2b34.0401010d.04010202.03060500", "ap4h", "4444"),
+            ("060e2b34.0401010d.04010202.03060600", "ap4x", "4444XQ"),
+            ("060e2b34.0401010d.04010202.03070100", "dnxuc", nil),
+            ("060e2b34.0401010d.04010202.03090400", "ffv1", nil),
+            ("060e2b34.0401010a.04010202.04050000", "vc1", nil),
+            ("060e2b34.0401010a.04010202.71030000", "dnxhd", "DNXHD"),       // CID 1237
+            ("060e2b34.0401010a.04010202.71250000", "dnxhd", "DNXHR HQX"),   // CID 1271
+            ("060e2b34.0401010a.04010202.71280000", "dnxhd", "DNXHR LB"),    // CID 1274
+            ("060e2b34.0401010a.04010201.01020201", "v210", nil),
+            ("060e2b34.04010101.04010201.7f000000", "rawvideo", nil),
+        ]
+        for c in cases {
+            let body = localTagLV(0x3201, value: essenceCodingUL(c.ul))
+            var stream = VideoStream(index: 0)
+            var duration: TimeInterval? = nil
+            MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+            XCTAssertEqual(stream.codec, c.codec, c.ul)
+            XCTAssertEqual(stream.profile, c.profile, c.ul)
+        }
+    }
+
+    func testCodecNameForULIgnoresUnregisteredLabels() {
+        for ul in [
+            "060e2b34.04010101.04010204.01310000", // byte 11 == 0x04 isn't a registry branch
+            "060e2b34.0401010d.04010202.03080100", // individually registered, not mapped
+            "060e2b34.0401010d.04010202.01410000",
+        ] {
+            XCTAssertNil(MXFReader.codecNameForUL(essenceCodingUL(ul)), ul)
+        }
+    }
+
+    func testParsePictureDescriptorUsesProResDecodeDepthOverComponentDepth() {
+        // FFmpeg writes the source depth (10) as ComponentDepth for 4444;
+        // ffprobe reports the 12-bit decode format.
+        var body = localTagLV(0x3201, value: essenceCodingUL("060e2b34.0401010d.04010202.03060500"))
+        body.append(localTagLV(0x3301, value: uint32BE(10)))
+        body.append(chromaBody(horizontal: 1, vertical: 1))
         var stream = VideoStream(index: 0)
         var duration: TimeInterval? = nil
         MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
-        XCTAssertEqual(stream.codec, "avc1")
-        XCTAssertEqual(stream.codecName, "H.264 / AVC")
+        XCTAssertEqual(stream.bitDepth, 12)
+        XCTAssertEqual(stream.pixelFormat, "yuv444p12le")
+        XCTAssertNil(stream.hasAlphaChannel)
+    }
+
+    func testParsePictureDescriptorReadsProResAlphaFromAlphaSampleDepth() {
+        var body = localTagLV(0x3201, value: essenceCodingUL("060e2b34.0401010d.04010202.03060600"))
+        body.append(localTagLV(0x3309, value: uint32BE(16)))
+        var stream = VideoStream(index: 0)
+        var duration: TimeInterval? = nil
+        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+        XCTAssertEqual(stream.hasAlphaChannel, true)
+        XCTAssertEqual(stream.pixelFormat, "yuva444p12le")
+    }
+
+    func testProbeFirstProResFrameHeaderSkipsSystemItemAndFill() throws {
+        // System item, KLV fill, then the GC picture item carrying a ProRes
+        // frame whose header byte 17 has alpha_channel_type = 2.
+        func klv(_ key: [UInt8], _ value: Data) -> Data {
+            var out = Data(key)
+            out.append(0x83)
+            out.append(contentsOf: [UInt8(value.count >> 16 & 0xFF), UInt8(value.count >> 8 & 0xFF), UInt8(value.count & 0xFF)])
+            out.append(value)
+            return out
+        }
+        let gc: [UInt8] = [0x06, 0x0E, 0x2B, 0x34, 0x01, 0x02, 0x01, 0x01, 0x0D, 0x01, 0x03, 0x01]
+        let fill: [UInt8] = [0x06, 0x0E, 0x2B, 0x34, 0x01, 0x01, 0x01, 0x02,
+                             0x03, 0x01, 0x02, 0x10, 0x01, 0x00, 0x00, 0x00]
+        var frame = Data([0x00, 0x00, 0x10, 0x00]) + Data("icpf".utf8)
+        var header = Data(repeating: 0, count: 148)
+        header[1] = 148
+        header[17] = 0x02
+        frame.append(header)
+        var data = klv(gc + [0x04, 0x01, 0x01, 0x00], Data(count: 57))
+        data.append(klv(fill, Data(count: 40)))
+        data.append(klv(gc + [0x15, 0x01, 0x17, 0x00], frame))
+
+        var metadata = VideoMetadata(format: .mxf)
+        var stream = VideoStream(index: 0)
+        stream.codec = "ap4h"
+        stream.pixelFormat = "yuv444p12le"
+        metadata.videoStreams = [stream]
+        var reader = BinaryReader(data: data)
+        try MXFReader.probeFirstProResFrameHeader(&reader, from: 0, into: &metadata)
+        XCTAssertEqual(metadata.videoStreams[0].hasAlphaChannel, true)
+        XCTAssertEqual(metadata.videoStreams[0].pixelFormat, "yuva444p12le")
     }
 
     func testParsePictureDescriptorMapsHEVCULToHvc1() {
-        let body = localTagLV(0x3201, value: pictureCodingUL(kind: 0x04, variant: 0x32))
+        // Not in FFmpeg's or bmx's tables; kept from earlier releases.
+        let body = localTagLV(0x3201, value: pictureCodingUL(kind: 0x02, variant: 0x33))
         var stream = VideoStream(index: 0)
         var duration: TimeInterval? = nil
         MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
         XCTAssertEqual(stream.codec, "hvc1")
         XCTAssertEqual(stream.codecName, "H.265 / HEVC")
-    }
-
-    func testParsePictureDescriptorMapsProResUL() {
-        let body = localTagLV(0x3201, value: pictureCodingUL(kind: 0x04, variant: 0x41))
-        var stream = VideoStream(index: 0)
-        var duration: TimeInterval? = nil
-        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
-        XCTAssertEqual(stream.codec, "apch")
-        XCTAssertEqual(stream.codecName, "Apple ProRes")
-    }
-
-    func testParsePictureDescriptorMapsJPEG2000UL() {
-        let body = localTagLV(0x3201, value: pictureCodingUL(kind: 0x04, variant: 0x0A))
-        var stream = VideoStream(index: 0)
-        var duration: TimeInterval? = nil
-        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
-        XCTAssertEqual(stream.codec, "j2k")
-        XCTAssertEqual(stream.codecName, "JPEG 2000")
-    }
-
-    func testParsePictureDescriptorMapsMPEG2UL() {
-        let body = localTagLV(0x3201, value: pictureCodingUL(kind: 0x04, variant: 0x01))
-        var stream = VideoStream(index: 0)
-        var duration: TimeInterval? = nil
-        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
-        XCTAssertEqual(stream.codec, "mpeg2video")
-        XCTAssertEqual(stream.codecName, "MPEG-2 Video")
     }
 
     func testParsePictureDescriptorMapsARRIRAWUL() {
@@ -482,13 +555,32 @@ final class MXFReaderTests: XCTestCase {
         XCTAssertEqual(stream.bitDepth, 24)
     }
 
-    func testParseSoundDescriptorMapsPCMUL() {
-        // kind=0x02 variant=0x02 → ("pcm_s16le", "PCM (WAVE/AES-3)").
-        let body = localTagLV(0x3D06, value: pictureCodingUL(kind: 0x02, variant: 0x02))
+    func testParseSoundDescriptorMapsCompressedSoundLabels() {
+        let cases: [(ul: String, codec: String)] = [
+            ("060e2b34.04010104.04020202.03010100", "pcm_alaw"),
+            ("060e2b34.04010101.04020202.03020100", "ac3"),
+            ("060e2b34.04010101.04020202.03020500", "mp2"),
+            ("060e2b34.04010101.04020202.03021c00", "dolby_e"),
+            ("060e2b34.04010103.04020202.03030100", "aac"),
+            ("060e2b34.0401010d.04020202.04030000", "aac"),
+        ]
+        for c in cases {
+            let body = localTagLV(0x3D06, value: essenceCodingUL(c.ul))
+            var stream = AudioStream(index: 0)
+            MXFReader.parseSoundDescriptor(body, into: &stream)
+            XCTAssertEqual(stream.codec, c.codec, c.ul)
+        }
+    }
+
+    func testParseSoundDescriptorLeavesUncompressedPCMForBitDepthFallback() {
+        // 04.02.02.01 uncompressed: the reader names it pcm_s<depth>le from
+        // QuantizationBits once the descriptor is parsed.
+        var body = localTagLV(0x3D06, value: essenceCodingUL("060e2b34.04010101.04020201.7f000000"))
+        body.append(localTagLV(0x3D01, value: uint32BE(24)))
         var stream = AudioStream(index: 0)
         MXFReader.parseSoundDescriptor(body, into: &stream)
-        XCTAssertEqual(stream.codec, "pcm_s16le")
-        XCTAssertEqual(stream.codecName, "PCM (WAVE/AES-3)")
+        XCTAssertNil(stream.codec)
+        XCTAssertEqual(stream.bitDepth, 24)
     }
 
     func testParseSoundDescriptorDefaultsChannelLayoutFromSixChannels() {
@@ -1021,6 +1113,15 @@ final class MXFReaderTests: XCTestCase {
         bytes[13] = variant
         bytes[14] = byte14
         return Data(bytes)
+    }
+
+    /// Parse a dotted-hex UL such as "060e2b34.0401010d.04010202.03060500".
+    private func essenceCodingUL(_ hex: String) -> Data {
+        let digits = Array(hex.replacingOccurrences(of: ".", with: ""))
+        precondition(digits.count == 32)
+        return Data(stride(from: 0, to: 32, by: 2).map {
+            UInt8(String(digits[$0 ... $0 + 1]), radix: 16)!
+        })
     }
 
     /// 16-byte color UL — only `byte14` matters for `colorULCode`.

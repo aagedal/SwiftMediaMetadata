@@ -6,6 +6,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [Unreleased]
+
+### Fixed
+
+- MXF essence coding labels are now decoded by category (picture/sound)
+  and codec family as registered in SMPTE RP 224, instead of by byte 13
+  alone. Previously D-10 and DVCPRO HD were reported as PCM, DV25 and
+  JPEG 2000 as MPEG-2, and AC-3 / MPEG audio as PCM.
+- MXF now reports Apple ProRes (`apco` … `ap4x`, with profile), VC-3 /
+  DNxHD / DNxHR (`dnxhd`, with ffprobe's `DNXHD` / `DNXHR <class>` profile),
+  DV (`dvvideo`), JPEG 2000 (`jpeg2000`), FFV1, VC-1, DNxUncompressed,
+  v210/uncompressed video, MPEG-4 Visual, the remaining MPEG-2 labels (with
+  `Main` / `4:2:2` profile) and AVC High 4:4:4 / CAVLC 4:4:4 Intra, plus
+  A-law, AC-3, MPEG audio, Dolby E and AAC sound labels.
+- ProRes in MXF reports ffprobe's decode format (10-bit 4:2:2, 12-bit
+  4:4:4) rather than the writer's ComponentDepth. ProRes 4444 / 4444 XQ
+  alpha comes from `AlphaSampleDepth` when present, otherwise from the
+  first frame header (a 26-byte read), matching ffprobe's `yuva444p12le`.
+- Removed the codec mappings for byte 11 == `0x04` labels and for
+  `0x41` → ProRes, which match no registered label. The `j2k` and `dv`
+  codec names they produced are now `jpeg2000` and `dvvideo`.
+- The CLI's per-stream `CodecShort` now covers these codecs.
+
 ## [3.1.2] — 2026-11-01
 
 ### Fixed

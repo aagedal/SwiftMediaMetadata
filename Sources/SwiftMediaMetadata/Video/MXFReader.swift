@@ -98,6 +98,7 @@ public struct MXFReader: Sendable {
         // probe touches the whole file — slow on camera cards.
         let partitions = partitionOffsets(&reader)
         var firstEssenceOffset: Int?
+        var proResAlphaChecked = false
 
         while reader.remainingCount >= 17 {
             let keyStart = reader.offset
@@ -121,6 +122,13 @@ public struct MXFReader: Sendable {
             // peek, and when partitions are known skip to the next partition.
             if isEssenceElementKey(key), !isC2PAKey(key) {
                 if firstEssenceOffset == nil { firstEssenceOffset = keyStart }
+                // ProRes 4444 descriptors rarely signal alpha (FFmpeg writes
+                // no AlphaSampleDepth); like ffprobe, settle it from the
+                // first frame header before skipping the essence.
+                if !proResAlphaChecked, metadata.videoStreams.contains(where: needsProResAlphaProbe) {
+                    proResAlphaChecked = true
+                    try? probeFirstProResFrameHeader(&reader, from: keyStart, into: &metadata)
+                }
                 if let partitions {
                     guard let next = partitions.first(where: { $0 > keyStart }) else { break }
                     try reader.seek(to: next)
@@ -565,6 +573,47 @@ public struct MXFReader: Sendable {
         0x0D, 0x01, 0x02, 0x01, 0x01, 0x11, 0x01, 0x00,
     ]
 
+    private static func needsProResAlphaProbe(_ stream: VideoStream) -> Bool {
+        (stream.codec == "ap4h" || stream.codec == "ap4x") && stream.hasAlphaChannel == nil
+    }
+
+    /// Walk the first content package's KLVs (system item, fill, picture,
+    /// sound …) from `start` to the first GC picture item (byte 12 == 0x15)
+    /// and read its ProRes frame header. Reads at most 8 KLV headers plus
+    /// 26 payload bytes; the caller re-seeks afterwards.
+    static func probeFirstProResFrameHeader<C: MXFByteCursor>(
+        _ reader: inout C, from start: Int, into metadata: inout VideoMetadata
+    ) throws {
+        try reader.seek(to: start)
+        for _ in 0..<8 {
+            guard reader.remainingCount >= 17 else { return }
+            let key = try reader.readBytes(16)
+            let length = try readBERLength(&reader)
+            guard length <= reader.remainingCount else { return }
+            if isEssenceElementKey(key), key[key.startIndex + 12] == 0x15 {
+                guard length >= 26 else { return }
+                applyProRes4444FrameHeaderAlpha(
+                    try reader.slice(from: reader.offset, count: 26), to: &metadata
+                )
+                return
+            }
+            try reader.seek(to: reader.offset + length)
+        }
+    }
+
+    /// Resolve alpha for a ProRes 4444 / 4444 XQ stream from the first
+    /// frame's header (`frameHead` holds at least its first 26 bytes).
+    static func applyProRes4444FrameHeaderAlpha(_ frameHead: Data, to metadata: inout VideoMetadata) {
+        guard let i = metadata.videoStreams.firstIndex(where: needsProResAlphaProbe),
+              let hasAlpha = MP4Parser.proResFrameHeaderHasAlpha(at: 0, in: frameHead)
+        else { return }
+        metadata.videoStreams[i].hasAlphaChannel = hasAlpha
+        // Only replace the opaque default applyFourCCDefaults chose.
+        if hasAlpha, metadata.videoStreams[i].pixelFormat == "yuv444p12le" {
+            metadata.videoStreams[i].pixelFormat = "yuva444p12le"
+        }
+    }
+
     /// MXF Generic Container essence element (picture, sound, data and
     /// system items): 06.0E.2B.34.xx.xx.xx.xx.0D.01.03.01.
     static func isEssenceElementKey(_ key: Data) -> Bool {
@@ -846,6 +895,7 @@ public struct MXFReader: Sendable {
         var verticalSubsampling: UInt32 = 0
         var aspectRatioNum: UInt32 = 0
         var aspectRatioDen: UInt32 = 0
+        var alphaSampleDepth: UInt32?
 
         walkLocalSet(data) { tag, value in
             switch tag {
@@ -874,44 +924,15 @@ public struct MXFReader: Sendable {
                     aspectRatioDen = r.den
                 }
             case 0x3201: // PictureEssenceCoding (UL)
-                if let codec = codecNameForUL(value) {
-                    stream.codec = codec.codec
-                    stream.codecName = codec.longName
-                }
-                // Profile inferred from the AVC-Intra class byte (UL byte
-                // 14), per SMPTE ST 2019-1:
-                //   0x2?   — High 10 Intra (class 50/100/200, 4:2:0 10-bit)
-                //   0x3?   — High 4:2:2 Intra (class 50/100/200, 10-bit)
-                // We fold all subclasses into the top-level ffprobe name.
-                // Long GOP AVC labels (variant 0x31) carry the profile in
-                // byte 14 per SMPTE RP 2008. 0x11 is left unmapped: bmx
-                // registers it as Constrained Baseline but FFmpeg writes it
-                // for any Baseline stream.
-                if value.count >= 16, stream.profile == nil {
-                    let kind = value[value.startIndex + 11]
-                    let variant = value[value.startIndex + 13]
-                    let byte14 = value[value.startIndex + 14]
-                    if kind == 0x02, variant == 0x32 {
-                        switch byte14 & 0xF0 {
-                        case 0x20: stream.profile = "High 10 Intra"
-                        case 0x30: stream.profile = "High 4:2:2 Intra"
-                        default: break
-                        }
-                    } else if kind == 0x02, variant == 0x31 {
-                        switch byte14 {
-                        case 0x10: stream.profile = "Baseline"
-                        case 0x20: stream.profile = "Main"
-                        case 0x30: stream.profile = "Extended"
-                        case 0x40: stream.profile = "High"
-                        case 0x50: stream.profile = "High 10"
-                        case 0x60: stream.profile = "High 4:2:2"
-                        case 0x70: stream.profile = "High 4:4:4 Predictive"
-                        default: break
-                        }
-                    }
+                if let coding = codecNameForUL(value) {
+                    stream.codec = coding.codec
+                    stream.codecName = coding.longName
+                    stream.profile = stream.profile ?? coding.profile
                 }
             case 0x3301: // ComponentDepth (UInt32)
                 if let v = parseUInt32(value) { stream.bitDepth = Int(v) }
+            case 0x3309: // AlphaSampleDepth (UInt32) — CDCI alpha plane depth
+                if let v = parseUInt32(value) { alphaSampleDepth = v }
             case 0x3302: // HorizontalSubsampling (UInt32) — chroma horz subsampling
                 if let v = parseUInt32(value) { horizontalSubsampling = v }
             case 0x3308: // VerticalSubsampling (UInt32)
@@ -931,6 +952,18 @@ public struct MXFReader: Sendable {
             default:
                 break
             }
+        }
+
+        // ProRes decodes to a fixed depth per profile (10-bit 4:2:2, 12-bit
+        // 4:4:4), which is what ffprobe reports; ComponentDepth only echoes
+        // the writer's source depth. Apply the same FourCC defaults as the
+        // MOV path, using AlphaSampleDepth as the alpha signal when present.
+        if let codec = stream.codec, MP4Parser.isProResFourCC(codec) {
+            stream.bitDepth = nil
+            let alphaDepth = alphaSampleDepth.map { $0 > 0 ? 32 : 24 }
+            MP4Parser.applyFourCCDefaults(
+                codec, sampleEntryDepth: alphaDepth, into: &stream
+            )
         }
 
         if sampleRateDen > 0, sampleRateNum > 0 {
@@ -1028,9 +1061,9 @@ public struct MXFReader: Sendable {
                     stream.sampleRate = Int(r.num / max(r.den, 1))
                 }
             case 0x3D06: // SoundEssenceCompression (UL)
-                if let codec = codecNameForUL(value) {
-                    stream.codec = codec.codec
-                    stream.codecName = codec.longName
+                if let coding = codecNameForUL(value) {
+                    stream.codec = coding.codec
+                    stream.codecName = coding.longName
                 }
             case 0x3D07: // ChannelCount (UInt32)
                 if let v = parseUInt32(value) { stream.channels = Int(v) }
@@ -1113,28 +1146,40 @@ public struct MXFReader: Sendable {
         }
     }
 
+    /// Codec identity decoded from a picture/sound essence coding UL.
+    struct EssenceCoding: Equatable {
+        let codec: String
+        let longName: String
+        /// ffprobe-style profile when the label pins it down, e.g. "High 4:2:2".
+        var profile: String? = nil
+    }
+
     /// Map a picture/sound essence coding UL to short + long codec names.
-    /// MXF codec ULs cluster around two kind bytes:
-    ///   - byte 11 == 0x04 : SMPTE 335/RP-224 compressed-video registry
-    ///   - byte 11 == 0x02 : SMPTE 2019/2067 AVC/HEVC/JPEG-2000/PCM-family
-    /// We match on the distinguishing byte (byte 13 for 0x04, byte 13-14 for
-    /// 0x02) because the surrounding octets are structural.
-    private static func codecNameForUL(_ ul: Data) -> (codec: String, longName: String)? {
+    ///
+    /// SMPTE RP 224 essence coding labels have the layout
+    ///   06.0E.2B.34.04.01.01.vv . 04.<cat>.02.<cmp>.<b12>.<b13>.<b14>.<b15>
+    /// where `cat` (byte 9) is 0x01 picture / 0x02 sound, `cmp` (byte 11) is
+    /// 0x01 uncompressed / 0x02 compressed, and bytes 12–13 name the codec
+    /// family and member. Bytes 14–15 refine the profile and are only read
+    /// where they map cleanly to an ffprobe profile name. Label values are
+    /// cross-checked against FFmpeg's `mxf.c` / `mxfenc.c` and bmx's
+    /// registered label table.
+    ///
+    /// Uncompressed sound (`04.02.02.01`) returns nil so the caller can
+    /// derive the PCM name from QuantizationBits.
+    static func codecNameForUL(_ ul: Data) -> EssenceCoding? {
         guard ul.count >= 16 else { return nil }
         let s = ul.startIndex
-        let kind = ul[s + 11]
-        let variant = ul[s + 13]
 
         // ARRIRAW (SMPTE-registered as picture coding
-        // urn:smpte:ul:060e2b34.0401010d.04010201.02010103). It sits in a
-        // different sub-registry than the kind=0x04/0x02 codecs the rest of
-        // this function handles (byte 11 == 0x01), so match the trailing
-        // 8-byte item designator directly to avoid cross-registry collisions.
+        // urn:smpte:ul:060e2b34.0401010d.04010201.02010103). It sits in the
+        // uncompressed-picture sub-registry, so match the full trailing
+        // 8-byte item designator to avoid treating it as plain raw video.
         if ul[s + 8] == 0x04, ul[s + 9] == 0x01,
            ul[s + 10] == 0x02, ul[s + 11] == 0x01,
            ul[s + 12] == 0x02, ul[s + 13] == 0x01,
            ul[s + 14] == 0x01, ul[s + 15] == 0x03 {
-            return ("arriraw", "ARRIRAW")
+            return EssenceCoding(codec: "arriraw", longName: "ARRIRAW")
         }
 
         // Sony X-OCN: vendor-private essence-coding UL in the Sony cinema-RAW
@@ -1148,58 +1193,141 @@ public struct MXFReader: Sendable {
            ul[s + 8] == 0x0E, ul[s + 9] == 0x06,
            ul[s + 10] == 0x04, ul[s + 11] == 0x01,
            ul[s + 12] == 0x02 {
-            let variant = ul[s + 15]
             let longName: String
-            switch variant {
+            switch ul[s + 15] {
             case 0x01: longName = "Sony X-OCN LT"
             case 0x02: longName = "Sony X-OCN ST"
             case 0x03: longName = "Sony X-OCN XT"
             default:   longName = "Sony X-OCN"
             }
-            return ("xocn", longName)
+            return EssenceCoding(codec: "xocn", longName: longName)
         }
 
-        // Video registry (SMPTE 335 / RP 224 / RP 2008).
-        if kind == 0x04 {
-            switch variant {
-            case 0x01: return ("mpeg2video", "MPEG-2 Video")
-            case 0x02: return ("dv", "DV")
-            case 0x0A: return ("j2k", "JPEG 2000")
-            case 0x20: return ("mpeg4", "MPEG-4 Visual")
-            case 0x41: return ("apch", "Apple ProRes")
-            case 0x31: return ("avc1", "H.264 / AVC")
-            case 0x32: return ("hvc1", "H.265 / HEVC")
-            default: break
+        guard ul[s + 8] == 0x04, ul[s + 10] == 0x02 else { return nil }
+        let family = ul[s + 12]
+        let member = ul[s + 13]
+        let byte14 = ul[s + 14]
+
+        switch (ul[s + 9], ul[s + 11]) {
+        case (0x01, 0x01): // Uncompressed picture (ST 377-1 / ST 384)
+            if family == 0x01, member == 0x02, byte14 == 0x02, ul[s + 15] == 0x01 {
+                return EssenceCoding(codec: "v210", longName: "Uncompressed 4:2:2 10-bit")
             }
+            return EssenceCoding(codec: "rawvideo", longName: "Uncompressed video")
+        case (0x01, 0x02):
+            return compressedPictureCoding(family: family, member: member, byte14: byte14)
+        case (0x02, 0x02):
+            return compressedSoundCoding(family: family, member: member, byte14: byte14)
+        default:
+            return nil
         }
-        // SMPTE ST 2019-1 AVC-Intra / 2067-40 ProRes / JPEG-2000 (kind 0x02).
-        if kind == 0x02 {
-            let byte14 = ul[s + 14]
-            switch variant {
-            case 0x31: // AVC Long GOP profiles (SMPTE RP 2008), e.g. Sony XAVC Long
-                return ("avc1", "H.264 / AVC")
-            case 0x32: // AVC Intra profiles (SMPTE ST 381-3 / RP 2008)
-                return ("avc1", "H.264 / AVC")
-            case 0x03 where ul[s + 12] == 0x01, // MPEG-2 MP@HL (e.g. XDCAM HD Long GOP)
-                 0x04 where ul[s + 12] == 0x01: // MPEG-2 422P@HL (e.g. XDCAM HD422)
-                return ("mpeg2video", "MPEG-2 Video")
-            case 0x33: // HEVC in MXF (SMPTE ST 2067-51)
-                return ("hvc1", "H.265 / HEVC")
-            case 0x0A: // JPEG 2000 in MXF (SMPTE ST 422)
-                return ("j2k", "JPEG 2000")
-            case 0x01: // MPEG-2 Video (MXF SMPTE ST 381-1)
-                return ("mpeg2video", "MPEG-2 Video")
-            case 0x41:
-                return ("apch", "Apple ProRes")
-            case 0x02: // PCM / WAVE / AES-3 sound essence family
-                _ = byte14 // reserved for future distinction
-                return ("pcm_s16le", "PCM (WAVE/AES-3)")
-            case 0x7F: // LinearPCM (another SMPTE label)
-                return ("pcm_s16le", "Linear PCM")
-            default: break
+    }
+
+    /// Compressed picture coding labels, `04.01.02.02.<family>.<member>.…`.
+    private static func compressedPictureCoding(
+        family: UInt8, member: UInt8, byte14: UInt8
+    ) -> EssenceCoding? {
+        switch (family, member) {
+        // MPEG-2 (RP 224 / ST 381-1): 01.01 MP@ML, 01.02 422P@ML (incl.
+        // D-10), 01.03 MP@HL, 01.04 422P@HL (XDCAM HD422), 01.05 MP@H-14.
+        case (0x01, 0x01), (0x01, 0x03), (0x01, 0x05):
+            return EssenceCoding(codec: "mpeg2video", longName: "MPEG-2 Video", profile: "Main")
+        case (0x01, 0x02), (0x01, 0x04):
+            return EssenceCoding(codec: "mpeg2video", longName: "MPEG-2 Video", profile: "4:2:2")
+        case (0x01, 0x20): // MPEG-4 Visual (e.g. XDCAM proxy)
+            return EssenceCoding(codec: "mpeg4", longName: "MPEG-4 Visual")
+        case (0x01, 0x31): // AVC Long GOP profiles (RP 2008), e.g. Sony XAVC Long
+            // Byte 14 is the profile. 0x11 is left unmapped: bmx registers
+            // it as Constrained Baseline but FFmpeg writes it for any
+            // Baseline stream.
+            let profile: String?
+            switch byte14 {
+            case 0x10: profile = "Baseline"
+            case 0x20: profile = "Main"
+            case 0x30: profile = "Extended"
+            case 0x40: profile = "High"
+            case 0x50: profile = "High 10"
+            case 0x60: profile = "High 4:2:2"
+            case 0x70: profile = "High 4:4:4 Predictive"
+            default: profile = nil
             }
+            return EssenceCoding(codec: "avc1", longName: "H.264 / AVC", profile: profile)
+        case (0x01, 0x32): // AVC Intra profiles (ST 381-3 / RP 2008)
+            // Byte 14's high nibble is the profile; the low nibble is the
+            // RP 2027 class, which ffprobe folds into the profile name.
+            //   0x2? High 10 Intra, 0x3? High 4:2:2 Intra,
+            //   0x40 High 4:4:4 Intra, 0x50 CAVLC 4:4:4 Intra
+            let profile: String?
+            switch byte14 & 0xF0 {
+            case 0x20: profile = "High 10 Intra"
+            case 0x30: profile = "High 4:2:2 Intra"
+            case 0x40: profile = "High 4:4:4 Intra"
+            case 0x50: profile = "CAVLC 4:4:4 Intra"
+            default: profile = nil
+            }
+            return EssenceCoding(codec: "avc1", longName: "H.264 / AVC", profile: profile)
+        case (0x01, 0x33): // HEVC — not in FFmpeg's or bmx's tables; kept from
+            // earlier releases so existing callers see no change.
+            return EssenceCoding(codec: "hvc1", longName: "H.265 / HEVC")
+        // DV (ST 383): 02.01 IEC 61834 DV, 02.02 DV-based (DVCPRO, DVCPRO HD).
+        case (0x02, 0x01), (0x02, 0x02):
+            return EssenceCoding(codec: "dvvideo", longName: "DV")
+        // Individually registered codecs.
+        case (0x03, 0x01): // JPEG 2000 (ST 422)
+            return EssenceCoding(codec: "jpeg2000", longName: "JPEG 2000")
+        case (0x03, 0x02): // VC-3 (ST 2019-4)
+            return EssenceCoding(codec: "dnxhd", longName: "VC-3 / DNxHD")
+        case (0x03, 0x06): // Apple ProRes (RDD 44); byte 14 is the profile.
+            switch byte14 {
+            case 0x01: return EssenceCoding(codec: "apco", longName: "Apple ProRes")
+            case 0x02: return EssenceCoding(codec: "apcs", longName: "Apple ProRes")
+            case 0x03: return EssenceCoding(codec: "apcn", longName: "Apple ProRes")
+            case 0x04: return EssenceCoding(codec: "apch", longName: "Apple ProRes")
+            case 0x05: return EssenceCoding(codec: "ap4h", longName: "Apple ProRes")
+            case 0x06: return EssenceCoding(codec: "ap4x", longName: "Apple ProRes")
+            default: return EssenceCoding(codec: "prores", longName: "Apple ProRes")
+            }
+        case (0x03, 0x07): // DNxUncompressed (RDD 50)
+            return EssenceCoding(codec: "dnxuc", longName: "DNxUncompressed")
+        case (0x03, 0x09): // FFV1 (RDD 48)
+            return EssenceCoding(codec: "ffv1", longName: "FFV1")
+        case (0x04, 0x01...0x0A): // VC-1 (RP 2025)
+            return EssenceCoding(codec: "vc1", longName: "VC-1")
+        case (0x71, _): // VC-3 / DNxHD legacy labels; member encodes the CID.
+            // CIDs 1270–1274 (members 0x24–0x28) are DNxHR.
+            let profile: String
+            switch member {
+            case 0x24: profile = "DNXHR 444"
+            case 0x25: profile = "DNXHR HQX"
+            case 0x26: profile = "DNXHR HQ"
+            case 0x27: profile = "DNXHR SQ"
+            case 0x28: profile = "DNXHR LB"
+            default:   profile = "DNXHD"
+            }
+            return EssenceCoding(codec: "dnxhd", longName: "VC-3 / DNxHD", profile: profile)
+        default:
+            return nil
         }
-        return nil
+    }
+
+    /// Compressed sound coding labels, `04.02.02.02.<family>.<member>.…`.
+    private static func compressedSoundCoding(
+        family: UInt8, member: UInt8, byte14: UInt8
+    ) -> EssenceCoding? {
+        switch (family, member, byte14) {
+        case (0x03, 0x01, 0x01):
+            return EssenceCoding(codec: "pcm_alaw", longName: "A-law PCM")
+        case (0x03, 0x02, 0x01):
+            return EssenceCoding(codec: "ac3", longName: "Dolby Digital (AC-3)")
+        case (0x03, 0x02, 0x05):
+            return EssenceCoding(codec: "mp2", longName: "MPEG Audio")
+        case (0x03, 0x02, 0x1C):
+            return EssenceCoding(codec: "dolby_e", longName: "Dolby E")
+        case (0x03, 0x03, _), (0x04, 0x03, _), (0x04, 0x04, _):
+            return EssenceCoding(codec: "aac", longName: "AAC")
+        default:
+            return nil
+        }
     }
 
     private enum ColorULKind { case matrix, transfer, primaries }
