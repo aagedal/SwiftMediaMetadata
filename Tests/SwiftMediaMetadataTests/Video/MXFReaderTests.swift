@@ -159,6 +159,61 @@ final class MXFReaderTests: XCTestCase {
         XCTAssertEqual(stream.profile, "High 4:2:2 Intra")
     }
 
+    func testParsePictureDescriptorDetectsXAVCLongGOPHigh422() {
+        // Sony XAVC Long 4:2:2 10-bit (camera/Resolve-written) — RP 2008
+        // AVC Long GOP label urn:smpte:ul:060e2b34.0401010d.04010202.01316001.
+        let ul = Data([
+            0x06, 0x0E, 0x2B, 0x34, 0x04, 0x01, 0x01, 0x0D,
+            0x04, 0x01, 0x02, 0x02, 0x01, 0x31, 0x60, 0x01,
+        ])
+        let body = localTagLV(0x3201, value: ul)
+        var stream = VideoStream(index: 0)
+        var duration: TimeInterval? = nil
+        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+        XCTAssertEqual(stream.codec, "avc1")
+        XCTAssertEqual(stream.codecName, "H.264 / AVC")
+        XCTAssertEqual(stream.profile, "High 4:2:2")
+    }
+
+    func testParsePictureDescriptorDetectsBMXAVCLongGOPHigh() {
+        // bmx/FFmpeg-written registry version 0x0A, High profile.
+        let ul = Data([
+            0x06, 0x0E, 0x2B, 0x34, 0x04, 0x01, 0x01, 0x0A,
+            0x04, 0x01, 0x02, 0x02, 0x01, 0x31, 0x40, 0x01,
+        ])
+        let body = localTagLV(0x3201, value: ul)
+        var stream = VideoStream(index: 0)
+        var duration: TimeInterval? = nil
+        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+        XCTAssertEqual(stream.codec, "avc1")
+        XCTAssertEqual(stream.profile, "High")
+    }
+
+    func testParsePictureDescriptorLeavesAmbiguousAVCBaselineProfileUnset() {
+        let ul = pictureCodingUL(kind: 0x02, variant: 0x31, byte14: 0x11)
+        let body = localTagLV(0x3201, value: ul)
+        var stream = VideoStream(index: 0)
+        var duration: TimeInterval? = nil
+        MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+        XCTAssertEqual(stream.codec, "avc1")
+        XCTAssertNil(stream.profile)
+    }
+
+    func testParsePictureDescriptorMapsMPEG2HighLevelLongGOPULs() {
+        // RP 224 MPEG-2 MP@HL / 422P@HL Long GOP (XDCAM HD / HD422).
+        for variant: UInt8 in [0x03, 0x04] {
+            let ul = Data([
+                0x06, 0x0E, 0x2B, 0x34, 0x04, 0x01, 0x01, 0x03,
+                0x04, 0x01, 0x02, 0x02, 0x01, variant, 0x03, 0x00,
+            ])
+            let body = localTagLV(0x3201, value: ul)
+            var stream = VideoStream(index: 0)
+            var duration: TimeInterval? = nil
+            MXFReader.parsePictureDescriptor(body, into: &stream, duration: &duration)
+            XCTAssertEqual(stream.codec, "mpeg2video", "variant \(variant)")
+        }
+    }
+
     // MARK: - C. Picture descriptor — dimensions, frame rate, duration
 
     func testParsePictureDescriptorReadsStoredAndDisplayDimensions() {
