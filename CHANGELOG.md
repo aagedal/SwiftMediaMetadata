@@ -6,6 +6,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [3.1.2] — 2026-11-01
+
+### Fixed
+
+- MXF picture descriptors carrying SMPTE RP 2008 AVC Long GOP labels
+  (`04.01.02.02.01.31.xx.xx`, e.g. Sony XAVC Long and bmx/FFmpeg-written
+  H.264 MXF) now report codec `avc1`, and the profile from the label's
+  profile byte (e.g. `High 4:2:2`), instead of no codec.
+- MXF MPEG-2 MP@HL and 422P@HL labels (`04.01.02.02.01.03.xx` /
+  `01.04.xx`, e.g. XDCAM HD and HD422) now report codec `mpeg2video`.
+
 ## [3.1.1] — 2026-10-31
 
 ### Fixed

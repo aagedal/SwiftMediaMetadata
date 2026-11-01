@@ -883,6 +883,10 @@ public struct MXFReader: Sendable {
                 //   0x2?   — High 10 Intra (class 50/100/200, 4:2:0 10-bit)
                 //   0x3?   — High 4:2:2 Intra (class 50/100/200, 10-bit)
                 // We fold all subclasses into the top-level ffprobe name.
+                // Long GOP AVC labels (variant 0x31) carry the profile in
+                // byte 14 per SMPTE RP 2008. 0x11 is left unmapped: bmx
+                // registers it as Constrained Baseline but FFmpeg writes it
+                // for any Baseline stream.
                 if value.count >= 16, stream.profile == nil {
                     let kind = value[value.startIndex + 11]
                     let variant = value[value.startIndex + 13]
@@ -891,6 +895,17 @@ public struct MXFReader: Sendable {
                         switch byte14 & 0xF0 {
                         case 0x20: stream.profile = "High 10 Intra"
                         case 0x30: stream.profile = "High 4:2:2 Intra"
+                        default: break
+                        }
+                    } else if kind == 0x02, variant == 0x31 {
+                        switch byte14 {
+                        case 0x10: stream.profile = "Baseline"
+                        case 0x20: stream.profile = "Main"
+                        case 0x30: stream.profile = "Extended"
+                        case 0x40: stream.profile = "High"
+                        case 0x50: stream.profile = "High 10"
+                        case 0x60: stream.profile = "High 4:2:2"
+                        case 0x70: stream.profile = "High 4:4:4 Predictive"
                         default: break
                         }
                     }
@@ -1161,8 +1176,13 @@ public struct MXFReader: Sendable {
         if kind == 0x02 {
             let byte14 = ul[s + 14]
             switch variant {
-            case 0x32: // AVC in MXF (SMPTE ST 381-3 / RP 2008)
+            case 0x31: // AVC Long GOP profiles (SMPTE RP 2008), e.g. Sony XAVC Long
                 return ("avc1", "H.264 / AVC")
+            case 0x32: // AVC Intra profiles (SMPTE ST 381-3 / RP 2008)
+                return ("avc1", "H.264 / AVC")
+            case 0x03 where ul[s + 12] == 0x01, // MPEG-2 MP@HL (e.g. XDCAM HD Long GOP)
+                 0x04 where ul[s + 12] == 0x01: // MPEG-2 422P@HL (e.g. XDCAM HD422)
+                return ("mpeg2video", "MPEG-2 Video")
             case 0x33: // HEVC in MXF (SMPTE ST 2067-51)
                 return ("hvc1", "H.265 / HEVC")
             case 0x0A: // JPEG 2000 in MXF (SMPTE ST 422)
