@@ -46,6 +46,16 @@ public struct MP4Parser: Sendable {
             movieTimescale = parseMVHD(mvhd.data, into: &metadata)
         }
 
+        // Fragmented movies keep most of their samples in top-level `moof`
+        // boxes; `mvex` marks them and carries the per-track defaults.
+        var fragmentDuration: UInt64?
+        var fragmentTotals: [UInt32: FragmentTotals] = [:]
+        if let mvex = moovChildren.first(where: { $0.type == "mvex" }) {
+            let extends = parseMVEX(mvex.data)
+            fragmentDuration = extends.fragmentDuration
+            fragmentTotals = Self.fragmentTotals(in: boxes, trackDefaults: extends.trackDefaults)
+        }
+
         // Pre-compute the set of track IDs that serve as QuickTime chapter
         // text tracks — they're the target of any `tref > chap` reference
         // anywhere in the movie. Must be excluded from `subtitleStreams`
@@ -68,6 +78,7 @@ public struct MP4Parser: Sendable {
                 trak.data,
                 movieTimescale: movieTimescale,
                 chapterTrackIDs: chapterReferencedTrackIDs,
+                fragmentTotals: fragmentTotals,
                 fullData: data,
                 into: &metadata
             )
@@ -313,6 +324,15 @@ public struct MP4Parser: Sendable {
         // and ffprobe still prefers the mvhd value in that case.
         let avDurations = metadata.videoStreams.compactMap(\.duration)
                         + metadata.audioStreams.compactMap(\.duration)
+        // Fragmented movie: mvhd covers only the samples in moov. Take mehd's
+        // declared length when present, else the longest audio/video track,
+        // which now includes its fragments (ffprobe does the same).
+        if let fragmentDuration, movieTimescale > 0 {
+            metadata.duration = Double(fragmentDuration) / Double(movieTimescale)
+        } else if fragmentTotals.values.contains(where: { $0.sampleCount > 0 }),
+                  let avMax = avDurations.max(), avMax > (metadata.duration ?? 0) {
+            metadata.duration = avMax
+        }
         if let avMax = avDurations.max(), avMax > 0,
            let mvhd = metadata.duration, mvhd > avMax {
             metadata.duration = avMax

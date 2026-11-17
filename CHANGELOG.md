@@ -6,6 +6,19 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 Version numbers follow [Semantic Versioning](https://semver.org/) and track
 the CLI; the library target follows the same numbering.
 
+## [3.1.4] — 2026-11-17
+
+### Fixed
+
+- Fragmented MP4/MOV files now report their full length. The parser reads
+  `moov > mvex` and the top-level `moof > traf > trun` boxes and adds each
+  track's fragment samples to the ones in `moov`, so duration, frame count,
+  average frame rate and bitrate match ffprobe. Before, only the samples
+  described in `moov` counted: an ffmpeg `frag_keyframe` recording (such as a
+  growing-file live recording) read as about one second long, and an
+  `empty_moov` file had no duration. A `mehd` fragment duration, when present,
+  sets the movie duration.
+
 ## [3.1.3] — 2026-11-01
 
 ### Fixed
