@@ -104,8 +104,22 @@ final class MP4FragmentTests: XCTestCase {
         withUnsafeBytes(of: value.bigEndian) { Data($0) }
     }
 
-    private func box(_ type: String, _ payload: Data) -> Data {
-        be32(UInt32(8 + payload.count)) + Data(type.utf8) + payload
+    private func zeros(_ count: Int) -> Data {
+        Data(repeating: 0, count: count)
+    }
+
+    private func ascii(_ text: String) -> Data {
+        Data(text.utf8)
+    }
+
+    /// A box whose payload is `parts` joined. Variadic rather than chained
+    /// `+`, which CI's compiler cannot type-check in reasonable time.
+    private func box(_ type: String, _ parts: Data...) -> Data {
+        let payload = parts.reduce(Data(), +)
+        var data = be32(UInt32(8 + payload.count))
+        data.append(ascii(type))
+        data.append(payload)
+        return data
     }
 
     /// ftyp + moov (mvhd, one 90 kHz video trak holding `moovSamples`
@@ -120,36 +134,38 @@ final class MP4FragmentTests: XCTestCase {
         moofs: [Data]
     ) -> Data {
         let moovTicks = moovSamples * sampleDelta
-        let mvhd = box("mvhd", be32(0) + be32(0) + be32(0) + be32(timescale) + be32(moovTicks)
-                       + Data(repeating: 0, count: 80))
+        let mvhd = box("mvhd", be32(0), be32(0), be32(0), be32(timescale), be32(moovTicks), zeros(80))
         // tkhd v0: version+flags, creation, modification, track_ID, reserved,
-        // duration, then 60 bytes up to width/height.
-        let tkhd = box("tkhd", be32(3) + be32(0) + be32(0) + be32(1) + be32(0) + be32(moovTicks)
-                       + Data(repeating: 0, count: 52) + be32(640 << 16) + be32(360 << 16))
-        let mdhd = box("mdhd", be32(0) + be32(0) + be32(0) + be32(timescale) + be32(moovTicks)
-                       + be16(0x55C4) + be16(0))
-        let hdlr = box("hdlr", be32(0) + be32(0) + Data("vide".utf8) + Data(repeating: 0, count: 12))
-        let stsd = box("stsd", be32(0) + be32(1) + be32(16) + Data("avc1".utf8) + Data(repeating: 0, count: 8))
-        let stts = box("stts", moovSamples > 0
-                       ? be32(0) + be32(1) + be32(moovSamples) + be32(sampleDelta)
-                       : be32(0) + be32(0))
-        let stsz = box("stsz", be32(0) + be32(sampleSize) + be32(moovSamples))
-        let stbl = box("stbl", stsd + stts + stsz)
-        let mdia = box("mdia", mdhd + hdlr + box("minf", stbl))
-        let trak = box("trak", tkhd + mdia)
+        // duration, 52 bytes of reserved/layer/volume/matrix, width, height.
+        let width: UInt32 = 640 << 16
+        let height: UInt32 = 360 << 16
+        let tkhd = box("tkhd", be32(3), be32(0), be32(0), be32(1), be32(0), be32(moovTicks),
+                       zeros(52), be32(width), be32(height))
+        let mdhd = box("mdhd", be32(0), be32(0), be32(0), be32(timescale), be32(moovTicks),
+                       be16(0x55C4), be16(0))
+        let hdlr = box("hdlr", be32(0), be32(0), ascii("vide"), zeros(12))
+        let stsd = box("stsd", be32(0), be32(1), be32(16), ascii("avc1"), zeros(8))
+        let stts = moovSamples > 0
+            ? box("stts", be32(0), be32(1), be32(moovSamples), be32(sampleDelta))
+            : box("stts", be32(0), be32(0))
+        let stsz = box("stsz", be32(0), be32(sampleSize), be32(moovSamples))
+        let stbl = box("stbl", stsd, stts, stsz)
+        let mdia = box("mdia", mdhd, hdlr, box("minf", stbl))
+        let trak = box("trak", tkhd, mdia)
 
         var mvex = Data()
         if let trex {
             var children = Data()
-            if let mehd { children += box("mehd", be32(0) + be32(mehd)) }
-            children += box("trex", be32(0) + be32(1) + be32(1) + be32(trex.duration) + be32(trex.size) + be32(0))
+            if let mehd { children.append(box("mehd", be32(0), be32(mehd))) }
+            children.append(box("trex", be32(0), be32(1), be32(1), be32(trex.duration), be32(trex.size), be32(0)))
             mvex = box("mvex", children)
         }
 
-        var data = box("ftyp", Data("qt  ".utf8) + be32(0x200) + Data("qt  ".utf8))
-        data += box("moov", mvhd + trak + mvex)
+        var data = box("ftyp", ascii("qt  "), be32(0x200), ascii("qt  "))
+        data.append(box("moov", mvhd, trak, mvex))
         for moofBox in moofs {
-            data += moofBox + box("mdat", Data())
+            data.append(moofBox)
+            data.append(box("mdat"))
         }
         return data
     }
@@ -157,24 +173,30 @@ final class MP4FragmentTests: XCTestCase {
     private func moof(trackID: UInt32, defaultDuration: UInt32? = nil, defaultSize: UInt32? = nil, trun: Data) -> Data {
         var flags: UInt32 = 0
         var fields = Data()
-        if let defaultDuration { flags |= 0x08; fields += be32(defaultDuration) }
-        if let defaultSize { flags |= 0x10; fields += be32(defaultSize) }
-        let tfhd = box("tfhd", be32(flags) + be32(trackID) + fields)
-        let mfhd = box("mfhd", be32(0) + be32(1))
-        return box("moof", mfhd + box("traf", tfhd + box("trun", trun)))
+        if let defaultDuration { flags |= 0x08; fields.append(be32(defaultDuration)) }
+        if let defaultSize { flags |= 0x10; fields.append(be32(defaultSize)) }
+        let tfhd = box("tfhd", be32(flags), be32(trackID), fields)
+        let mfhd = box("mfhd", be32(0), be32(1))
+        return box("moof", mfhd, box("traf", tfhd, box("trun", trun)))
     }
 
     /// trun payload with per-sample durations and sizes (flags 0x301).
     private func trun(durations: [UInt32], sizes: [UInt32]) -> Data {
-        var payload = be32(0x301) + be32(UInt32(durations.count)) + be32(0)
+        var payload = be32(0x301)
+        payload.append(be32(UInt32(durations.count)))
+        payload.append(be32(0))
         for (duration, size) in zip(durations, sizes) {
-            payload += be32(duration) + be32(size)
+            payload.append(be32(duration))
+            payload.append(be32(size))
         }
         return payload
     }
 
     /// trun payload with no per-sample fields: every sample takes the defaults.
     private func trun(sampleCount: UInt32) -> Data {
-        be32(0x001) + be32(sampleCount) + be32(0)
+        var payload = be32(0x001)
+        payload.append(be32(sampleCount))
+        payload.append(be32(0))
+        return payload
     }
 }
