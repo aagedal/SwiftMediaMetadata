@@ -17,6 +17,7 @@ extension MP4Parser {
         _ data: Data,
         movieTimescale: UInt32,
         chapterTrackIDs: Set<UInt32> = [],
+        fragmentTotals: [UInt32: FragmentTotals] = [:],
         fullData: Data? = nil,
         into metadata: inout VideoMetadata
     ) {
@@ -115,11 +116,31 @@ extension MP4Parser {
 
         let frameCount = stszBox.flatMap(parseSTSZSampleCount)
         let sttsFrames = sttsBox.flatMap(parseSTTSSampleCount)
-        let trackBytes = stszBox.flatMap(parseSTSZTotalBytes)
+        var trackBytes = stszBox.flatMap(parseSTSZTotalBytes)
         let dominantSampleDelta = sttsBox.flatMap(parseSTTSDominantDelta)
 
         // Prefer stsz; stts is a sum of per-run counts but some muxers only populate one.
-        let samples = frameCount ?? sttsFrames
+        var samples = frameCount ?? sttsFrames
+
+        // Fragmented movie: add the samples in `moof` boxes to the ones in
+        // moov (see MP4Fragments.swift). The moov part is timed from stts, and
+        // mdhd wins when a writer already put the whole length there.
+        if let fragments = trackID.flatMap({ fragmentTotals[$0] }), fragments.sampleCount > 0 {
+            samples = (samples ?? 0) + fragments.sampleCount
+            // Unknown fragment sizes would turn the bitrate into moov bytes
+            // over the whole duration; leave it to btrt/esds instead.
+            trackBytes = fragments.bytes > 0
+                ? (trackBytes ?? 0) &+ Int64(clamping: fragments.bytes)
+                : nil
+            if trackTimescale > 0 {
+                let moovTicks = sttsBox.flatMap(parseSTTSTotalDuration) ?? 0
+                let total = Double(moovTicks &+ fragments.duration) / Double(trackTimescale)
+                trackDuration = max(trackDuration ?? 0, total)
+            }
+            // An edit list written with the moov describes only the samples
+            // known at that point.
+            editedDuration = nil
+        }
 
         let fps: Double? = {
             guard let samples, samples > 0, let trackDuration, trackDuration > 0 else {
